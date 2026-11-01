@@ -64,6 +64,81 @@ const FETCH_JS = `
 true;
 `;
 
+function PlayerCard({ r }: { r: Row }) {
+  return (
+    <View style={{ alignItems: "center", width: 74 }}>
+      <View
+        style={{
+          width: 48,
+          height: 48,
+          borderRadius: 24,
+          backgroundColor: "#fff",
+          alignItems: "center",
+          justifyContent: "center",
+          borderWidth: 2,
+          borderColor: r.cap ? "#ffd400" : "#37003c",
+        }}
+      >
+        <Text style={{ fontSize: 11, fontWeight: "bold", color: "#37003c" }}>
+          {r.team}
+        </Text>
+        {(r.cap || r.vice) && (
+          <View
+            style={{
+              position: "absolute",
+              top: -6,
+              right: -6,
+              width: 20,
+              height: 20,
+              borderRadius: 10,
+              backgroundColor: r.cap ? "#ffd400" : "#ccc",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: "bold" }}>
+              {r.cap ? "C" : "V"}
+            </Text>
+          </View>
+        )}
+      </View>
+      <View
+        style={{
+          marginTop: 4,
+          backgroundColor: "#37003c",
+          borderRadius: 4,
+          paddingHorizontal: 4,
+          paddingVertical: 2,
+          maxWidth: 74,
+        }}
+      >
+        <Text
+          numberOfLines={1}
+          style={{ color: "#fff", fontSize: 11, textAlign: "center" }}
+        >
+          {r.name}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function PitchRow({ rows }: { rows: Row[] }) {
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        justifyContent: "space-evenly",
+        marginVertical: 12,
+      }}
+    >
+      {rows.map((r) => (
+        <PlayerCard key={r.pos} r={r} />
+      ))}
+    </View>
+  );
+}
+
 export default function Index() {
   const webRef = useRef<WebView>(null);
   const [squad, setSquad] = useState<Squad | null>(null);
@@ -87,12 +162,9 @@ export default function Index() {
     }
   };
 
-  const renderRow = (r: Row) => (
-    <Text key={r.pos} style={{ fontSize: 16, marginTop: 6 }}>
-      {TYPES[r.type]} {r.name} ({r.team})
-      {r.cap ? "  (C)" : r.vice ? "  (V)" : ""}
-    </Text>
-  );
+  const starters = squad ? squad.picks.filter((p) => p.pos <= 11) : [];
+  const bench = squad ? squad.picks.filter((p) => p.pos > 11) : [];
+  const line = (t: number) => starters.filter((p) => p.type === t);
 
   return (
     <View style={{ flex: 1, paddingTop: 40 }}>
@@ -105,7 +177,7 @@ export default function Index() {
           sharedCookiesEnabled
           thirdPartyCookiesEnabled
         />
-        <View style={{ padding: 8 }}>
+        <View style={{ padding: 8, paddingBottom: 24 }}>
           <Button
             title={loading ? "লোড হচ্ছে..." : "লগইনের পর আমার স্কোয়াড দেখান"}
             onPress={loadSquad}
@@ -116,29 +188,55 @@ export default function Index() {
       </View>
 
       {squad && (
-        <ScrollView contentContainerStyle={{ padding: 20 }}>
-          <Text style={{ fontSize: 24, fontWeight: "bold" }}>ProFpl</Text>
-          <Text style={{ marginTop: 4 }}>
-            Team ID: {squad.entry} | GW{squad.gw} | পয়েন্ট: {squad.points} |
-            ব্যাংক: £{squad.bank / 10}m
-            {squad.chip ? ` | চিপ: ${squad.chip}` : ""}
-          </Text>
+        <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+          <View style={{ padding: 16 }}>
+            <Text style={{ fontSize: 24, fontWeight: "bold" }}>ProFpl</Text>
+            <Text style={{ marginTop: 4 }}>
+              GW{squad.gw} | পয়েন্ট: {squad.points} | ব্যাংক: £
+              {squad.bank / 10}m{squad.chip ? ` | চিপ: ${squad.chip}` : ""}
+            </Text>
+          </View>
 
-          <Text style={{ fontSize: 18, fontWeight: "bold", marginTop: 16 }}>
-            প্রথম একাদশ
-          </Text>
-          {squad.picks.filter((p) => p.pos <= 11).map(renderRow)}
+          {/* মাঠ */}
+          <View
+            style={{
+              backgroundColor: "#2e9e4f",
+              marginHorizontal: 8,
+              borderRadius: 12,
+              paddingVertical: 8,
+            }}
+          >
+            <PitchRow rows={line(1)} />
+            <PitchRow rows={line(2)} />
+            <PitchRow rows={line(3)} />
+            <PitchRow rows={line(4)} />
+          </View>
 
-          <Text style={{ fontSize: 18, fontWeight: "bold", marginTop: 16 }}>
+          {/* বেঞ্চ */}
+          <Text
+            style={{
+              fontSize: 16,
+              fontWeight: "bold",
+              margin: 16,
+              marginBottom: 0,
+            }}
+          >
             বেঞ্চ
           </Text>
-          {squad.picks.filter((p) => p.pos > 11).map(renderRow)}
+          <View
+            style={{
+              backgroundColor: "#d9d9d9",
+              marginHorizontal: 8,
+              marginTop: 8,
+              borderRadius: 12,
+              paddingVertical: 8,
+            }}
+          >
+            <PitchRow rows={bench} />
+          </View>
 
-          <View style={{ marginTop: 20 }}>
-            <Button
-              title="রিফ্রেশ / WebView-তে ফিরুন"
-              onPress={() => setSquad(null)}
-            />
+          <View style={{ margin: 20 }}>
+            <Button title="WebView-তে ফিরুন" onPress={() => setSquad(null)} />
           </View>
         </ScrollView>
       )}
