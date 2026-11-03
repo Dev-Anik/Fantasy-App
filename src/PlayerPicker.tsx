@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import {
-    FlatList,
-    Modal,
-    Pressable,
-    Text,
-    TextInput,
-    View,
+  FlatList,
+  Modal,
+  Pressable,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 import { Player } from "./fpl";
 
@@ -60,7 +60,7 @@ export function PlayerPicker({
         paddingHorizontal: 12,
         paddingVertical: 6,
         borderRadius: 16,
-        backgroundColor: sort === id ? PURPLE : "#eee",
+        backgroundColor: sort === id ? PURPLE : "#f0edf3",
         marginRight: 8,
       }}
     >
@@ -72,8 +72,18 @@ export function PlayerPicker({
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "#fff", paddingTop: 48 }}>
-        <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+      <View style={{ flex: 1, backgroundColor: "#f6f4f8", paddingTop: 48 }}>
+        <View
+          style={{
+            paddingHorizontal: 18,
+            paddingTop: 12,
+            paddingBottom: 16,
+            backgroundColor: "#fff",
+            borderBottomLeftRadius: 22,
+            borderBottomRightRadius: 22,
+            elevation: 3,
+          }}
+        >
           <View
             style={{ flexDirection: "row", justifyContent: "space-between" }}
           >
@@ -91,10 +101,11 @@ export function PlayerPicker({
             placeholder="Search player or club"
             style={{
               borderWidth: 1,
-              borderColor: "#ccc",
-              borderRadius: 10,
+              borderColor: "#e1dce5",
+              borderRadius: 14,
+              backgroundColor: "#f7f5f8",
               paddingHorizontal: 12,
-              paddingVertical: 8,
+              paddingVertical: 11,
               marginTop: 10,
             }}
           />
@@ -122,10 +133,14 @@ export function PlayerPicker({
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
-                  paddingVertical: 12,
                   paddingHorizontal: 16,
-                  borderTopWidth: 1,
-                  borderColor: "#eee",
+                  backgroundColor: "#fff",
+                  marginHorizontal: 12,
+                  marginTop: 7,
+                  borderRadius: 14,
+                  paddingVertical: 13,
+                  borderWidth: 1,
+                  borderColor: "#eee9f0",
                   opacity: tooPricey || clubFull ? 0.45 : 1,
                 }}
               >
