@@ -38,6 +38,9 @@ import { Pitch } from "../Pitch";
 import { PlayerDetailsSheet } from "../PlayerDetailsSheet";
 import { PlayerPicker } from "../PlayerPicker";
 
+if ((Text as any).defaultProps == null) (Text as any).defaultProps = {};
+(Text as any).defaultProps.style = { fontFamily: "Roboto" };
+
 type Stage = "checking" | "welcome" | "login" | "squad";
 type Mode = "lineup" | "transfers";
 type BottomTabId = Mode | "leagues";
@@ -216,7 +219,7 @@ const money = (x: number) => `£${(x / 10).toFixed(1)}m`;
 
 export default function Index() {
   const insets = useSafeAreaInsets();
-  const webRef = useRef<WebView>(null);
+  const webRef = useRef<any>(null);
   const [stage, setStage] = useState<Stage>("checking");
   const stageRef = useRef<Stage>(stage);
   stageRef.current = stage;
@@ -231,6 +234,9 @@ export default function Index() {
   const modeTransitionOpacity = useRef(new Animated.Value(1)).current;
   const modeTransitionX = useRef(new Animated.Value(0)).current;
   const modeTransitioning = useRef(false);
+  const leaguesAnim = useRef(new Animated.Value(0)).current;
+  const historyAnim = useRef(new Animated.Value(0)).current;
+
   const [transferStatsVisible, setTransferStatsVisible] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const [pendingChip, setPendingChip] = useState<PlayableChip | null>(null);
@@ -247,7 +253,56 @@ export default function Index() {
   const [sending, setSending] = useState(false);
   const [showLeagues, setShowLeagues] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    Animated.timing(leaguesAnim, {
+      toValue: showLeagues ? 1 : 0,
+      duration: showLeagues ? 260 : 180,
+      easing: showLeagues ? Easing.out(Easing.cubic) : Easing.in(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [showLeagues]);
+
+  useEffect(() => {
+    Animated.timing(historyAnim, {
+      toValue: showHistory ? 1 : 0,
+      duration: showHistory ? 260 : 180,
+      easing: showHistory ? Easing.out(Easing.cubic) : Easing.in(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [showHistory]);
+  const gwScrollRef = useRef<any>(null);
   const [showGameweekMenu, setShowGameweekMenu] = useState(false);
+  const gwMenuAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (showGameweekMenu) {
+      gwMenuAnim.setValue(0);
+      Animated.timing(gwMenuAnim, {
+        toValue: 1,
+        duration: 160,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [showGameweekMenu]);
+  const activeEvent = squad?.currentGw ?? squad?.gw ?? 1;
+  const gameweeks = squad?.gameweeks ?? [];
+  const reversedGameweeks = useMemo(() => [...gameweeks].reverse(), [gameweeks]);
+  const activeIndex = reversedGameweeks.findIndex(
+    (gw) => gw.id === (selectedFixtureGw ?? activeEvent),
+  );
+
+  useEffect(() => {
+    if (showGameweekMenu && activeIndex >= 0) {
+      setTimeout(() => {
+        gwScrollRef.current?.scrollTo({
+          y: Math.max(0, activeIndex * 44 - 40),
+          animated: false,
+        });
+      }, 40);
+    }
+  }, [showGameweekMenu, activeIndex]);
   const [selectedFixtureGw, setSelectedFixtureGw] = useState<number | null>(
     null,
   );
@@ -914,17 +969,18 @@ export default function Index() {
     modeTransitioning.current = true;
     setTransferStatsVisible(m === "transfers");
     const transitionContent = () => {
-      const exitX = m === "transfers" ? -22 : 22;
+      const exitX = m === "transfers" ? -25 : 25;
       Animated.parallel([
         Animated.timing(modeTransitionOpacity, {
           toValue: 0,
-          duration: 110,
+          duration: 140,
+          easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
         Animated.timing(modeTransitionX, {
           toValue: exitX,
-          duration: 110,
-          easing: Easing.out(Easing.quad),
+          duration: 140,
+          easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
       ]).start(({ finished }) => {
@@ -943,12 +999,13 @@ export default function Index() {
         Animated.parallel([
           Animated.timing(modeTransitionOpacity, {
             toValue: 1,
-            duration: 190,
+            duration: 220,
+            easing: Easing.out(Easing.cubic),
             useNativeDriver: true,
           }),
           Animated.timing(modeTransitionX, {
             toValue: 0,
-            duration: 190,
+            duration: 220,
             easing: Easing.out(Easing.cubic),
             useNativeDriver: true,
           }),
@@ -977,15 +1034,15 @@ export default function Index() {
       : shownPicks.find((player) => player.pos === selectedPos) ?? null;
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#073b25" }}>
-      <StatusBar barStyle="light-content" backgroundColor={PURPLE} />
+    <View style={{ flex: 1, backgroundColor: "#071818" }}>
+      <StatusBar barStyle="light-content" />
 
       {stage === "checking" && (
         <View
           style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
         >
           <Text style={{ color: "#fff", fontSize: 32, fontWeight: "800" }}>
-            Pro<Text style={{ color: GREEN }}>FPL 1.1</Text>
+            Pro<Text style={{ color: GREEN }}>FPL</Text>
           </Text>
           <ActivityIndicator color={GREEN} style={{ marginTop: 24 }} />
         </View>
@@ -1003,7 +1060,7 @@ export default function Index() {
         >
           <View>
             <Text style={{ color: "#fff", fontSize: 48, fontWeight: "800" }}>
-              Pro<Text style={{ color: GREEN }}>FPL 1.1</Text>
+              Pro<Text style={{ color: GREEN }}>FPL</Text>
             </Text>
             <Text style={{ color: "#e6d9ea", fontSize: 18, marginTop: 8 }}>
               Your Fantasy Premier League team, all in one place.
@@ -1158,53 +1215,40 @@ export default function Index() {
       ) : null}
 
       {stage === "squad" && squad && (
-        <View style={{ flex: 1, backgroundColor: "#073b25" }}>
+        <View style={{ flex: 1, backgroundColor: "#071818" }}>
           <View>
             <View
               style={{
-                backgroundColor: PURPLE,
+                backgroundColor: "#071818",
                 paddingTop: insets.top + 8,
                 paddingHorizontal: 12,
                 paddingBottom: 8,
-                borderBottomLeftRadius: 30,
-                borderBottomRightRadius: 30,
-                elevation: 5,
+                borderBottomLeftRadius: 0,
+                borderBottomRightRadius: 0,
+                elevation: 0,
+                shadowOpacity: 0,
+                shadowRadius: 0,
+                shadowOffset: { width: 0, height: 0 },
                 zIndex: 2,
                 overflow: "hidden",
               }}
             >
-              <Image
-                source={require("../../assets/images/header-bg.png")}
-                contentFit="cover"
-                accessible={false}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  right: 0,
-                  bottom: 0,
-                  left: 0,
-                }}
-              />
+              {/* Row 1: ProFPL + Refresh (left) and GW Button (right) */}
               <View
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
                   paddingHorizontal: 4,
-                  marginBottom: showLeagues ? 0 : 6,
+                  marginBottom: showLeagues ? 0 : 4,
                 }}
               >
-                <View>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
                   <Text
-                    style={{ color: "#fff", fontSize: 21, fontWeight: "800" }}
+                    style={{ color: "#fff", fontSize: 18, fontWeight: "900", letterSpacing: 0.4 }}
                   >
                     Pro<Text style={{ color: GREEN }}>FPL</Text>
-                    {!showLeagues && (
-                      <Text style={{ color: "#fff" }}> 1.1</Text>
-                    )}
                   </Text>
-                </View>
-                {!showLeagues && (
-                  <>
+                  {!showLeagues && (
                     <Pressable
                       onPress={refresh}
                       disabled={refreshing}
@@ -1214,16 +1258,17 @@ export default function Index() {
                       }
                       hitSlop={8}
                       style={({ pressed }) => ({
-                        width: 32,
-                        height: 32,
-                        marginLeft: 10,
+                        width: 30,
+                        height: 30,
+                        marginLeft: 8,
                         alignItems: "center",
                         justifyContent: "center",
-                        borderRadius: 16,
+                        borderRadius: 15,
                         borderWidth: 1,
                         borderColor: "rgba(255,255,255,0.5)",
                         backgroundColor: "rgba(255,255,255,0.18)",
-                        opacity: pressed || refreshing ? 0.7 : 1,
+                        opacity: pressed || refreshing ? 0.5 : 1,
+                        transform: [{ scale: pressed ? 0.92 : 1 }],
                       })}
                     >
                       <AppSymbol
@@ -1233,107 +1278,115 @@ export default function Index() {
                           web: "refresh",
                         }}
                         color="#fff"
-                        size={17}
-                      />
-                    </Pressable>
-                    <View style={{ flex: 1 }} />
-                    <Pressable
-                      onPress={() => setShowGameweekMenu(true)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Select gameweek. Default gameweek ${squad.gw}. Selected gameweek ${selectedFixtureGw ?? squad.gw}`}
-                      style={({ pressed }) => ({
-                        borderRadius: 24,
-                        paddingHorizontal: 14,
-                        paddingVertical: 7,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 6,
-                        overflow: "hidden",
-                        borderWidth: 1,
-                        borderColor: "rgba(255,255,255,0.72)",
-                        backgroundColor: "rgba(255,255,255,0.2)",
-                        opacity: pressed ? 0.78 : 1,
-                        elevation: 8,
-                        shadowColor: "#100018",
-                        shadowOpacity: 0.28,
-                        shadowRadius: 12,
-                        shadowOffset: { width: 0, height: 5 },
-                      })}
-                    >
-                      <GlassView
-                        pointerEvents="none"
-                        glassEffectStyle="regular"
-                        tintColor="rgba(255,255,255,0.22)"
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          right: 0,
-                          bottom: 0,
-                          left: 0,
-                          borderRadius: 24,
-                        }}
-                      />
-                      <Text style={{ color: "#fff", fontSize: 13, fontWeight: "900" }}>
-                        GW {selectedFixtureGw ?? squad.gw}
-                        {squad.chip ? ` · ${squad.chip}` : ""}
-                      </Text>
-                      <AppSymbol
-                        name={{ ios: "chevron.down", android: "expand_more", web: "expand_more" }}
-                        color="#fff"
                         size={15}
                       />
                     </Pressable>
-                  </>
+                  )}
+                </View>
+
+                <View style={{ flex: 1 }} />
+
+                {!showLeagues && (
+                  <Pressable
+                    onPress={() => setShowGameweekMenu(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select gameweek. Default gameweek ${squad.gw}. Selected gameweek ${selectedFixtureGw ?? squad.gw}`}
+                    style={({ pressed }) => ({
+                      borderRadius: 20,
+                      paddingHorizontal: 14,
+                      paddingVertical: 7,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      minWidth: 96,
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.18)",
+                      backgroundColor: "rgba(14, 38, 26, 0.9)",
+                      opacity: pressed ? 0.68 : 1,
+                      transform: [{ scale: pressed ? 0.97 : 1 }],
+                      elevation: 4,
+                    })}
+                  >
+                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800" }}>
+                      GW {selectedFixtureGw ?? squad.gw}
+                      {squad.chip ? ` · ${squad.chip}` : ""}
+                    </Text>
+                    <AppSymbol
+                      name={{ ios: "chevron.down", android: "expand_more", web: "expand_more" }}
+                      color="#fff"
+                      size={14}
+                    />
+                  </Pressable>
                 )}
               </View>
-              {!showLeagues && <View
-                style={{
-                  marginHorizontal: 4,
-                  marginBottom: 0,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  minHeight: 42,
-                }}
-              >
-                <Text
-                  numberOfLines={1}
-                  style={{
-                    flex: 1,
-                    color: "#fff",
-                    fontSize: 15,
-                    fontWeight: "800",
-                    paddingRight: 12,
-                  }}
-                >
-                  {squad.teamName || "Your team"}
-                </Text>
+
+              {/* Row 2: Team Name with Green Accent Bar (left) and Points Button (right) */}
+              {!showLeagues && (
                 <View
                   style={{
-                    alignItems: "flex-end",
-                    paddingLeft: 14,
-                    borderLeftWidth: 1,
-                    borderLeftColor: "rgba(255,255,255,0.4)",
+                    marginHorizontal: 4,
+                    marginTop: 4,
+                    marginBottom: 0,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    minHeight: 36,
                   }}
                 >
+                  <View style={{ flexDirection: "row", alignItems: "center", flex: 1, paddingRight: 12 }}>
+                    <View
+                      style={{
+                        width: 3.5,
+                        height: 16,
+                        backgroundColor: GREEN,
+                        borderRadius: 2,
+                        marginRight: 8,
+                      }}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={{
+                        flex: 1,
+                        color: "#fff",
+                        fontSize: 13,
+                        fontWeight: "400",
+                      }}
+                    >
+                      {squad.teamName || "Your team"}
+                    </Text>
+                  </View>
+
                   <Pressable
                     onPress={() => openOwnHistory(squad.currentGw)}
                     accessibilityRole="button"
                     accessibilityLabel="Points. Open current gameweek points"
-                    style={{
-                      paddingHorizontal: 15,
-                      paddingVertical: 9,
-                      borderRadius: 18,
-                      backgroundColor: "rgba(255,255,255,0.18)",
+                    style={({ pressed }) => ({
+                      borderRadius: 20,
+                      paddingHorizontal: 14,
+                      paddingVertical: 7,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 8,
+                      minWidth: 96,
                       borderWidth: 1,
-                      borderColor: "rgba(255,255,255,0.45)",
-                    }}
+                      borderColor: "rgba(255,255,255,0.18)",
+                      backgroundColor: "rgba(14, 38, 26, 0.9)",
+                      opacity: pressed ? 0.68 : 1,
+                      transform: [{ scale: pressed ? 0.97 : 1 }],
+                      elevation: 4,
+                    })}
                   >
-                    <Text style={{ color: "#fff", fontSize: 14, fontWeight: "900" }}>
+                    <AppSymbol
+                      name={{ ios: "chart.bar.fill", android: "bar_chart", web: "bar_chart" }}
+                      color={GREEN}
+                      size={14}
+                    />
+                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800" }}>
                       Points
                     </Text>
                   </Pressable>
                 </View>
-              </View>}
+              )}
             </View>
           </View>
 
@@ -1366,8 +1419,9 @@ export default function Index() {
             }}
             scrollEnabled={false}
             contentContainerStyle={{
+              flexGrow: 1,
               width: "100%",
-              paddingBottom: insets.bottom + 200,
+              paddingBottom: insets.bottom + 68,
             }}
           >
             <Pitch
@@ -1906,8 +1960,8 @@ export default function Index() {
         </View>
       )}
 
-      {stage === "squad" && squad && showLeagues && (
-        <View
+      {stage === "squad" && squad && (
+        <Animated.View
           style={{
             position: "absolute",
             top: insets.top + 48,
@@ -1916,7 +1970,17 @@ export default function Index() {
             right: 0,
             zIndex: 10,
             elevation: 10,
-            backgroundColor: "#073b25",
+            backgroundColor: "#071818",
+            opacity: leaguesAnim,
+            transform: [
+              {
+                translateY: leaguesAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [35, 0],
+                }),
+              },
+            ],
+            pointerEvents: showLeagues ? "auto" : "none",
           }}
         >
           <LeagueHub
@@ -1940,10 +2004,10 @@ export default function Index() {
             onGetInviteCode={getInviteCode}
             onViewMember={viewMemberSquad}
           />
-        </View>
+        </Animated.View>
       )}
-      {stage === "squad" && squad && showHistory && (
-        <View
+      {stage === "squad" && squad && (
+        <Animated.View
           style={{
             position: "absolute",
             top: 0,
@@ -1953,6 +2017,16 @@ export default function Index() {
             zIndex: 11,
             elevation: 11,
             paddingTop: insets.top,
+            opacity: historyAnim,
+            transform: [
+              {
+                translateY: historyAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [45, 0],
+                }),
+              },
+            ],
+            pointerEvents: showHistory ? "auto" : "none",
           }}
         >
           <ManagerHistory
@@ -1973,12 +2047,12 @@ export default function Index() {
             }}
             onSelectEvent={selectOwnHistoryEvent}
           />
-        </View>
+        </Animated.View>
       )}
       <Modal
         visible={showGameweekMenu}
         transparent
-        animationType="fade"
+        animationType="none"
         statusBarTranslucent
         onRequestClose={() => setShowGameweekMenu(false)}
       >
@@ -2004,7 +2078,7 @@ export default function Index() {
               right: 0,
             }}
           />
-          <View
+          <Animated.View
             style={{
               width: 220,
               maxHeight: "70%",
@@ -2016,6 +2090,15 @@ export default function Index() {
               shadowOpacity: 0.2,
               shadowRadius: 18,
               shadowOffset: { width: 0, height: 8 },
+              opacity: gwMenuAnim,
+              transform: [
+                {
+                  scale: gwMenuAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.92, 1],
+                  }),
+                },
+              ],
             }}
           >
             <Text
@@ -2029,8 +2112,8 @@ export default function Index() {
             >
               Select gameweek
             </Text>
-            <ScrollView>
-              {[...(squad?.gameweeks ?? [])].reverse().map((gameweek) => {
+            <ScrollView ref={gwScrollRef}>
+              {reversedGameweeks.map((gameweek) => {
                 const activeEvent = squad?.currentGw ?? squad?.gw;
                 const selected = gameweek.id === selectedFixtureGw;
                 return (
@@ -2072,7 +2155,7 @@ export default function Index() {
                 );
               })}
             </ScrollView>
-          </View>
+          </Animated.View>
         </View>
       </Modal>
       <AppDialog

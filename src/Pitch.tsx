@@ -1,7 +1,11 @@
 import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Image } from "expo-image";
+import { GlassView } from "expo-glass-effect";
+import { AppSymbol } from "./AppSymbol";
 import { Row } from "./fpl";
+
+const GREEN = "#00d982";
 
 type Kit = {
   shirt: string;
@@ -112,6 +116,29 @@ const GOALKEEPER_KIT_COLORS: Record<string, Kit> = {
 
 const SKIN = "#d9a77e";
 const HAIR = "#241a16";
+const TEAM_AVATARS: Record<string, any> = {
+  ARS: require("../assets/images/final-avatar/Ars.png"),
+  AVL: require("../assets/images/final-avatar/Avl.png"),
+  BHA: require("../assets/images/final-avatar/Bha.png"),
+  BOU: require("../assets/images/final-avatar/Bou.png"),
+  BRE: require("../assets/images/final-avatar/Bre.png"),
+  CHE: require("../assets/images/final-avatar/Che.png"),
+  COV: require("../assets/images/final-avatar/Cov.png"),
+  CRY: require("../assets/images/final-avatar/Cry.png"),
+  EVE: require("../assets/images/final-avatar/Eve.png"),
+  FUL: require("../assets/images/final-avatar/Ful.png"),
+  HUL: require("../assets/images/final-avatar/Hul.png"),
+  IPS: require("../assets/images/final-avatar/Ips.png"),
+  LEE: require("../assets/images/final-avatar/Lee.png"),
+  LIV: require("../assets/images/final-avatar/Liv.png"),
+  MCI: require("../assets/images/final-avatar/Mci.png"),
+  MUN: require("../assets/images/final-avatar/Mun.png"),
+  NEW: require("../assets/images/final-avatar/New.png"),
+  NFO: require("../assets/images/final-avatar/Nfo.png"),
+  SUN: require("../assets/images/final-avatar/Sun.png"),
+  TOT: require("../assets/images/final-avatar/Tot.png"),
+};
+
 const CHAIR = "#8292a8";
 
 function PlayerAvatar({
@@ -123,196 +150,54 @@ function PlayerAvatar({
   benched: boolean;
   goalkeeper: boolean;
 }) {
-  const teamKit = KIT_COLORS[team] ?? {
-    shirt: "#37003c",
-    trim: "#00ff87",
-  };
-  const kit = goalkeeper
-    ? (GOALKEEPER_KIT_COLORS[team] ?? teamKit)
-    : teamKit;
-  const shirtTop = benched ? 41 : 37;
-  const shirtWidth = benched ? 42 : 46;
+  const avatarSource = (team && TEAM_AVATARS[team]) ? TEAM_AVATARS[team] : require("../assets/images/final-avatar/no-club.png");
+  const displayTeam = team && TEAM_AVATARS[team] ? team : "";
 
   return (
     <View
       style={{
         width: 54,
-        height: 52,
+        height: 44,
         alignItems: "center",
-        transform: [{ scale: 0.88 }],
+        justifyContent: "center",
       }}
     >
-      {benched && (
-        <>
-          <View
-            style={{
-              position: "absolute",
-              top: 5,
-              width: 58,
-              height: 58,
-              borderTopLeftRadius: 19,
-              borderTopRightRadius: 19,
-              borderBottomLeftRadius: 9,
-              borderBottomRightRadius: 9,
-              backgroundColor: CHAIR,
-            }}
-          />
-          <View
-            style={{
-              position: "absolute",
-              top: 11,
-              width: 46,
-              height: 48,
-              borderTopLeftRadius: 15,
-              borderTopRightRadius: 15,
-              backgroundColor: "#a9b5c3",
-            }}
-          />
-        </>
-      )}
-
-      <View
-        style={{
-          position: "absolute",
-          top: shirtTop,
-          width: shirtWidth,
-          height: benched ? 25 : 29,
-          borderTopLeftRadius: 15,
-          borderTopRightRadius: 15,
-          backgroundColor: kit.shirt,
-          overflow: "hidden",
-        }}
-      >
-        {kit.sleeves && (
-          <>
-            <View
-              style={{
-                position: "absolute",
-                top: 3,
-                left: benched ? 6 : 5,
-                width: benched ? 10 : 12,
-                height: 13,
-                borderRadius: 4,
-                backgroundColor: kit.sleeves,
-                zIndex: 1,
-              }}
-            />
-            <View
-              style={{
-                position: "absolute",
-                top: 3,
-                right: benched ? 6 : 5,
-                width: benched ? 10 : 12,
-                height: 13,
-                borderRadius: 4,
-                backgroundColor: kit.sleeves,
-                zIndex: 1,
-              }}
-            />
-          </>
-        )}
-        {kit.pattern === "stripes" &&
-          [0, 1, 2].map((stripe) => (
-            <View
-              key={stripe}
-              style={{
-                position: "absolute",
-                top: 0,
-                bottom: 0,
-                left: (benched ? 7 : 8) + stripe * (benched ? 10 : 10),
-                width: benched ? 5 : 6,
-                backgroundColor: kit.trim,
-              }}
-            />
-          ))}
-      </View>
-
-      <View
-        style={{
-          position: "absolute",
-          top: shirtTop,
-          width: 10,
-          height: 4,
-          borderBottomLeftRadius: 5,
-          borderBottomRightRadius: 5,
-          backgroundColor: kit.trim,
-        }}
-      />
-
-      <View
-        style={{
-          position: "absolute",
-          top: benched ? 31 : 27,
-          width: 10,
-          height: 12,
-          backgroundColor: SKIN,
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          top: benched ? 9 : 5,
-          width: 26,
-          height: 29,
-          borderRadius: 12,
-          backgroundColor: SKIN,
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          top: benched ? 6 : 2,
-          width: 28,
-          height: 13,
-          borderTopLeftRadius: 11,
-          borderTopRightRadius: 11,
-          borderBottomLeftRadius: 3,
-          borderBottomRightRadius: 3,
-          backgroundColor: HAIR,
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          top: benched ? 7 : 3,
-          right: 23,
-          width: 14,
-          height: 6,
-          borderBottomLeftRadius: 9,
-          backgroundColor: "#493021",
-          transform: [{ rotate: "-18deg" }],
-        }}
-      />
-
-      {!!team && (
-        <View
+      <View style={{ alignItems: "center", justifyContent: "center" }}>
+        <Image
+          source={avatarSource}
+          contentFit="contain"
           style={{
-            position: "absolute",
-            top: benched ? 45 : 43,
-            minWidth: 31,
-            height: 13,
-            paddingHorizontal: 3,
-            borderRadius: 3,
-            backgroundColor: "#142d5c",
-            alignItems: "center",
-            justifyContent: "center",
+            width: 60,
+            height: 60,
+            transform: [{ scale: benched ? 0.95 : 1.15 }],
           }}
-        >
-          <Text
-            numberOfLines={1}
+        />
+        {!!displayTeam && (
+          <View
             style={{
-              color: "#ffffff",
-              textAlign: "center",
-              fontSize: 9,
-              lineHeight: 11,
-              letterSpacing: 0.3,
-              fontWeight: "900",
+              position: "absolute",
+              bottom: 2,
+              backgroundColor: "rgba(20, 45, 92, 0.92)",
+              paddingHorizontal: 4,
+              paddingVertical: 1,
+              borderRadius: 3,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.4)",
             }}
           >
-            {team}
-          </Text>
-        </View>
-      )}
+            <Text
+              style={{
+                color: "#ffffff",
+                fontSize: 8,
+                fontWeight: "900",
+                letterSpacing: 0.3,
+              }}
+            >
+              {displayTeam}
+            </Text>
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -352,19 +237,15 @@ function PlayerCard({
         minWidth: 0,
         paddingVertical: r.pos > 11 ? 7 : 0,
         borderRadius: 18,
-        backgroundColor: benchedGoalkeeper
-          ? "#fff2b8"
-          : r.pos > 11
-            ? "rgba(255,255,255,0.58)"
-            : "transparent",
-        borderWidth: benchedGoalkeeper ? 1 : 0,
-        borderColor: benchedGoalkeeper ? "#e4bd4a" : "transparent",
+        backgroundColor: "transparent",
+        borderWidth: 0,
+        borderColor: "transparent",
       }}
     >
       <View
         style={{
           width: 54,
-          height: 50,
+          height: 44,
           alignItems: "center",
           justifyContent: "center",
           borderRadius: 10,
@@ -383,11 +264,11 @@ function PlayerCard({
             style={{
               position: "absolute",
               top: r.pos > 11 ? 11 : 4,
-              left: 7,
+              left: 2,
               width: 15,
               height: 15,
               borderRadius: 8,
-              backgroundColor: "#fff",
+              backgroundColor: "#000",
               alignItems: "center",
               justifyContent: "center",
             }}
@@ -400,10 +281,7 @@ function PlayerCard({
                 fontWeight: "900",
                 textAlign: "center",
                 includeFontPadding: false,
-                transform: [{ translateY: -1 }],
-                textShadowColor: "#FFC107",
-                textShadowOffset: { width: 0, height: 0 },
-                textShadowRadius: 1,
+                transform: [{ translateY: -2.5 }],
               }}
             >
               ★
@@ -458,7 +336,7 @@ function PlayerCard({
         )}
       </View>
       {!!r.name && (
-        <View style={{ width: 72, maxWidth: "100%", marginTop: 4 }}>
+        <View style={{ width: 72, maxWidth: "100%", marginTop: 0 }}>
           <View
             style={{
               backgroundColor: "#37003c",
@@ -663,7 +541,7 @@ function PitchRow({
         justifyContent: rows.length === 1 ? "center" : "space-between",
         columnGap: rows.length > 1 ? 6 : 0,
         flexWrap: "nowrap",
-        marginVertical: benched ? 0 : 4,
+        marginVertical: benched ? 1 : 4,
         paddingHorizontal: benched ? 8 : 10,
       }}
     >
@@ -703,16 +581,21 @@ export function Pitch({
   return (
     <View
       style={{
+        flex: 1,
         width: "100%",
         alignSelf: "stretch",
+        justifyContent: "space-between",
+        paddingBottom: 4,
       }}
     >
       <View
         style={{
-          backgroundColor: "#14a43a",
+          flex: 1,
+          backgroundColor: "#073b12",
           marginHorizontal: 0,
           borderRadius: 26,
-          paddingVertical: 4,
+          paddingVertical: 8,
+          justifyContent: "space-between",
           overflow: "hidden",
           borderWidth: 1,
           borderColor: "rgba(255,255,255,0.45)",
@@ -731,7 +614,7 @@ export function Pitch({
             left: 0,
           }}
         />
-        <View style={{ transform: [{ translateY: -8 }] }}>
+        <View style={{ flex: 1, justifyContent: "space-between", paddingVertical: 2 }}>
           <PitchRow
             rows={line(1)}
             selectedGw={selectedGw}
@@ -766,17 +649,46 @@ export function Pitch({
 
       <View
         style={{
-          backgroundColor: "rgba(255,255,255,0.78)",
-          marginHorizontal: 12,
+          backgroundColor: "rgba(10, 32, 21, 0.75)",
+          marginHorizontal: 4,
           marginTop: 6,
-          borderRadius: 24,
-          paddingVertical: 4,
-          paddingHorizontal: 5,
-          borderWidth: 1,
-          borderColor: "#e8e1f3",
-          elevation: 2,
+          borderRadius: 26,
+          paddingVertical: 8,
+          paddingHorizontal: 8,
+          borderWidth: 1.5,
+          borderColor: "rgba(0, 217, 130, 0.5)",
+          elevation: 8,
+          shadowColor: "#00d982",
+          shadowOpacity: 0.4,
+          shadowRadius: 16,
+          shadowOffset: { width: 0, height: 0 },
+          overflow: "hidden",
         }}
       >
+        <GlassView
+          pointerEvents="none"
+          glassEffectStyle="regular"
+          tintColor="rgba(12, 36, 24, 0.7)"
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            borderRadius: 26,
+          }}
+        />
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 12,
+            right: 12,
+            height: 1,
+            backgroundColor: "rgba(255, 255, 255, 0.35)",
+          }}
+        />
         <PitchRow
           rows={bench}
           selectedGw={selectedGw}
