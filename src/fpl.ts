@@ -23,6 +23,8 @@ export type PlayerFixture = {
   opponent: string;
   venue: "H" | "A";
   difficulty: "easy" | "average" | "hard";
+  started?: boolean;
+  finished?: boolean;
 };
 
 export type Player = {
@@ -67,6 +69,8 @@ export type Gameweek = {
   name: string;
   finished: boolean;
   isCurrent: boolean;
+  isNext?: boolean;
+  deadlineTime?: string | null;
 };
 
 export type LeagueType = "classic" | "h2h";
@@ -176,7 +180,9 @@ export const FETCH_JS = `
       id: e.id,
       name: e.name,
       finished: e.finished,
-      isCurrent: e.id === activeEvent.id
+      isCurrent: Boolean(e.is_current),
+      isNext: Boolean(e.is_next),
+      deadlineTime: e.deadline_time || (e.deadline_time_epoch ? new Date(e.deadline_time_epoch * 1000).toISOString() : null)
     }));
     const players = {};
     bs.elements.forEach(p => { players[p.id] = p; });
@@ -216,7 +222,9 @@ export const FETCH_JS = `
                 ? "easy"
                 : difficulty === 3
                   ? "average"
-                  : "hard"
+                  : "hard",
+              started: fixture.started ?? false,
+              finished: fixture.finished ?? false,
             };
           });
       }
@@ -239,6 +247,7 @@ export const FETCH_JS = `
       form: players[p.element].form,
       ownership: players[p.element].selected_by_percent,
       priceChange: players[p.element].cost_change_event,
+      displayPoints: players[p.element].event_points ?? null,
       formMood: moodFor(players[p.element].form),
       fixtures: fixturesFor(players[p.element].team)
     }));
@@ -308,7 +317,13 @@ export const FETCH_JS = `
 true;
 `;
 
-export function buildSaveJs(entry: number, picks: Row[], chip: string | null = null) {
+export function buildSaveJs(
+  entry: number,
+  picks: Row[],
+  chip: string | null = null,
+  email?: string,
+  password?: string,
+) {
   const body = {
     chip,
     picks: [...picks]
@@ -323,15 +338,50 @@ export function buildSaveJs(entry: number, picks: Row[], chip: string | null = n
   return `
 (async () => {
   const send = (o) => window.ReactNativeWebView.postMessage(JSON.stringify(o));
-  try {
-    const r = await fetch("https://fantasy.premierleague.com/api/my-team/${entry}/", {
+  const getCsrf = () => {
+    const parts = document.cookie.split(";").map((p) => p.trim());
+    const c = parts.find((p) => p.startsWith("csrftoken="));
+    if (c) return decodeURIComponent(c.slice("csrftoken=".length));
+    const alt = parts.find((p) => p.toLowerCase().includes("csrf"));
+    if (alt) return decodeURIComponent(alt.split("=")[1] || "");
+    return "";
+  };
+
+  const doSave = async () => {
+    const headers = { "Content-Type": "application/json" };
+    const csrf = getCsrf();
+    if (csrf) headers["X-CSRFToken"] = csrf;
+
+    return await fetch("https://fantasy.premierleague.com/api/my-team/${entry}/", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(${JSON.stringify(body)})
     });
+  };
+
+  try {
+    let r = await doSave();
+
+    if ((r.status === 403 || r.status === 401) && ${JSON.stringify(email || "")} && ${JSON.stringify(password || "")}) {
+      const formData = new URLSearchParams();
+      formData.append("login", ${JSON.stringify(email || "")});
+      formData.append("password", ${JSON.stringify(password || "")});
+      formData.append("app", "fpl-web");
+      formData.append("redirect_uri", "https://fantasy.premierleague.com/");
+
+      await fetch("https://fantasy.premierleague.com/accounts/login/", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: formData.toString(),
+        credentials: "include",
+      }).catch(() => {});
+
+      r = await doSave();
+    }
+
     const text = await r.text();
-    if (r.ok) send({ saved: true });
+    if (r.ok || r.status === 200) send({ saved: true });
     else send({ ok: false, saveError: "Status " + r.status + ": " + text.slice(0, 150) });
   } catch (e) {
     send({ ok: false, saveError: String(e) });
@@ -352,6 +402,8 @@ export function buildTransferJs(
   event: number,
   items: TransferItem[],
   chip: string | null = null,
+  email?: string,
+  password?: string,
 ) {
   const body = {
     chip,
@@ -367,19 +419,54 @@ export function buildTransferJs(
   return `
 (async () => {
   const send = (o) => window.ReactNativeWebView.postMessage(JSON.stringify(o));
+  const getCsrf = () => {
+    const parts = document.cookie.split(";").map((p) => p.trim());
+    const c = parts.find((p) => p.startsWith("csrftoken="));
+    if (c) return decodeURIComponent(c.slice("csrftoken=".length));
+    const alt = parts.find((p) => p.toLowerCase().includes("csrf"));
+    if (alt) return decodeURIComponent(alt.split("=")[1] || "");
+    return "";
+  };
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
-  try {
-    const r = await fetch("https://fantasy.premierleague.com/api/transfers/", {
+
+  const doTransfer = async () => {
+    const headers = { "Content-Type": "application/json" };
+    const csrf = getCsrf();
+    if (csrf) headers["X-CSRFToken"] = csrf;
+
+    return await fetch("https://fantasy.premierleague.com/api/transfers/", {
       method: "POST",
       credentials: "include",
       signal: ctrl.signal,
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(${JSON.stringify(body)})
     });
+  };
+
+  try {
+    let r = await doTransfer();
+
+    if ((r.status === 403 || r.status === 401) && ${JSON.stringify(email || "")} && ${JSON.stringify(password || "")}) {
+      const formData = new URLSearchParams();
+      formData.append("login", ${JSON.stringify(email || "")});
+      formData.append("password", ${JSON.stringify(password || "")});
+      formData.append("app", "fpl-web");
+      formData.append("redirect_uri", "https://fantasy.premierleague.com/");
+
+      await fetch("https://fantasy.premierleague.com/accounts/login/", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: formData.toString(),
+        credentials: "include",
+      }).catch(() => {});
+
+      r = await doTransfer();
+    }
+
     clearTimeout(timer);
     const text = await r.text();
-    if (r.ok) send({ transferred: true });
+    if (r.ok || r.status === 200) send({ transferred: true });
     else send({ transferError: "Status " + r.status + ": " + text.slice(0, 200) });
   } catch (e) {
     send({
@@ -400,6 +487,7 @@ type LeagueAction =
       name: string;
       leagueType: LeagueType;
       startEvent: number;
+      knockoutRounds?: number;
     }
   | { action: "invite-code"; leagueId: number }
   | { action: "manager-gameweek"; entry: number; event: number };

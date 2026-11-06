@@ -9,6 +9,7 @@ import {
   ScrollView,
   StatusBar,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { Image } from "expo-image";
@@ -19,6 +20,7 @@ import type { DialogButton } from "../AppDialog";
 import { AppSymbol } from "../AppSymbol";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   buildLeagueActionJs,
   buildSaveJs,
@@ -42,10 +44,14 @@ if ((Text as any).defaultProps == null) (Text as any).defaultProps = {};
 (Text as any).defaultProps.style = { fontFamily: "Roboto" };
 
 type Stage = "checking" | "welcome" | "login" | "squad";
-type Mode = "lineup" | "transfers";
-type BottomTabId = Mode | "leagues";
+type Mode = "lineup" | "transfers" | "leagues" | "more";
+type BottomTabId = Mode;
 type Pending = { pos: number; inn: Player };
 type PlayableChip = "wildcard" | "freehit" | "bboost" | "3xc";
+
+const STORAGE_SQUAD = "profpl_cached_squad";
+const STORAGE_LOGGED_IN = "profpl_is_logged_in";
+const STORAGE_CREDS = "profpl_user_credentials";
 
 const CHIP_OPTIONS: { id: PlayableChip; label: string; mode: Mode }[] = [
   { id: "wildcard", label: "Wildcard", mode: "transfers" },
@@ -104,24 +110,24 @@ function Stat({ label, value }: { label: string; value: string }) {
     <View
       style={{
         flex: 1,
-        height: 40,
+        height: 30,
         justifyContent: "center",
-        backgroundColor: "rgba(255,255,255,0.1)",
-        borderColor: "rgba(255,255,255,0.12)",
+        backgroundColor: "rgba(255,255,255,0.08)",
+        borderColor: "rgba(255,255,255,0.1)",
         borderWidth: 1,
-        borderRadius: 12,
-        paddingHorizontal: 9,
+        borderRadius: 8,
+        paddingHorizontal: 6,
         marginHorizontal: 3,
       }}
     >
-      <Text style={{ color: "#cdb9d1", fontSize: 9, lineHeight: 11 }}>
+      <Text style={{ color: "#cdb9d1", fontSize: 8, lineHeight: 9 }}>
         {label}
       </Text>
       <Text
         style={{
           color: "#fff",
-          fontSize: 14,
-          lineHeight: 16,
+          fontSize: 11,
+          lineHeight: 13,
           fontWeight: "bold",
         }}
       >
@@ -145,57 +151,72 @@ function BottomTab({
   onPress: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const [pressed, setPressed] = useState(false);
 
   return (
     <Pressable
       onPress={onPress}
-      onPressIn={() => {
-        setPressed(true);
-        onPressIn();
-      }}
-      onPressOut={() => setPressed(false)}
+      onPressIn={onPressIn}
       onHoverIn={() => setHovered(true)}
       onHoverOut={() => setHovered(false)}
-      android_ripple={{ color: "rgba(55,0,60,0.16)" }}
+      android_ripple={{
+        color: "rgba(0, 217, 130, 0.25)",
+        borderless: false,
+        radius: 24,
+      }}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected }}
-      style={{
+      style={({ pressed }) => ({
         flex: 1,
-        height: 44,
+        height: 48,
         alignItems: "center",
         justifyContent: "center",
-        borderRadius: 20,
-        paddingVertical: 6,
-        backgroundColor: pressed
-          ? selected
-            ? "#6b2072"
-            : "#ddc6e8"
-          : hovered
-            ? selected
-              ? "#5a1261"
-              : "#eadcf0"
-            : selected
-              ? PURPLE
+        borderRadius: 24,
+        overflow: "hidden",
+        paddingVertical: 4,
+        backgroundColor: selected
+          ? pressed
+            ? "#02351b"
+            : "#044222"
+          : pressed
+            ? "rgba(0, 217, 130, 0.22)"
+            : hovered
+              ? "rgba(0, 217, 130, 0.12)"
               : "transparent",
-        borderWidth: hovered || pressed ? 1 : 0,
-        borderColor:
-          hovered || pressed ? "rgba(55,0,60,0.32)" : "transparent",
-        transform: [{ scale: pressed ? 0.96 : hovered ? 1.04 : 1 }],
-      }}
+        borderWidth: selected ? 1.5 : pressed || hovered ? 1 : 0,
+        borderColor: selected
+          ? "#00d982"
+          : pressed
+            ? "rgba(0, 217, 130, 0.5)"
+            : hovered
+              ? "rgba(0, 217, 130, 0.3)"
+              : "transparent",
+        shadowColor: "#00d982",
+        shadowOpacity: selected ? 0.35 : pressed ? 0.25 : 0,
+        shadowRadius: selected ? 8 : pressed ? 6 : 0,
+        shadowOffset: { width: 0, height: 0 },
+        transform: [{ scale: pressed ? 0.93 : hovered ? 1.02 : 1 }],
+      })}
     >
-      <AppSymbol name={icon} color={selected ? "#fff" : PURPLE} size={15} />
-      <Text
-        style={{
-          color: selected ? "#fff" : PURPLE,
-          fontSize: 10,
-          fontWeight: selected ? "800" : "600",
-          marginTop: 1,
-        }}
-      >
-        {label}
-      </Text>
+      {({ pressed }) => (
+        <>
+          <AppSymbol
+            name={icon}
+            color={selected || pressed ? "#00d982" : "#c4d8ce"}
+            size={19}
+          />
+          <Text
+            style={{
+              color: selected ? "#ffffff" : pressed ? "#00d982" : "#c4d8ce",
+              fontSize: 11,
+              fontWeight: selected || pressed ? "800" : "500",
+              marginTop: 2,
+            }}
+          >
+            {label}
+          </Text>
+        </>
+      )}
     </Pressable>
   );
 }
@@ -216,6 +237,43 @@ function orderStartingPicksByType(picks: Row[]) {
 }
 
 const money = (x: number) => `£${(x / 10).toFixed(1)}m`;
+
+const formatDeadlineDate = (isoString?: string | null) => {
+  if (!isoString) return "Deadline unavailable";
+  try {
+    const date = new Date(isoString);
+    if (isNaN(date.getTime())) return "Deadline unavailable";
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const dayName = days[date.getDay()];
+    const dayNum = date.getDate();
+    const monthName = months[date.getMonth()];
+    const hours = date.getHours().toString().padStart(2, "0");
+    const mins = date.getMinutes().toString().padStart(2, "0");
+    return `${dayName} ${dayNum} ${monthName}, ${hours}:${mins}`;
+  } catch {
+    return "Deadline unavailable";
+  }
+};
+
+const formatRemainingTime = (isoString?: string | null, nowMs: number = Date.now()) => {
+  if (!isoString) return "—";
+  const deadlineMs = new Date(isoString).getTime();
+  if (isNaN(deadlineMs)) return "—";
+  const diff = deadlineMs - nowMs;
+  if (diff <= 0) return "Deadline Passed";
+
+  const totalSecs = Math.floor(diff / 1000);
+  const days = Math.floor(totalSecs / (3600 * 24));
+  const hours = Math.floor((totalSecs % (3600 * 24)) / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+
+  if (days > 0) {
+    return `${days}d ${hours}h ${mins}m`;
+  }
+  return `${hours}h ${mins}m ${secs}s`;
+};
 
 export default function Index() {
   const insets = useSafeAreaInsets();
@@ -253,6 +311,249 @@ export default function Index() {
   const [sending, setSending] = useState(false);
   const [showLeagues, setShowLeagues] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [activeMember, setActiveMember] = useState<{
+    entry: number;
+    teamName: string;
+    managerName: string;
+    isOwnPoints?: boolean;
+  } | null>(null);
+  const [activeMemberEvent, setActiveMemberEvent] = useState<number>(1);
+
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [fplEvents, setFplEvents] = useState<any[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("https://fantasy.premierleague.com/api/bootstrap-static/");
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.events) {
+            setFplEvents(json.events);
+          }
+        }
+      } catch (e) {}
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "transfers") return;
+    const interval = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [mode]);
+
+  const nextGwDeadlineInfo = useMemo(() => {
+    const events = fplEvents.length > 0
+      ? fplEvents
+      : squad?.gameweeks?.map((gw) => ({
+          id: gw.id,
+          name: gw.name,
+          finished: gw.finished,
+          is_current: gw.isCurrent,
+          is_next: gw.isNext,
+          deadline_time: gw.deadlineTime,
+        })) || [];
+
+    if (events.length === 0 && !squad) return null;
+
+    const nextGwId = squad?.gw ?? events.find((e: any) => e.is_next)?.id ?? events.find((e: any) => !e.finished)?.id ?? 1;
+
+    const targetEvent =
+      events.find((e: any) => e.id === nextGwId) ||
+      events.find((e: any) => e.is_next) ||
+      events.find((e: any) => !e.finished) ||
+      events[0];
+
+    if (!targetEvent) return null;
+
+    const deadlineTimeIso =
+      targetEvent.deadline_time ||
+      targetEvent.deadlineTime ||
+      (targetEvent.deadline_time_epoch ? new Date(targetEvent.deadline_time_epoch * 1000).toISOString() : null);
+
+    return {
+      id: targetEvent.id ?? nextGwId,
+      name: targetEvent.name ?? `Gameweek ${targetEvent.id ?? nextGwId}`,
+      formattedDate: deadlineTimeIso ? formatDeadlineDate(deadlineTimeIso) : `GW ${targetEvent.id ?? nextGwId} Deadline`,
+      remainingText: deadlineTimeIso ? formatRemainingTime(deadlineTimeIso, nowMs) : "Active",
+    };
+  }, [squad, fplEvents, nowMs]);
+
+  const modalWebRef = useRef<any>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [googleModalKey, setGoogleModalKey] = useState(0);
+
+  const lastAttemptedEmail = useRef("");
+  const lastAttemptedPassword = useRef("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const savedCreds = await AsyncStorage.getItem(STORAGE_CREDS);
+        if (savedCreds) {
+          const { email: savedEmail, password: savedPassword } = JSON.parse(savedCreds);
+          if (savedEmail) {
+            setEmail(savedEmail);
+            lastAttemptedEmail.current = savedEmail;
+          }
+          if (savedPassword) {
+            setPassword(savedPassword);
+            lastAttemptedPassword.current = savedPassword;
+          }
+        }
+
+        const loggedInFlag = await AsyncStorage.getItem(STORAGE_LOGGED_IN);
+        const cachedSquadStr = await AsyncStorage.getItem(STORAGE_SQUAD);
+        if (loggedInFlag === "true" && cachedSquadStr) {
+          const cachedSquad = JSON.parse(cachedSquadStr);
+          if (cachedSquad && cachedSquad.entry) {
+            setSquad(cachedSquad);
+            setStage("squad");
+          }
+        }
+      } catch (e) {}
+    })();
+  }, []);
+
+  const closeGoogleModal = () => {
+    setShowGoogleModal(false);
+    modalWebRef.current?.injectJavaScript('window.location.href = "https://fantasy.premierleague.com/";');
+  };
+
+  const handleLogin = () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password.trim()) {
+      setLoginError("Please enter both your email address and password.");
+      return;
+    }
+    lastAttemptedEmail.current = trimmedEmail;
+    lastAttemptedPassword.current = password;
+    setLoginLoading(true);
+    setLoginError("");
+
+    const loginScript = `
+      (function() {
+        const send = (o) => window.ReactNativeWebView.postMessage(JSON.stringify(o));
+        try {
+          let form = document.getElementById("profpl_login_form");
+          if (form) form.remove();
+
+          form = document.createElement("form");
+          form.id = "profpl_login_form";
+          form.method = "POST";
+          form.action = "https://fantasy.premierleague.com/accounts/login/";
+
+          const inputLogin = document.createElement("input");
+          inputLogin.name = "login";
+          inputLogin.value = ${JSON.stringify(trimmedEmail)};
+          form.appendChild(inputLogin);
+
+          const inputPass = document.createElement("input");
+          inputPass.name = "password";
+          inputPass.value = ${JSON.stringify(password)};
+          form.appendChild(inputPass);
+
+          const inputApp = document.createElement("input");
+          inputApp.name = "app";
+          inputApp.value = "fpl-web";
+          form.appendChild(inputApp);
+
+          const inputRedir = document.createElement("input");
+          inputRedir.name = "redirect_uri";
+          inputRedir.value = "https://fantasy.premierleague.com/";
+          form.appendChild(inputRedir);
+
+          document.body.appendChild(form);
+
+          let attempts = 0;
+          const checkTimer = setInterval(async () => {
+            attempts++;
+            try {
+              const meRes = await fetch("https://fantasy.premierleague.com/api/me/", { credentials: "include" });
+              if (meRes.ok) {
+                const me = await meRes.json().catch(() => null);
+                if (me && me.player && me.player.entry) {
+                  clearInterval(checkTimer);
+                  send({ loginSuccess: true });
+                  return;
+                }
+              }
+            } catch(e) {}
+
+            if (attempts >= 15) {
+              clearInterval(checkTimer);
+              send({ loginError: "Invalid email or password. Please check your credentials and try again." });
+            }
+          }, 600);
+
+          form.submit();
+        } catch (err) {
+          send({ loginError: "Login submission failed. Please try again or sign via PL web." });
+        }
+      })();
+      true;
+    `;
+
+    webRef.current?.injectJavaScript(loginScript);
+
+    setTimeout(() => {
+      setLoginLoading((loading) => {
+        if (loading) {
+          setLoginError("Sign in timed out. Please check your network and try again.");
+          return false;
+        }
+        return false;
+      });
+    }, 15000);
+  };
+
+  const handleLogout = () => {
+    showDialog(
+      "Log Out",
+      "Are you sure you want to log out of ProFPL?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Log Out",
+          style: "destructive",
+          onPress: () => {
+            AsyncStorage.removeItem(STORAGE_SQUAD).catch(() => {});
+            AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
+            webRef.current?.injectJavaScript(`
+              (() => {
+                try {
+                  localStorage.clear();
+                  sessionStorage.clear();
+                } catch(e) {}
+                document.cookie.split(";").forEach(c => {
+                  document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;domain=.premierleague.com");
+                  document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;domain=.fantasy.premierleague.com");
+                  document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/");
+                });
+                window.location.href = "https://fantasy.premierleague.com/";
+              })();
+            `);
+            setSquad(null);
+            setDraft([]);
+            setPending([]);
+            setPendingChip(null);
+            setSelectedPos(null);
+            setPickPos(null);
+            setStage("welcome");
+            setActiveBottomTab("lineup");
+            setMode("lineup");
+          },
+        },
+      ],
+    );
+  };
 
   useEffect(() => {
     Animated.timing(leaguesAnim, {
@@ -272,6 +573,7 @@ export default function Index() {
     }).start();
   }, [showHistory]);
   const gwScrollRef = useRef<any>(null);
+  const mainScrollRef = useRef<any>(null);
   const [showGameweekMenu, setShowGameweekMenu] = useState(false);
   const gwMenuAnim = useRef(new Animated.Value(0)).current;
 
@@ -310,6 +612,15 @@ export default function Index() {
   const [leagueStandings, setLeagueStandings] =
     useState<LeagueStandings | null>(null);
   const [leagueLoading, setLeagueLoading] = useState(false);
+  const wasLeagueLoading = useRef(leagueLoading);
+  useEffect(() => {
+    if (wasLeagueLoading.current && !leagueLoading && leagueStandings) {
+      setTimeout(() => {
+        mainScrollRef.current?.scrollTo({ y: 0, animated: true });
+      }, 50);
+    }
+    wasLeagueLoading.current = leagueLoading;
+  }, [leagueLoading, leagueStandings]);
   const [leagueError, setLeagueError] = useState("");
   const [inviteCodes, setInviteCodes] = useState<Record<number, string>>({});
   const [memberSquad, setMemberSquad] = useState<MemberSquad | null>(null);
@@ -334,6 +645,7 @@ export default function Index() {
           name: string;
           leagueType: LeagueType;
           startEvent: number;
+          knockoutRounds?: number;
         }
       | { action: "invite-code"; leagueId: number }
       | { action: "manager-gameweek"; entry: number; event: number },
@@ -381,16 +693,38 @@ export default function Index() {
     });
   };
 
-  const viewMemberSquad = (entry: number, event: number) => {
+  const viewMemberSquad = (
+    entry: number,
+    event: number,
+    teamName?: string,
+    managerName?: string,
+  ) => {
+    setActiveMember({
+      entry,
+      teamName: teamName || "Squad history",
+      managerName: managerName || "",
+    });
+    setActiveMemberEvent(event);
     loadManagerGameweek(entry, event);
   };
 
-  const openOwnHistory = (event: number) => {
+  const openOwnHistory = (event?: number) => {
     if (!squad) return;
     setShowLeagues(false);
-    setShowHistory(true);
-    setHistoryEvent(event);
-    loadManagerGameweek(squad.entry, event);
+    const finishedGws = squad.gameweeks.filter((gw) => gw.finished);
+    const defaultGw = finishedGws.length > 0
+      ? finishedGws[finishedGws.length - 1].id
+      : Math.max(1, squad.gw - 1);
+    const targetGw = event ?? defaultGw;
+
+    setActiveMember({
+      entry: squad.entry,
+      teamName: squad.teamName || "Your team",
+      managerName: squad.managerName || "",
+      isOwnPoints: true,
+    });
+    setActiveMemberEvent(targetGw);
+    loadManagerGameweek(squad.entry, targetGw);
   };
 
   const selectOwnHistoryEvent = (event: number) => {
@@ -413,12 +747,19 @@ export default function Index() {
     );
   };
 
-  const createLeague = (name: string, leagueType: LeagueType) => {
+  const createLeague = (
+    name: string,
+    leagueType: LeagueType,
+    startEvent?: number,
+    knockoutRounds?: number,
+  ) => {
     if (!squad) return;
 
     showDialog(
       "Create this FPL league?",
-      `${name} · ${leagueType === "classic" ? "Classic" : "Head-to-Head"}`,
+      `${name} · ${leagueType === "classic" ? "Classic" : "Head-to-Head"}${
+        startEvent ? ` (Starts GW ${startEvent})` : ""
+      }${knockoutRounds ? ` (${knockoutRounds} Knockout Rounds)` : ""}`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -428,7 +769,8 @@ export default function Index() {
               action: "create",
               name,
               leagueType,
-              startEvent: squad.gw,
+              startEvent: startEvent ?? squad.gw,
+              knockoutRounds: knockoutRounds ?? 1,
             }),
         },
       ],
@@ -448,13 +790,8 @@ export default function Index() {
   }, [squad]);
 
   useEffect(() => {
-    if (stage === "squad") return;
-    const id = setInterval(check, 2500);
-    return () => clearInterval(id);
-  }, [stage]);
-
-  useEffect(() => {
     if (stage !== "checking") return;
+    check();
     const t = setTimeout(
       () => setStage((s) => (s === "checking" ? "welcome" : s)),
       8000,
@@ -469,16 +806,31 @@ export default function Index() {
     } catch {
       return;
     }
+    if (msg.googleLoginSuccess) {
+      closeGoogleModal();
+      check();
+      return;
+    }
+    if (msg.loginSuccess) {
+      setLoginLoading(false);
+      setLoginError("");
+      if (lastAttemptedEmail.current && lastAttemptedPassword.current) {
+        AsyncStorage.setItem(
+          STORAGE_CREDS,
+          JSON.stringify({ email: lastAttemptedEmail.current, password: lastAttemptedPassword.current })
+        ).catch(() => {});
+      }
+      check();
+      return;
+    }
+    if (msg.loginError) {
+      setLoginLoading(false);
+      setLoginError(msg.loginError);
+      return;
+    }
     if (msg.saved) {
       setSaving(false);
-      const appliedChip = pendingChip;
       setPendingChip(null);
-      showDialog(
-        appliedChip ? "Chip activated" : "Saved",
-        appliedChip
-          ? `${CHIP_OPTIONS.find((chip) => chip.id === appliedChip)?.label} has been played on FPL.`
-          : "Your changes are now on FPL.",
-      );
       check();
       return;
     }
@@ -584,8 +936,13 @@ export default function Index() {
       setSquad(msg.squad);
       setError("");
       setStage("squad");
+      AsyncStorage.setItem(STORAGE_SQUAD, JSON.stringify(msg.squad)).catch(() => {});
+      AsyncStorage.setItem(STORAGE_LOGGED_IN, "true").catch(() => {});
     } else if (msg.notLoggedIn) {
-      if (stageRef.current === "checking") setStage("welcome");
+      if (stageRef.current === "checking" && !squad) {
+        setStage("welcome");
+        AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
+      }
     } else if (stageRef.current === "squad") {
       setError(msg.error || "Something went wrong");
     }
@@ -631,11 +988,79 @@ export default function Index() {
     JSON.stringify(draft.map((p) => [p.id, p.pos, p.cap, p.vice])) !==
       JSON.stringify(squad.picks.map((p) => [p.id, p.pos, p.cap, p.vice]));
 
+  const confirmLineupChange = (nextDraft: Row[], chipToPlay: PlayableChip | null = pendingChip) => {
+    if (!squad) return;
+    const cap = nextDraft.find((p) => p.cap)?.name;
+    const vice = nextDraft.find((p) => p.vice)?.name;
+    const before = new Set(
+      squad.picks.filter((p) => p.pos <= 11).map((p) => p.id),
+    );
+    const after = new Set(nextDraft.filter((p) => p.pos <= 11).map((p) => p.id));
+    const inn = nextDraft
+      .filter((p) => p.pos <= 11 && !before.has(p.id))
+      .map((p) => p.name);
+    const out = squad.picks
+      .filter((p) => p.pos <= 11 && !after.has(p.id))
+      .map((p) => p.name);
+    const lines = [
+      inn.length ? `In: ${inn.join(", ")}` : "",
+      out.length ? `Out: ${out.join(", ")}` : "",
+      `Captain: ${cap}`,
+      `Vice-captain: ${vice}`,
+    ].filter(Boolean);
+    if (chipToPlay) {
+      lines.push(
+        `Chip: ${selectedChipOption?.label ?? chipToPlay}`,
+        "Chips cannot be undone once confirmed.",
+      );
+    }
+
+    setDraft(nextDraft);
+    setSelectedPos(null);
+    setPlayerSheetOpen(false);
+
+    showDialog(
+      chipToPlay
+        ? `Activate ${selectedChipOption?.label ?? "chip"}?`
+        : "Save lineup to FPL?",
+      lines.join("\n"),
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+          onPress: () => {
+            setDraft(squad.picks);
+          },
+        },
+        {
+          text: "Save",
+          onPress: () => {
+            setSaving(true);
+            webRef.current?.injectJavaScript(
+              buildSaveJs(squad.entry, nextDraft, chipToPlay, lastAttemptedEmail.current || email, lastAttemptedPassword.current || password),
+            );
+          },
+        },
+      ],
+    );
+  };
+
   const swap = (a: Row, b: Row) => {
     const aStarter = a.pos <= 11;
     const bStarter = b.pos <= 11;
     if (aStarter && bStarter) {
-      warn("Pick a bench player to substitute this player with.");
+      if (a.type === b.type) {
+        const next = draft.map((p) =>
+          p.id === a.id
+            ? { ...p, pos: b.pos }
+            : p.id === b.id
+              ? { ...p, pos: a.pos }
+              : p,
+        );
+        confirmLineupChange(next);
+        return;
+      }
+      warn("Starting XI players can only swap with players in the same position.");
       return;
     }
     if (!aStarter && !bStarter) {
@@ -643,17 +1068,14 @@ export default function Index() {
         warn("The goalkeeper's bench spot is fixed.");
         return;
       }
-      setDraft(
-        draft.map((p) =>
-          p.id === a.id
-            ? { ...p, pos: b.pos }
-            : p.id === b.id
-              ? { ...p, pos: a.pos }
-              : p,
-        ),
+      const next = draft.map((p) =>
+        p.id === a.id
+          ? { ...p, pos: b.pos }
+          : p.id === b.id
+            ? { ...p, pos: a.pos }
+            : p,
       );
-      setSelectedPos(null);
-      setPlayerSheetOpen(false);
+      confirmLineupChange(next);
       return;
     }
     const s = aStarter ? a : b;
@@ -676,13 +1098,11 @@ export default function Index() {
       );
       return;
     }
-    setDraft(next);
-    setSelectedPos(null);
-    setPlayerSheetOpen(false);
+    confirmLineupChange(next);
   };
 
-  const setRole = (kind: "cap" | "vice") => {
-    const target = draft.find((p) => p.pos === selectedPos);
+  const setRole = (kind: "cap" | "vice", targetPos?: number) => {
+    const target = draft.find((p) => p.pos === (targetPos ?? selectedPos));
     if (!target) return;
     if (target.pos > 11) {
       warn("Only players in your starting XI can be captain or vice-captain.");
@@ -690,76 +1110,31 @@ export default function Index() {
     }
     const oldCap = draft.find((p) => p.cap);
     const oldVice = draft.find((p) => p.vice);
-    setDraft(
-      draft.map((p) => {
-        if (kind === "cap") {
-          if (p.id === target.id) return { ...p, cap: true, vice: false };
-          if (p.cap)
-            return {
-              ...p,
-              cap: false,
-              vice: !!oldVice && oldVice.id === target.id,
-            };
-          return p;
-        }
-        if (p.id === target.id) return { ...p, vice: true, cap: false };
-        if (p.vice)
+    const next = draft.map((p) => {
+      if (kind === "cap") {
+        if (p.id === target.id) return { ...p, cap: true, vice: false };
+        if (p.cap)
           return {
             ...p,
-            vice: false,
-            cap: !!oldCap && oldCap.id === target.id,
+            cap: false,
+            vice: !!oldVice && oldVice.id === target.id,
           };
         return p;
-      }),
-    );
-    setSelectedPos(null);
-    setPlayerSheetOpen(false);
+      }
+      if (p.id === target.id) return { ...p, vice: true, cap: false };
+      if (p.vice)
+        return {
+          ...p,
+          vice: false,
+          cap: !!oldCap && oldCap.id === target.id,
+        };
+      return p;
+    });
+    confirmLineupChange(next);
   };
 
   const confirmSave = () => {
-    if (!squad) return;
-    const cap = draft.find((p) => p.cap)?.name;
-    const vice = draft.find((p) => p.vice)?.name;
-    const before = new Set(
-      squad.picks.filter((p) => p.pos <= 11).map((p) => p.id),
-    );
-    const after = new Set(draft.filter((p) => p.pos <= 11).map((p) => p.id));
-    const inn = draft
-      .filter((p) => p.pos <= 11 && !before.has(p.id))
-      .map((p) => p.name);
-    const out = squad.picks
-      .filter((p) => p.pos <= 11 && !after.has(p.id))
-      .map((p) => p.name);
-    const lines = [
-      inn.length ? `In: ${inn.join(", ")}` : "",
-      out.length ? `Out: ${out.join(", ")}` : "",
-      `Captain: ${cap}`,
-      `Vice-captain: ${vice}`,
-    ].filter(Boolean);
-    if (pendingChip) {
-      lines.push(
-        `Chip: ${selectedChipOption?.label ?? pendingChip}`,
-        "Chips cannot be undone once confirmed.",
-      );
-    }
-    showDialog(
-      pendingChip
-        ? `Activate ${selectedChipOption?.label ?? "chip"}?`
-        : "Save lineup to FPL?",
-      lines.join("\n"),
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Save",
-          onPress: () => {
-            setSaving(true);
-            webRef.current?.injectJavaScript(
-              buildSaveJs(squad.entry, draft, pendingChip),
-            );
-          },
-        },
-      ],
-    );
+    confirmLineupChange(draft);
   };
 
   // ---------- Transfers mode ----------
@@ -855,8 +1230,10 @@ export default function Index() {
     setPlayerSheetOpen(false);
   };
 
-  const undoSlot = () => {
-    setPending((prev) => prev.filter((x) => x.pos !== selectedPos));
+  const undoSlot = (pos?: number) => {
+    const targetPos = pos ?? selectedPos;
+    if (targetPos === null) return;
+    setPending((prev) => prev.filter((x) => x.pos !== targetPos));
     setSelectedPos(null);
     setPlayerSheetOpen(false);
   };
@@ -927,6 +1304,8 @@ export default function Index() {
                 selling: outPlayers[i].sell,
               })),
               pendingChip,
+              email,
+              password,
             ),
           );
         },
@@ -936,27 +1315,34 @@ export default function Index() {
 
   const onPlayerPress = (r: Row) => {
     if (locked) {
-      setSelectedPos(r.pos);
-      setPlayerSheetOpen(true);
+      setSelectedPos((prev) => (prev === r.pos ? null : r.pos));
+      setPlayerSheetOpen(false);
       return;
     }
     if (mode === "transfers") {
       if (selectedPos === r.pos) {
-        setSelectedPos(null);
+        const isPending = pending.some((x) => x.pos === r.pos);
+        if (isPending) {
+          undoSlot(r.pos);
+        } else {
+          setPickPos(r.pos);
+          setSelectedPos(null);
+        }
         setPlayerSheetOpen(false);
       } else {
         setSelectedPos(r.pos);
-        setPlayerSheetOpen(true);
+        setPlayerSheetOpen(false);
       }
       return;
     }
     if (selectedPos === null) {
       setSelectedPos(r.pos);
-      setPlayerSheetOpen(true);
+      setPlayerSheetOpen(false);
       return;
     }
     if (selectedPos === r.pos) {
-      setPlayerSheetOpen(true);
+      setSelectedPos(null);
+      setPlayerSheetOpen(false);
       return;
     }
     const a = draft.find((p) => p.pos === selectedPos);
@@ -964,63 +1350,42 @@ export default function Index() {
   };
 
   const switchMode = (m: Mode) => {
-    if (m === mode || modeTransitioning.current) return;
+    if (m === mode) return;
+
+    // Stop any in-flight animations and reset transition lock to prevent getting stuck on rapid taps
+    modeTransitionX.stopAnimation();
+    modeTransitionOpacity.stopAnimation();
+    modeTransitioning.current = false;
+
+    // Preload mode and transfer data instantly
+    setMode(m);
+    setTransferStatsVisible(m === "transfers");
+    setPendingChip(null);
+    setSelectedPos(null);
+    setPlayerSheetOpen(false);
+
+    // Lineup slides in from left (-320 -> 0), Transfers and Leagues slide in from right (320 -> 0)
+    const startX = m === "lineup" ? -320 : 320;
+    modeTransitionX.setValue(startX);
+    modeTransitionOpacity.setValue(0);
 
     modeTransitioning.current = true;
-    setTransferStatsVisible(m === "transfers");
-    const transitionContent = () => {
-      const exitX = m === "transfers" ? -25 : 25;
-      Animated.parallel([
-        Animated.timing(modeTransitionOpacity, {
-          toValue: 0,
-          duration: 140,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(modeTransitionX, {
-          toValue: exitX,
-          duration: 140,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]).start(({ finished }) => {
-        if (!finished) {
-          modeTransitioning.current = false;
-          return;
-        }
-
-        setMode(m);
-        setPendingChip(null);
-        setSelectedPos(null);
-        setPlayerSheetOpen(false);
-        modeTransitionOpacity.setValue(0);
-        modeTransitionX.setValue(-exitX);
-
-        Animated.parallel([
-          Animated.timing(modeTransitionOpacity, {
-            toValue: 1,
-            duration: 220,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-          Animated.timing(modeTransitionX, {
-            toValue: 0,
-            duration: 220,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-        ]).start(() => {
-          modeTransitioning.current = false;
-        });
-      });
-    };
-
-    if (mode === "transfers") {
-      setTransferStatsVisible(false);
-      requestAnimationFrame(transitionContent);
-    } else {
-      transitionContent();
-    }
+    Animated.parallel([
+      Animated.timing(modeTransitionOpacity, {
+        toValue: 1,
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.spring(modeTransitionX, {
+        toValue: 0,
+        damping: 24,
+        stiffness: 220,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      modeTransitioning.current = false;
+    });
   };
 
   const pickSlot =
@@ -1032,6 +1397,43 @@ export default function Index() {
     selectedPos === null
       ? null
       : shownPicks.find((player) => player.pos === selectedPos) ?? null;
+
+  const currentSelectedGw = selectedFixtureGw ?? squad?.gw ?? 1;
+  const isPastGwSelected = squad ? currentSelectedGw < squad.gw : false;
+  const currentPastData =
+    isPastGwSelected && squad && memberSquad?.entry === squad.entry && memberSquad?.event === currentSelectedGw
+      ? memberSquad
+      : null;
+
+  const pastPicks: Row[] =
+    currentPastData?.picks.map((pick) => {
+      const mult =
+        typeof pick.multiplier === "number" && pick.multiplier > 0
+          ? pick.multiplier
+          : pick.captain
+            ? currentPastData.chip === "3xc"
+              ? 3
+              : 2
+            : 1;
+      const rawPoints = pick.points ?? 0;
+      const finalPoints = rawPoints * mult;
+
+      return {
+        id: pick.id,
+        pos: pick.position,
+        name: pick.name,
+        team: pick.team,
+        teamId: 0,
+        type: pick.elementType,
+        cap: pick.captain,
+        vice: pick.viceCaptain,
+        multiplier: mult,
+        sell: 0,
+        buy: 0,
+        displayPoints: finalPoints,
+        formMood: pick.formMood,
+      };
+    }) ?? [];
 
   return (
     <View style={{ flex: 1, backgroundColor: "#071818" }}>
@@ -1132,43 +1534,286 @@ export default function Index() {
         </View>
       )}
 
-      {stage === "login" ? (
-        <View
-          style={{
-            paddingTop: insets.top + 8,
-            paddingBottom: 12,
-            paddingHorizontal: 16,
-            flexDirection: "row",
-            alignItems: "center",
-            backgroundColor: PURPLE,
-          }}
-        >
-          <Pressable onPress={() => setStage("welcome")} hitSlop={12}>
-            <Text style={{ color: "#fff", fontSize: 16 }}>‹ Back</Text>
-          </Pressable>
-          <Text
+      {stage === "login" && (
+        <View style={{ flex: 1, backgroundColor: "#071818" }}>
+          <Image
+            source={require("../../assets/images/background-texture.png")}
+            contentFit="cover"
             style={{
-              color: "#fff",
-              fontSize: 17,
-              fontWeight: "700",
-              marginLeft: 16,
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+              opacity: 0.6,
             }}
-          >
-            Sign in to FPL
-          </Text>
-        </View>
-      ) : null}
+          />
 
-      <View
-        style={
-          stage === "login"
-            ? { flex: 1, backgroundColor: "#fff" }
-            : { position: "absolute", width: 1, height: 1, opacity: 0 }
-        }
-      >
+          <ScrollView
+            contentContainerStyle={{
+              paddingHorizontal: 24,
+              paddingTop: insets.top + 24,
+              paddingBottom: insets.bottom + 24,
+            }}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* App Branding */}
+            <View style={{ alignItems: "center", marginBottom: 28, marginTop: 8 }}>
+              <Text style={{ color: "#fff", fontSize: 36, fontWeight: "900" }}>
+                Pro<Text style={{ color: GREEN }}>FPL</Text>
+              </Text>
+              <Text style={{ color: "#d2c4d6", fontSize: 14, marginTop: 4, textAlign: "center" }}>
+                Enter your Fantasy Premier League details
+              </Text>
+            </View>
+
+            {/* Login Form Card */}
+            <View
+              style={{
+                backgroundColor: "rgba(255, 255, 255, 0.08)",
+                borderRadius: 18,
+                borderWidth: 1,
+                borderColor: "rgba(255, 255, 255, 0.15)",
+                padding: 16,
+                elevation: 6,
+              }}
+            >
+              {/* Email Address */}
+              <Text style={{ color: "#e8dee9", fontSize: 12, fontWeight: "700", marginBottom: 4 }}>
+                Email address
+              </Text>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: "rgba(0, 0, 0, 0.4)",
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: "rgba(255, 255, 255, 0.18)",
+                  paddingHorizontal: 12,
+                  height: 42,
+                  marginBottom: 12,
+                }}
+              >
+                <AppSymbol
+                  name={{ ios: "envelope.fill", android: "mail", web: "mail" }}
+                  color="#a893ae"
+                  size={16}
+                />
+                <TextInput
+                  value={email}
+                  onChangeText={(text) => {
+                    setEmail(text);
+                    if (loginError) setLoginError("");
+                  }}
+                  placeholder="e.g. name@example.com"
+                  placeholderTextColor="#8a7490"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!loginLoading}
+                  style={{
+                    flex: 1,
+                    color: "#fff",
+                    fontSize: 14,
+                    marginLeft: 8,
+                    paddingVertical: 0,
+                  }}
+                />
+              </View>
+
+              {/* Password */}
+              <Text style={{ color: "#e8dee9", fontSize: 12, fontWeight: "700", marginBottom: 4 }}>
+                Password
+              </Text>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: "rgba(0, 0, 0, 0.4)",
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: "rgba(255, 255, 255, 0.18)",
+                  paddingHorizontal: 12,
+                  height: 42,
+                  marginBottom: 16,
+                }}
+              >
+                <AppSymbol
+                  name={{ ios: "lock.fill", android: "lock", web: "lock" }}
+                  color="#a893ae"
+                  size={16}
+                />
+                <TextInput
+                  value={password}
+                  onChangeText={(text) => {
+                    setPassword(text);
+                    if (loginError) setLoginError("");
+                  }}
+                  placeholder="Your FPL password"
+                  placeholderTextColor="#8a7490"
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!loginLoading}
+                  style={{
+                    flex: 1,
+                    color: "#fff",
+                    fontSize: 14,
+                    marginLeft: 8,
+                    paddingVertical: 0,
+                  }}
+                />
+                <Pressable
+                  onPress={() => setShowPassword(!showPassword)}
+                  hitSlop={8}
+                  style={{ padding: 4 }}
+                >
+                  <AppSymbol
+                    name={{
+                      ios: showPassword ? "eye.slash.fill" : "eye.fill",
+                      android: showPassword ? "visibility_off" : "visibility",
+                      web: showPassword ? "visibility_off" : "visibility",
+                    }}
+                    color="#a893ae"
+                    size={16}
+                  />
+                </Pressable>
+              </View>
+
+              {/* Error Alert */}
+              {!!loginError && (
+                <View
+                  style={{
+                    backgroundColor: "rgba(239, 68, 68, 0.18)",
+                    borderWidth: 1,
+                    borderColor: "rgba(239, 68, 68, 0.4)",
+                    borderRadius: 10,
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    marginBottom: 12,
+                    flexDirection: "row",
+                    alignItems: "center",
+                  }}
+                >
+                  <AppSymbol
+                    name={{ ios: "exclamationmark.triangle.fill", android: "warning", web: "warning" }}
+                    color="#ef4444"
+                    size={15}
+                  />
+                  <Text style={{ color: "#ff8080", fontSize: 12, fontWeight: "600", marginLeft: 6, flex: 1 }}>
+                    {loginError}
+                  </Text>
+                </View>
+              )}
+
+              {/* Submit Button */}
+              <Pressable
+                onPress={handleLogin}
+                disabled={loginLoading || !email.trim() || !password.trim()}
+                style={({ pressed }) => ({
+                  backgroundColor: GREEN,
+                  height: 36,
+                  borderRadius: 18,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: pressed || loginLoading || !email.trim() || !password.trim() ? 0.7 : 1,
+                  marginTop: 2,
+                })}
+              >
+                {loginLoading ? (
+                  <ActivityIndicator color="#051a0f" size="small" />
+                ) : (
+                  <Text style={{ color: "#051a0f", fontSize: 14, fontWeight: "900" }}>
+                    Login
+                  </Text>
+                )}
+              </Pressable>
+
+              {/* OR Divider */}
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginVertical: 10,
+                }}
+              >
+                <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255, 255, 255, 0.15)" }} />
+                <Text style={{ color: "#a893ae", fontSize: 11, fontWeight: "700", marginHorizontal: 10 }}>
+                  OR
+                </Text>
+                <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255, 255, 255, 0.15)" }} />
+              </View>
+
+              {/* Sign in via Premier League Web Button */}
+              <Pressable
+                onPress={() => {
+                  setGoogleModalKey((k) => k + 1);
+                  setShowGoogleModal(true);
+                }}
+                disabled={loginLoading}
+                style={({ pressed }) => ({
+                  backgroundColor: "#ffffff",
+                  height: 36,
+                  borderRadius: 18,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: pressed ? 0.85 : 1,
+                  paddingHorizontal: 12,
+                })}
+              >
+                <View style={{ marginRight: 6 }}>
+                  <AppSymbol
+                    name={{ ios: "globe", android: "language", web: "language" }}
+                    color="#37003c"
+                    size={16}
+                  />
+                </View>
+                <Text style={{ color: "#1f1f1f", fontSize: 13, fontWeight: "700" }}>
+                  Sign via pl web
+                </Text>
+              </Pressable>
+            </View>
+
+            {/* Privacy notice */}
+            <View
+              style={{
+                marginTop: 24,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                paddingHorizontal: 12,
+              }}
+            >
+              <AppSymbol
+                name={{ ios: "lock.fill", android: "verified_user", web: "verified_user" }}
+                color="#a893ae"
+                size={16}
+              />
+              <Text
+                style={{
+                  color: "#bda8c2",
+                  fontSize: 12,
+                  textAlign: "center",
+                  marginLeft: 8,
+                  lineHeight: 16,
+                }}
+              >
+                Your credentials are sent directly to FPL servers to authenticate. ProFPL never stores your password.
+              </Text>
+            </View>
+          </ScrollView>
+        </View>
+      )}
+
+      <View style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}>
         <WebView
           ref={webRef}
           source={{ uri: "https://fantasy.premierleague.com/" }}
+          userAgent="Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+          javaScriptEnabled
+          domStorageEnabled
           onMessage={onMessage}
           onLoadEnd={check}
           sharedCookiesEnabled
@@ -1176,53 +1821,86 @@ export default function Index() {
         />
       </View>
 
-      {stage === "login" ? (
-        <View
-          style={{
-            backgroundColor: PURPLE,
-            paddingTop: 10,
-            paddingBottom: insets.bottom + 10,
-            alignItems: "center",
-          }}
-        >
+      {/* Google Sign In Modal */}
+      <Modal
+        visible={showGoogleModal}
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={closeGoogleModal}
+      >
+        <View style={{ flex: 1, backgroundColor: "#071818", paddingTop: insets.top }}>
+          {/* Modal Header */}
           <View
             style={{
+              height: 48,
               flexDirection: "row",
               alignItems: "center",
               paddingHorizontal: 16,
+              backgroundColor: "rgba(14, 38, 26, 0.95)",
+              borderBottomWidth: 1.5,
+              borderBottomColor: "rgba(0, 217, 130, 0.25)",
             }}
           >
-            <View style={{ marginRight: 8 }}>
-              <AppSymbol
-                name={{ ios: "lock.fill", android: "lock", web: "lock" }}
-                color="#cdb9d1"
-                size={14}
-              />
-            </View>
-            <Text
-              style={{
-                flex: 1,
-                color: "#cdb9d1",
-                fontSize: 12,
-                textAlign: "center",
-              }}
-            >
-              Your password goes straight to FPL. Your squad opens automatically
-              after sign-in.
-            </Text>
+            <Pressable onPress={closeGoogleModal} hitSlop={12}>
+              <Text style={{ color: GREEN, fontSize: 16, fontWeight: "700" }}>‹ Cancel</Text>
+            </Pressable>
+          </View>
+
+          {/* Google OAuth WebView */}
+          <View style={{ flex: 1, backgroundColor: "#ffffff" }}>
+            <WebView
+              key={googleModalKey}
+              ref={modalWebRef}
+              source={{ uri: "https://fantasy.premierleague.com/" }}
+              userAgent="Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+              javaScriptEnabled
+              domStorageEnabled
+              sharedCookiesEnabled
+              thirdPartyCookiesEnabled
+              injectedJavaScript={`
+                (function() {
+                  if (window.__googleAuthCheckStarted) return;
+                  window.__googleAuthCheckStarted = true;
+                  setInterval(async () => {
+                    try {
+                      const meRes = await fetch("https://fantasy.premierleague.com/api/me/", { credentials: "include" });
+                      if (meRes.ok) {
+                        const me = await meRes.json().catch(() => null);
+                        if (me && me.player && me.player.entry) {
+                          window.ReactNativeWebView.postMessage(JSON.stringify({ googleLoginSuccess: true }));
+                        }
+                      }
+                    } catch(e) {}
+                  }, 2000);
+                })();
+              `}
+              onMessage={onMessage}
+              style={{ flex: 1 }}
+            />
           </View>
         </View>
-      ) : null}
+      </Modal>
 
       {stage === "squad" && squad && (
         <View style={{ flex: 1, backgroundColor: "#071818" }}>
+          <Image
+            source={require("../../assets/images/background-texture.png")}
+            contentFit="cover"
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+            }}
+          />
           <View>
             <View
               style={{
-                backgroundColor: "#071818",
-                paddingTop: insets.top + 8,
-                paddingHorizontal: 12,
-                paddingBottom: 8,
+                backgroundColor: "transparent",
+                paddingTop: insets.top + 10,
+                paddingHorizontal: 10,
+                paddingBottom: 10,
                 borderBottomLeftRadius: 0,
                 borderBottomRightRadius: 0,
                 elevation: 0,
@@ -1238,13 +1916,13 @@ export default function Index() {
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
-                  paddingHorizontal: 4,
-                  marginBottom: showLeagues ? 0 : 4,
+                  paddingHorizontal: 2,
+                  marginBottom: showLeagues ? 0 : 2,
                 }}
               >
                 <View style={{ flexDirection: "row", alignItems: "center" }}>
                   <Text
-                    style={{ color: "#fff", fontSize: 18, fontWeight: "900", letterSpacing: 0.4 }}
+                    style={{ color: "#fff", fontSize: 16, fontWeight: "900", letterSpacing: 0.4 }}
                   >
                     Pro<Text style={{ color: GREEN }}>FPL</Text>
                   </Text>
@@ -1258,12 +1936,12 @@ export default function Index() {
                       }
                       hitSlop={8}
                       style={({ pressed }) => ({
-                        width: 30,
-                        height: 30,
-                        marginLeft: 8,
+                        width: 26,
+                        height: 26,
+                        marginLeft: 6,
                         alignItems: "center",
                         justifyContent: "center",
-                        borderRadius: 15,
+                        borderRadius: 13,
                         borderWidth: 1,
                         borderColor: "rgba(255,255,255,0.5)",
                         backgroundColor: "rgba(255,255,255,0.18)",
@@ -1278,7 +1956,7 @@ export default function Index() {
                           web: "refresh",
                         }}
                         color="#fff"
-                        size={15}
+                        size={13}
                       />
                     </Pressable>
                   )}
@@ -1287,60 +1965,84 @@ export default function Index() {
                 <View style={{ flex: 1 }} />
 
                 {!showLeagues && (
-                  <Pressable
-                    onPress={() => setShowGameweekMenu(true)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Select gameweek. Default gameweek ${squad.gw}. Selected gameweek ${selectedFixtureGw ?? squad.gw}`}
-                    style={({ pressed }) => ({
-                      borderRadius: 20,
-                      paddingHorizontal: 14,
-                      paddingVertical: 7,
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 10,
-                      minWidth: 96,
-                      borderWidth: 1,
-                      borderColor: "rgba(255,255,255,0.18)",
-                      backgroundColor: "rgba(14, 38, 26, 0.9)",
-                      opacity: pressed ? 0.68 : 1,
-                      transform: [{ scale: pressed ? 0.97 : 1 }],
-                      elevation: 4,
-                    })}
-                  >
-                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800" }}>
-                      GW {selectedFixtureGw ?? squad.gw}
-                      {squad.chip ? ` · ${squad.chip}` : ""}
-                    </Text>
-                    <AppSymbol
-                      name={{ ios: "chevron.down", android: "expand_more", web: "expand_more" }}
-                      color="#fff"
-                      size={14}
-                    />
-                  </Pressable>
+                  mode === "transfers" || mode === "more" ? (
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <View
+                        style={{
+                          width: 3,
+                          height: 14,
+                          backgroundColor: GREEN,
+                          borderRadius: 2,
+                          marginRight: 6,
+                        }}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          color: "#fff",
+                          fontSize: 12,
+                          fontWeight: "500",
+                        }}
+                      >
+                        {mode === "more" ? "More" : (squad.teamName || "Your team")}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Pressable
+                      onPress={() => setShowGameweekMenu(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Select gameweek. Default gameweek ${squad.gw}. Selected gameweek ${selectedFixtureGw ?? squad.gw}`}
+                      style={({ pressed }) => ({
+                        borderRadius: 16,
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        minWidth: 84,
+                        borderWidth: 1,
+                        borderColor: "rgba(255,255,255,0.18)",
+                        backgroundColor: "rgba(14, 38, 26, 0.9)",
+                        opacity: pressed ? 0.68 : 1,
+                        transform: [{ scale: pressed ? 0.97 : 1 }],
+                        elevation: 4,
+                      })}
+                    >
+                      <Text style={{ color: "#fff", fontSize: 11, fontWeight: "800" }}>
+                        GW {selectedFixtureGw ?? squad.gw}
+                        {squad.chip ? ` · ${squad.chip}` : ""}
+                      </Text>
+                      <AppSymbol
+                        name={{ ios: "chevron.down", android: "expand_more", web: "expand_more" }}
+                        color="#fff"
+                        size={12}
+                      />
+                    </Pressable>
+                  )
                 )}
               </View>
 
               {/* Row 2: Team Name with Green Accent Bar (left) and Points Button (right) */}
-              {!showLeagues && (
+              {!showLeagues && mode !== "transfers" && mode !== "more" && (
                 <View
                   style={{
-                    marginHorizontal: 4,
-                    marginTop: 4,
+                    marginHorizontal: 2,
+                    marginTop: 2,
                     marginBottom: 0,
                     flexDirection: "row",
                     alignItems: "center",
-                    minHeight: 36,
+                    minHeight: 30,
                   }}
                 >
-                  <View style={{ flexDirection: "row", alignItems: "center", flex: 1, paddingRight: 12 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", flex: 1, paddingRight: 8 }}>
                     <View
                       style={{
-                        width: 3.5,
-                        height: 16,
+                        width: 3,
+                        height: 14,
                         backgroundColor: GREEN,
                         borderRadius: 2,
-                        marginRight: 8,
+                        marginRight: 6,
                       }}
                     />
                     <Text
@@ -1348,7 +2050,7 @@ export default function Index() {
                       style={{
                         flex: 1,
                         color: "#fff",
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: "400",
                       }}
                     >
@@ -1357,17 +2059,17 @@ export default function Index() {
                   </View>
 
                   <Pressable
-                    onPress={() => openOwnHistory(squad.currentGw)}
+                    onPress={() => openOwnHistory()}
                     accessibilityRole="button"
                     accessibilityLabel="Points. Open current gameweek points"
                     style={({ pressed }) => ({
-                      borderRadius: 20,
-                      paddingHorizontal: 14,
-                      paddingVertical: 7,
+                      borderRadius: 16,
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
                       flexDirection: "row",
                       alignItems: "center",
-                      gap: 8,
-                      minWidth: 96,
+                      gap: 6,
+                      minWidth: 84,
                       borderWidth: 1,
                       borderColor: "rgba(255,255,255,0.18)",
                       backgroundColor: "rgba(14, 38, 26, 0.9)",
@@ -1379,9 +2081,9 @@ export default function Index() {
                     <AppSymbol
                       name={{ ios: "chart.bar.fill", android: "bar_chart", web: "bar_chart" }}
                       color={GREEN}
-                      size={14}
+                      size={13}
                     />
-                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800" }}>
+                    <Text style={{ color: "#fff", fontSize: 11, fontWeight: "800" }}>
                       Points
                     </Text>
                   </Pressable>
@@ -1395,7 +2097,8 @@ export default function Index() {
               style={{
                 flexDirection: "row",
                 paddingHorizontal: 6,
-                paddingTop: 6,
+                paddingTop: 2,
+                marginBottom: 4,
               }}
             >
               <Stat
@@ -1412,270 +2115,667 @@ export default function Index() {
           )}
 
           <Animated.ScrollView
+            ref={mainScrollRef}
             style={{
               flex: 1,
               opacity: modeTransitionOpacity,
               transform: [{ translateX: modeTransitionX }],
+              marginBottom: 64,
             }}
-            scrollEnabled={false}
+            scrollEnabled={mode === "leagues" || mode === "more"}
+            showsVerticalScrollIndicator={false}
             contentContainerStyle={{
               flexGrow: 1,
               width: "100%",
-              paddingBottom: insets.bottom + 68,
             }}
           >
-            <Pitch
-              picks={shownPicks}
-              selectedGw={selectedFixtureGw ?? squad.gw}
-              selectedPos={selectedPos}
-              showPrice={mode === "transfers"}
-              onPress={onPlayerPress}
-              overlay={
+            {mode === "leagues" ? (
+              <LeagueHub
+                leagues={squad.leagues}
+                selectedLeague={selectedLeague}
+                standings={leagueStandings}
+                loading={leagueLoading}
+                error={leagueError}
+                gameweeks={squad.gameweeks.filter(
+                  (gameweek) => gameweek.finished || gameweek.isCurrent,
+                )}
+                inviteCode={
+                  selectedLeague ? inviteCodes[selectedLeague.id] ?? null : null
+                }
+                memberSquad={memberSquad}
+                managerLoading={managerLoading}
+                managerError={managerError}
+                onSelectLeague={loadLeague}
+                onJoin={joinLeague}
+                onCreate={createLeague}
+                onGetInviteCode={getInviteCode}
+                onViewMember={viewMemberSquad}
+                userEntryId={squad?.entry}
+              />
+            ) : mode === "more" ? (
+              <ScrollView
+                style={{ flex: 1, width: "100%" }}
+                contentContainerStyle={{
+                  paddingHorizontal: 18,
+                  paddingTop: 16,
+                  paddingBottom: 100,
+                }}
+                showsVerticalScrollIndicator={false}
+              >
+                {/* Manager Profile Card */}
                 <View
-                  pointerEvents="box-none"
                   style={{
-                    position: "absolute",
-                    top: 8,
-                    left: 8,
-                    zIndex: 10,
+                    backgroundColor: "rgba(14, 38, 26, 0.95)",
+                    borderRadius: 20,
+                    padding: 18,
+                    borderWidth: 1.5,
+                    borderColor: "rgba(0, 217, 130, 0.25)",
+                    marginBottom: 24,
+                    elevation: 4,
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    <View
+                      style={{
+                        width: 50,
+                        height: 50,
+                        borderRadius: 25,
+                        backgroundColor: "rgba(0, 217, 130, 0.15)",
+                        borderWidth: 1.5,
+                        borderColor: GREEN,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginRight: 14,
+                      }}
+                    >
+                      <AppSymbol
+                        name={{ ios: "person.fill", android: "person", web: "person" }}
+                        color={GREEN}
+                        size={24}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: "#ffffff", fontSize: 18, fontWeight: "900" }}>
+                        {squad.teamName || "Your Team"}
+                      </Text>
+                      <Text style={{ color: "#9db3a6", fontSize: 13, fontWeight: "600", marginTop: 2 }}>
+                        {squad.managerName || "Manager"} · ID: {squad.entry}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Section: Account */}
+                <Text
+                  style={{
+                    color: "#9db3a6",
+                    fontSize: 12,
+                    fontWeight: "800",
+                    letterSpacing: 0.5,
+                    textTransform: "uppercase",
+                    marginBottom: 8,
+                    marginLeft: 4,
+                  }}
+                >
+                  Account
+                </Text>
+
+                <View
+                  style={{
+                    backgroundColor: "rgba(14, 38, 26, 0.95)",
+                    borderRadius: 18,
+                    borderWidth: 1.5,
+                    borderColor: "rgba(0, 217, 130, 0.25)",
+                    overflow: "hidden",
+                    marginBottom: 24,
+                    elevation: 4,
                   }}
                 >
                   <Pressable
-                    onPress={() => setShowChipMenu((visible) => !visible)}
-                    accessibilityRole="button"
-                    accessibilityLabel={
-                      showChipMenu ? "Close chips" : "Open chips"
-                    }
-                    accessibilityState={{ expanded: showChipMenu }}
+                    onPress={handleLogout}
                     style={({ pressed }) => ({
-                      width: 38,
-                      height: 38,
-                      borderRadius: 20,
+                      flexDirection: "row",
                       alignItems: "center",
-                      justifyContent: "center",
-                      borderWidth: 1,
-                      borderColor: "rgba(255,255,255,0.8)",
-                      backgroundColor: "rgba(55,0,60,0.82)",
-                      opacity: pressed ? 0.75 : 1,
-                      elevation: 5,
+                      paddingHorizontal: 16,
+                      paddingVertical: 16,
+                      backgroundColor: pressed ? "rgba(255, 59, 48, 0.15)" : "transparent",
                     })}
                   >
-                    <AppSymbol
-                      name={{
-                        ios: "trophy.fill",
-                        android: "trophy",
-                        web: "trophy",
-                      }}
-                      color="#fff"
-                      size={19}
-                    />
-                    {(pendingChip || squad.chip) && (
-                      <View
-                        style={{
-                          position: "absolute",
-                          top: 1,
-                          right: 1,
-                          width: 9,
-                          height: 9,
-                          borderRadius: 5,
-                          backgroundColor: GREEN,
-                          borderWidth: 1,
-                          borderColor: "#fff",
-                        }}
-                      />
-                    )}
-                  </Pressable>
-                  {showChipMenu && (
                     <View
                       style={{
-                        position: "absolute",
-                        top: 44,
-                        left: 0,
-                        width: 220,
-                        maxWidth: 260,
-                        padding: 9,
-                        borderRadius: 18,
-                        borderWidth: 1,
-                        borderColor: "rgba(255,255,255,0.9)",
-                        backgroundColor: "rgba(250,247,255,0.97)",
-                        elevation: 14,
-                        shadowColor: "#210027",
-                        shadowOpacity: 0.28,
-                        shadowRadius: 14,
-                        shadowOffset: { width: 0, height: 6 },
+                        width: 36,
+                        height: 36,
+                        borderRadius: 10,
+                        backgroundColor: "rgba(255, 59, 48, 0.15)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginRight: 12,
                       }}
                     >
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          marginBottom: 7,
+                      <AppSymbol
+                        name={{
+                          ios: "rectangle.portrait.and.arrow.right",
+                          android: "logout",
+                          web: "logout",
                         }}
-                      >
-                        <Text
+                        color="#ff453a"
+                        size={18}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: "#ff453a", fontSize: 15, fontWeight: "800" }}>
+                        Log Out
+                      </Text>
+                      <Text style={{ color: "#9db3a6", fontSize: 12, marginTop: 1 }}>
+                        Sign out of your FPL account
+                      </Text>
+                    </View>
+                    <AppSymbol
+                      name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
+                      color="#9db3a6"
+                      size={14}
+                    />
+                  </Pressable>
+                </View>
+
+                {/* Section: About */}
+                <Text
+                  style={{
+                    color: "#9db3a6",
+                    fontSize: 12,
+                    fontWeight: "800",
+                    letterSpacing: 0.5,
+                    textTransform: "uppercase",
+                    marginBottom: 8,
+                    marginLeft: 4,
+                  }}
+                >
+                  About
+                </Text>
+
+                <View
+                  style={{
+                    backgroundColor: "rgba(14, 38, 26, 0.95)",
+                    borderRadius: 18,
+                    borderWidth: 1.5,
+                    borderColor: "rgba(0, 217, 130, 0.25)",
+                    padding: 16,
+                    elevation: 4,
+                  }}
+                >
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: 10,
+                    }}
+                  >
+                    <Text style={{ color: "#ffffff", fontSize: 14, fontWeight: "700" }}>
+                      App Version
+                    </Text>
+                    <Text style={{ color: GREEN, fontSize: 14, fontWeight: "800" }}>
+                      v{APP_VERSION}
+                    </Text>
+                  </View>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <Text style={{ color: "#ffffff", fontSize: 14, fontWeight: "700" }}>
+                      Data Source
+                    </Text>
+                    <Text style={{ color: "#9db3a6", fontSize: 13, fontWeight: "600" }}>
+                      Official FPL API
+                    </Text>
+                  </View>
+                </View>
+              </ScrollView>
+            ) : (
+              <View style={{ flex: 1, width: "100%", position: "relative" }}>
+                {selectedPos !== null && (
+                  <Pressable
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      zIndex: 1,
+                    }}
+                    onPress={() => {
+                      setSelectedPos(null);
+                      setPlayerSheetOpen(false);
+                    }}
+                  />
+                )}
+              <View style={{ zIndex: 2, flex: 1, width: "100%" }}>
+                {isPastGwSelected ? (
+                  managerLoading ? (
+                    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", minHeight: 320 }}>
+                      <ActivityIndicator color={GREEN} size="large" />
+                    </View>
+                  ) : currentPastData && pastPicks.length > 0 ? (
+                    <Pitch
+                      picks={pastPicks}
+                      selectedGw={currentSelectedGw}
+                      selectedPos={null}
+                      compactAvatar={true}
+                      overlay={
+                        <View
+                          pointerEvents="box-none"
                           style={{
-                            color: PURPLE,
-                            fontSize: 12,
-                            fontWeight: "900",
+                            position: "absolute",
+                            top: 8,
+                            right: 8,
+                            zIndex: 10,
                           }}
                         >
-                          CHIPS
-                        </Text>
-                        <Pressable
-                          onPress={() => setShowChipMenu(false)}
-                          hitSlop={8}
-                          accessibilityRole="button"
-                          accessibilityLabel="Close chips"
-                        >
-                          <AppSymbol
-                            name={{
-                              ios: "xmark",
-                              android: "close",
-                              web: "close",
+                          <View
+                            style={{
+                              borderRadius: 14,
+                              paddingHorizontal: 9,
+                              paddingVertical: 5,
+                              borderWidth: 1,
+                              borderColor: "rgba(255, 255, 255, 0.18)",
+                              backgroundColor: "rgba(14, 38, 26, 0.95)",
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 5,
+                              elevation: 6,
+                              shadowColor: "#000000",
+                              shadowOpacity: 0.25,
+                              shadowRadius: 6,
+                              shadowOffset: { width: 0, height: 2 },
                             }}
-                            color={PURPLE}
-                            size={17}
-                          />
-                        </Pressable>
-                      </View>
-                      <View
+                          >
+                            <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "800", textTransform: "uppercase" }}>
+                              GW {currentSelectedGw} Points
+                            </Text>
+                            <Text style={{ color: "#ffd400", fontSize: 14, fontWeight: "900" }}>
+                              {currentPastData.history.points ?? "—"}
+                            </Text>
+                          </View>
+                        </View>
+                      }
+                    />
+                  ) : (
+                    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24, minHeight: 320 }}>
+                      <Text
                         style={{
-                          flexDirection: "row",
-                          flexWrap: "wrap",
-                          gap: 6,
+                          color: "#9db3a6",
+                          fontSize: 14,
+                          fontWeight: "600",
+                          textAlign: "center",
+                          lineHeight: 20,
                         }}
                       >
-                        {CHIP_OPTIONS.map((chip) => {
-                          const available = squad.availableChips.includes(
-                            chip.id,
-                          );
-                          const selected = pendingChip === chip.id;
-                          const active = squad.chip === chip.id;
-                          const chipStatus = squad.chipStatuses[chip.id];
-                          return (
-                            <Pressable
-                              key={chip.id}
-                              onPress={() => selectChip(chip)}
-                              disabled={!available || locked}
-                              style={({ pressed }) => ({
-                                width: 97,
-                                minHeight: 44,
-                                paddingHorizontal: 6,
-                                borderRadius: 12,
-                                borderWidth: 1,
-                                borderColor: selected
-                                  ? "#7800b8"
-                                  : available
-                                    ? "#c7a6df"
-                                    : "#e0dceb",
-                                backgroundColor: selected
-                                  ? PURPLE
-                                  : "#fff",
-                                flexDirection: "row",
-                                alignItems: "center",
-                                opacity:
-                                  available && !locked
-                                    ? pressed
-                                      ? 0.76
-                                      : 1
-                                    : 0.58,
-                              })}
-                            >
-                              <AppSymbol
-                                name={CHIP_SYMBOLS[chip.id]}
-                                color={
-                                  selected
-                                    ? GREEN
-                                    : available
-                                      ? "#7800b8"
-                                      : "#767184"
-                                }
-                                size={17}
-                              />
+                        No past gameweek history available.
+                      </Text>
+                    </View>
+                  )
+                ) : (
+                  <Pitch
+                    picks={shownPicks}
+                    selectedGw={currentSelectedGw}
+                    selectedPos={selectedPos}
+                    showPrice={mode === "transfers"}
+                    onPress={onPlayerPress}
+                    onSetCaptain={(r) => setRole("cap", r.pos)}
+                    onSetViceCaptain={(r) => setRole("vice", r.pos)}
+                    onTransfer={(r) => {
+                      const isPending = pending.some((x) => x.pos === r.pos);
+                      if (isPending) {
+                        undoSlot(r.pos);
+                      } else {
+                        setPickPos(r.pos);
+                        setSelectedPos(null);
+                      }
+                    }}
+                    onOpenDetails={(r) => {
+                      setSelectedPos(r.pos);
+                      setPlayerSheetOpen(true);
+                    }}
+                    onBackgroundPress={() => setSelectedPos(null)}
+                    overlay={
+                      <View
+                        pointerEvents="box-none"
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          zIndex: 10,
+                        }}
+                      >
+                        {/* Top Left Chip Button */}
+                        <View
+                          pointerEvents="box-none"
+                          style={{
+                            position: "absolute",
+                            top: 8,
+                            left: 8,
+                            zIndex: 10,
+                          }}
+                        >
+                          <Pressable
+                            onPress={() => setShowChipMenu((visible) => !visible)}
+                            accessibilityRole="button"
+                            accessibilityLabel={
+                              showChipMenu ? "Close chips" : "Open chips"
+                            }
+                            accessibilityState={{ expanded: showChipMenu }}
+                            style={({ pressed }) => ({
+                              width: 38,
+                              height: 38,
+                              borderRadius: 20,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderWidth: 1,
+                              borderColor: "rgba(255,255,255,0.8)",
+                              backgroundColor: "rgba(55,0,60,0.82)",
+                              opacity: pressed ? 0.75 : 1,
+                              elevation: 5,
+                            })}
+                          >
+                            <AppSymbol
+                              name={{
+                                ios: "trophy.fill",
+                                android: "trophy",
+                                web: "trophy",
+                              }}
+                              color="#fff"
+                              size={19}
+                            />
+                            {(pendingChip || squad.chip) && (
                               <View
                                 style={{
-                                  flex: 1,
-                                  marginLeft: 5,
+                                  position: "absolute",
+                                  top: 1,
+                                  right: 1,
+                                  width: 9,
+                                  height: 9,
+                                  borderRadius: 5,
+                                  backgroundColor: GREEN,
+                                  borderWidth: 1,
+                                  borderColor: "#fff",
+                                }}
+                              />
+                            )}
+                          </Pressable>
+                          {showChipMenu && (
+                            <View
+                              style={{
+                                position: "absolute",
+                                top: 44,
+                                left: 0,
+                                width: 220,
+                                maxWidth: 260,
+                                padding: 9,
+                                borderRadius: 18,
+                                borderWidth: 1,
+                                borderColor: "rgba(255,255,255,0.9)",
+                                backgroundColor: "rgba(250,247,255,0.97)",
+                                elevation: 14,
+                                shadowColor: "#210027",
+                                shadowOpacity: 0.28,
+                                shadowRadius: 14,
+                                shadowOffset: { width: 0, height: 6 },
+                              }}
+                            >
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  marginBottom: 7,
                                 }}
                               >
                                 <Text
-                                  numberOfLines={1}
                                   style={{
-                                    color: selected
-                                      ? "#fff"
-                                      : available
-                                        ? PURPLE
-                                        : "#696476",
-                                    fontSize: 9,
+                                    color: PURPLE,
+                                    fontSize: 12,
                                     fontWeight: "900",
                                   }}
                                 >
-                                  {chip.label}
+                                  CHIPS
                                 </Text>
-                                <Text
+                                <Pressable
+                                  onPress={() => setShowChipMenu(false)}
+                                  hitSlop={8}
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Close chips"
+                                >
+                                  <AppSymbol
+                                    name={{
+                                      ios: "xmark",
+                                      android: "close",
+                                      web: "close",
+                                    }}
+                                    color={PURPLE}
+                                    size={17}
+                                  />
+                                </Pressable>
+                              </View>
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  flexWrap: "wrap",
+                                  gap: 6,
+                                }}
+                              >
+                                {CHIP_OPTIONS.map((chip) => {
+                                  const available = squad.availableChips.includes(
+                                    chip.id,
+                                  );
+                                  const selected = pendingChip === chip.id;
+                                  const active = squad.chip === chip.id;
+                                  const chipStatus = squad.chipStatuses[chip.id];
+                                  return (
+                                    <Pressable
+                                      key={chip.id}
+                                      onPress={() => selectChip(chip)}
+                                      disabled={!available || locked}
+                                      style={({ pressed }) => ({
+                                        width: 97,
+                                        minHeight: 44,
+                                        paddingHorizontal: 6,
+                                        borderRadius: 12,
+                                        borderWidth: 1,
+                                        borderColor: selected
+                                          ? "#7800b8"
+                                          : available
+                                            ? "#c7a6df"
+                                            : "#e0dceb",
+                                        backgroundColor: selected
+                                          ? PURPLE
+                                          : "#fff",
+                                        flexDirection: "row",
+                                        alignItems: "center",
+                                        opacity:
+                                          available && !locked
+                                            ? pressed
+                                              ? 0.76
+                                              : 1
+                                            : 0.58,
+                                      })}
+                                    >
+                                      <AppSymbol
+                                        name={CHIP_SYMBOLS[chip.id]}
+                                        color={
+                                          selected
+                                            ? GREEN
+                                            : available
+                                              ? "#7800b8"
+                                              : "#767184"
+                                        }
+                                        size={17}
+                                      />
+                                      <View
+                                        style={{
+                                          flex: 1,
+                                          marginLeft: 5,
+                                        }}
+                                      >
+                                        <Text
+                                          numberOfLines={1}
+                                          style={{
+                                            color: selected
+                                              ? "#fff"
+                                              : available
+                                                ? PURPLE
+                                                : "#696476",
+                                            fontSize: 9,
+                                            fontWeight: "900",
+                                          }}
+                                        >
+                                          {chip.label}
+                                        </Text>
+                                        <Text
+                                          style={{
+                                            color: selected
+                                              ? "#e7d5f4"
+                                              : available
+                                                ? "#7a35a8"
+                                                : "#777386",
+                                            fontSize: 8,
+                                            marginTop: 1,
+                                          }}
+                                        >
+                                          {selected
+                                            ? "Selected"
+                                            : active
+                                              ? "Active"
+                                              : available
+                                                ? "Available"
+                                                : chipStatus === "played"
+                                                  ? "Used"
+                                                  : "Unavailable"}
+                                        </Text>
+                                      </View>
+                                    </Pressable>
+                                  );
+                                })}
+                              </View>
+                              {pendingChip && (
+                                <Pressable
+                                  onPress={() => {
+                                    setPendingChip(null);
+                                    setShowChipMenu(false);
+                                  }}
                                   style={{
-                                    color: selected
-                                      ? "#e7d5f4"
-                                      : available
-                                        ? "#7a35a8"
-                                        : "#777386",
-                                    fontSize: 8,
-                                    marginTop: 1,
+                                    alignSelf: "flex-end",
+                                    marginTop: 7,
+                                    paddingHorizontal: 9,
+                                    paddingVertical: 5,
+                                    borderRadius: 12,
+                                    backgroundColor: "#f0e5f5",
                                   }}
                                 >
-                                  {selected
-                                    ? "Selected"
-                                    : active
-                                      ? "Active"
-                                      : available
-                                        ? "Available"
-                                        : chipStatus === "played"
-                                          ? "Used"
-                                          : "Unavailable"}
-                                </Text>
-                              </View>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                      {pendingChip && (
-                        <Pressable
-                          onPress={() => {
-                            setPendingChip(null);
-                            setShowChipMenu(false);
-                          }}
-                          style={{
-                            alignSelf: "flex-end",
-                            marginTop: 7,
-                            paddingHorizontal: 9,
-                            paddingVertical: 5,
-                            borderRadius: 12,
-                            backgroundColor: "#f0e5f5",
-                          }}
-                        >
-                          <Text
+                                  <Text
+                                    style={{
+                                      color: "#8d1b3d",
+                                      fontSize: 10,
+                                      fontWeight: "800",
+                                    }}
+                                  >
+                                    Cancel {selectedChipOption?.label ?? "chip"}
+                                  </Text>
+                                </Pressable>
+                              )}
+                            </View>
+                          )}
+                        </View>
+
+                        {/* Top Right Total Points Card (Lineup mode on homepage only) */}
+                        {mode === "lineup" && (
+                          <View
+                            pointerEvents="box-none"
                             style={{
-                              color: "#8d1b3d",
-                              fontSize: 10,
-                              fontWeight: "800",
+                              position: "absolute",
+                              top: 8,
+                              right: 8,
+                              zIndex: 10,
                             }}
                           >
-                            Cancel {selectedChipOption?.label ?? "chip"}
-                          </Text>
-                        </Pressable>
-                      )}
-                    </View>
-                  )}
-                </View>
-              }
-            />
+                            <View
+                              style={{
+                                borderRadius: 14,
+                                paddingHorizontal: 9,
+                                paddingVertical: 5,
+                                borderWidth: 1,
+                                borderColor: "rgba(255, 255, 255, 0.18)",
+                                backgroundColor: "rgba(14, 38, 26, 0.95)",
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 5,
+                                elevation: 6,
+                                shadowColor: "#000000",
+                                shadowOpacity: 0.25,
+                                shadowRadius: 6,
+                                shadowOffset: { width: 0, height: 2 },
+                              }}
+                            >
+                              <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "800", textTransform: "uppercase" }}>
+                                Total Points
+                              </Text>
+                              <Text style={{ color: "#ffd400", fontSize: 14, fontWeight: "900" }}>
+                                {squad.totalPoints ?? "—"}
+                              </Text>
+                            </View>
+                          </View>
+                        )}
 
-            <View style={{ margin: 20, alignItems: "center" }}>
-              {error ? (
-                <Text style={{ color: "red", marginTop: 10 }}>{error}</Text>
-              ) : null}
+                        {/* Top Right Transfer Deadline Badge (Transfers mode only - 3-line card) */}
+                        {mode === "transfers" && nextGwDeadlineInfo && (
+                          <View
+                            pointerEvents="box-none"
+                            style={{
+                              position: "absolute",
+                              top: 8,
+                              right: 8,
+                              zIndex: 10,
+                            }}
+                          >
+                            <View
+                              style={{
+                                borderRadius: 14,
+                                paddingHorizontal: 9,
+                                paddingVertical: 5,
+                                borderWidth: 1,
+                                borderColor: "rgba(255, 255, 255, 0.18)",
+                                backgroundColor: "rgba(14, 38, 26, 0.95)",
+                                alignItems: "flex-end",
+                                elevation: 6,
+                                shadowColor: "#000000",
+                                shadowOpacity: 0.25,
+                                shadowRadius: 6,
+                                shadowOffset: { width: 0, height: 2 },
+                              }}
+                            >
+                              <Text style={{ color: "#9db3a6", fontSize: 8.5, fontWeight: "800", letterSpacing: 0.4, textTransform: "uppercase" }}>
+                                Deadline
+                              </Text>
+                              <Text style={{ color: "#ffffff", fontSize: 10.5, fontWeight: "700", marginTop: 1 }}>
+                                {nextGwDeadlineInfo.formattedDate}
+                              </Text>
+                              <Text style={{ color: "#ffd400", fontSize: 11.5, fontWeight: "900", marginTop: 1.5 }}>
+                                {nextGwDeadlineInfo.remainingText}
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    }
+                  />
+                )}
+              </View>
             </View>
+          )}
           </Animated.ScrollView>
 
           <PlayerDetailsSheet
@@ -1700,52 +2800,7 @@ export default function Index() {
             onStartSubstitution={() => setPlayerSheetOpen(false)}
           />
 
-          {/* Save bar: lineup mode */}
-          {mode === "lineup" &&
-            (dirty || pendingChip === "bboost" || pendingChip === "3xc") &&
-            selectedPos === null && (
-              <View
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  bottom: insets.bottom + 112,
-                  backgroundColor: PURPLE,
-                  paddingTop: 12,
-                  paddingBottom: 12,
-                  paddingHorizontal: 16,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                }}
-              >
-                {dirty ? (
-                  <Pressable onPress={() => setDraft(squad.picks)}>
-                    <Text style={{ color: "#fff" }}>Undo</Text>
-                  </Pressable>
-                ) : (
-                  <View />
-                )}
-                <Pressable
-                  onPress={confirmSave}
-                  disabled={saving}
-                  style={{
-                    backgroundColor: GREEN,
-                    paddingVertical: 10,
-                    paddingHorizontal: 28,
-                    borderRadius: 24,
-                  }}
-                >
-                  <Text style={{ color: PURPLE, fontWeight: "800" }}>
-                    {saving
-                      ? "Saving..."
-                      : pendingChip
-                        ? `Play ${selectedChipOption?.label ?? "chip"}`
-                        : "Save changes"}
-                  </Text>
-                </Pressable>
-              </View>
-          )}
+
 
           {/* Summary bar: transfers mode */}
           {mode === "transfers" &&
@@ -1756,16 +2811,22 @@ export default function Index() {
               <View
                 style={{
                   position: "absolute",
-                  left: 0,
-                  right: 0,
-                  bottom: insets.bottom + 112,
-                  backgroundColor: PURPLE,
-                  paddingTop: 12,
-                  paddingBottom: 12,
-                  paddingHorizontal: 16,
+                  left: 16,
+                  right: 16,
+                  bottom: insets.bottom + 116,
+                  backgroundColor: "rgba(13, 36, 23, 0.95)",
+                  borderRadius: 20,
+                  paddingVertical: 12,
+                  paddingHorizontal: 18,
                   flexDirection: "row",
                   alignItems: "center",
                   justifyContent: "space-between",
+                  borderWidth: 1.5,
+                  borderColor: "rgba(0, 217, 130, 0.3)",
+                  shadowColor: "#000",
+                  shadowOpacity: 0.4,
+                  shadowRadius: 16,
+                  elevation: 10,
                 }}
               >
                 <Pressable
@@ -1773,11 +2834,12 @@ export default function Index() {
                     setPending([]);
                     setPendingChip(null);
                   }}
+                  style={{ paddingVertical: 8, paddingHorizontal: 12 }}
                 >
-                  <Text style={{ color: "#fff" }}>Reset</Text>
+                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 14 }}>Reset</Text>
                 </Pressable>
                 <View style={{ alignItems: "center" }}>
-                  <Text style={{ color: "#fff", fontWeight: "700" }}>
+                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 13 }}>
                     {pending.length} transfer
                     {pending.length === 1 ? "" : "s"} · {money(bankAfter)} left
                   </Text>
@@ -1829,7 +2891,7 @@ export default function Index() {
         </View>
       )}
 
-      {stage === "squad" && squad && !showHistory && (
+      {stage === "squad" && squad && (
         <View
           pointerEvents="box-none"
           style={{
@@ -1838,56 +2900,39 @@ export default function Index() {
             right: 8,
             bottom: insets.bottom + 2,
             height: 56,
-            zIndex: 4,
+            zIndex: 20,
             overflow: "visible",
           }}
         >
           <View
-            pointerEvents="none"
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: -8,
-              height: 26,
-              borderRadius: 30,
-              backgroundColor: "rgba(132,45,255,0.42)",
-              shadowColor: "#8c24ff",
-              shadowOpacity: 0.8,
-              shadowRadius: 24,
-              shadowOffset: { width: 0, height: 1 },
-              elevation: 16,
-            }}
-          />
-          <View
             style={{
               flex: 1,
-              borderRadius: 30,
+              borderRadius: 28,
               overflow: "hidden",
               borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.92)",
+              borderColor: "rgba(0, 217, 130, 0.22)",
               backgroundColor:
                 Platform.OS === "ios"
-                  ? "rgba(255,255,255,0.34)"
-                  : "rgba(255,255,255,0.96)",
+                  ? "rgba(5, 20, 16, 0.88)"
+                  : "rgba(5, 20, 16, 0.96)",
               elevation: 10,
-              shadowColor: "#37003c",
-              shadowOpacity: 0.15,
-              shadowRadius: 15,
-              shadowOffset: { width: 0, height: 5 },
+              shadowColor: "#00d982",
+              shadowOpacity: 0.18,
+              shadowRadius: 14,
+              shadowOffset: { width: 0, height: 4 },
             }}
           >
             <GlassView
               pointerEvents="none"
               glassEffectStyle="regular"
-              tintColor="rgba(255,255,255,0.62)"
+              tintColor="rgba(5, 20, 16, 0.88)"
               style={{
                 position: "absolute",
                 top: 0,
                 right: 0,
                 bottom: 0,
                 left: 0,
-                borderRadius: 30,
+                borderRadius: 28,
               }}
             />
             <View
@@ -1895,8 +2940,8 @@ export default function Index() {
                 flex: 1,
                 flexDirection: "row",
                 alignItems: "center",
-                paddingHorizontal: 5,
-                gap: 3,
+                paddingHorizontal: 4,
+                gap: 2,
               }}
             >
               <BottomTab
@@ -1909,6 +2954,7 @@ export default function Index() {
                 selected={activeBottomTab === "lineup"}
                 onPressIn={() => setActiveBottomTab("lineup")}
                 onPress={() => {
+                  setActiveMember(null);
                   setShowLeagues(false);
                   switchMode("lineup");
                 }}
@@ -1923,36 +2969,39 @@ export default function Index() {
                 selected={activeBottomTab === "transfers"}
                 onPressIn={() => setActiveBottomTab("transfers")}
                 onPress={() => {
+                  setActiveMember(null);
                   setShowLeagues(false);
                   switchMode("transfers");
                 }}
               />
-              <View
-                pointerEvents="none"
-                style={{
-                  width: 1,
-                  height: 28,
-                  backgroundColor: "rgba(103,68,135,0.28)",
-                }}
-              />
               <BottomTab
                 icon={{
-                  ios: "trophy.fill",
+                  ios: "trophy",
                   android: "trophy",
                   web: "trophy",
                 }}
                 label="Leagues"
-                selected={activeBottomTab === "leagues"}
+                selected={mode === "leagues"}
                 onPressIn={() => setActiveBottomTab("leagues")}
                 onPress={() => {
-                  setShowLeagues((visible) => {
-                    if (visible) {
-                      setActiveBottomTab(mode);
-                      return false;
-                    }
-                    setShowHistory(false);
-                    return true;
-                  });
+                  setActiveMember(null);
+                  setActiveBottomTab("leagues");
+                  switchMode("leagues");
+                }}
+              />
+              <BottomTab
+                icon={{
+                  ios: "ellipsis.circle",
+                  android: "more_horiz",
+                  web: "more_horiz",
+                }}
+                label="More"
+                selected={mode === "more"}
+                onPressIn={() => setActiveBottomTab("more")}
+                onPress={() => {
+                  setActiveMember(null);
+                  setActiveBottomTab("more");
+                  switchMode("more");
                 }}
               />
             </View>
@@ -1960,94 +3009,37 @@ export default function Index() {
         </View>
       )}
 
-      {stage === "squad" && squad && (
-        <Animated.View
-          style={{
-            position: "absolute",
-            top: insets.top + 48,
-            bottom: insets.bottom + 66,
-            left: 0,
-            right: 0,
-            zIndex: 10,
-            elevation: 10,
-            backgroundColor: "#071818",
-            opacity: leaguesAnim,
-            transform: [
-              {
-                translateY: leaguesAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [35, 0],
-                }),
-              },
-            ],
-            pointerEvents: showLeagues ? "auto" : "none",
-          }}
-        >
-          <LeagueHub
-            leagues={squad.leagues}
-            selectedLeague={selectedLeague}
-            standings={leagueStandings}
-            loading={leagueLoading}
-            error={leagueError}
-            gameweeks={squad.gameweeks.filter(
-              (gameweek) => gameweek.finished || gameweek.isCurrent,
-            )}
-            inviteCode={
-              selectedLeague ? inviteCodes[selectedLeague.id] ?? null : null
-            }
-            memberSquad={memberSquad}
-            managerLoading={managerLoading}
-            managerError={managerError}
-            onSelectLeague={loadLeague}
-            onJoin={joinLeague}
-            onCreate={createLeague}
-            onGetInviteCode={getInviteCode}
-            onViewMember={viewMemberSquad}
-          />
-        </Animated.View>
-      )}
-      {stage === "squad" && squad && (
-        <Animated.View
+      {stage === "squad" && squad && activeMember && (
+        <View
           style={{
             position: "absolute",
             top: 0,
             bottom: 0,
             left: 0,
             right: 0,
-            zIndex: 11,
-            elevation: 11,
-            paddingTop: insets.top,
-            opacity: historyAnim,
-            transform: [
-              {
-                translateY: historyAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [45, 0],
-                }),
-              },
-            ],
-            pointerEvents: showHistory ? "auto" : "none",
+            zIndex: 15,
+            elevation: 15,
           }}
         >
           <ManagerHistory
-            title={squad.teamName || "Your team"}
-            managerName={squad.managerName}
-            entry={squad.entry}
+            title={activeMember.teamName}
+            managerName={activeMember.managerName}
+            entry={activeMember.entry}
             gameweeks={squad.gameweeks.filter(
               (gameweek) => gameweek.finished || gameweek.isCurrent,
             )}
-            selectedEvent={historyEvent ?? squad.currentGw ?? squad.gw}
+            selectedEvent={activeMemberEvent}
             data={memberSquad}
             loading={managerLoading}
             error={managerError}
-            showBlankSquadOnError
-            onBack={() => {
-              setShowHistory(false);
-              setHistoryEvent(null);
+            showGameweekSelector={!activeMember.isOwnPoints}
+            onBack={() => setActiveMember(null)}
+            onSelectEvent={(event) => {
+              setActiveMemberEvent(event);
+              loadManagerGameweek(activeMember.entry, event);
             }}
-            onSelectEvent={selectOwnHistoryEvent}
           />
-        </Animated.View>
+        </View>
       )}
       <Modal
         visible={showGameweekMenu}
@@ -2122,6 +3114,9 @@ export default function Index() {
                     onPress={() => {
                       setSelectedFixtureGw(gameweek.id);
                       setShowGameweekMenu(false);
+                      if (squad && gameweek.id < squad.gw) {
+                        loadManagerGameweek(squad.entry, gameweek.id);
+                      }
                     }}
                     style={{
                       flexDirection: "row",

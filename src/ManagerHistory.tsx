@@ -5,7 +5,10 @@ import {
   Text,
   View,
 } from "react-native";
+import { Image } from "expo-image";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Gameweek, MemberSquad, Row } from "./fpl";
+import { AppSymbol } from "./AppSymbol";
 import { Pitch } from "./Pitch";
 
 type Props = {
@@ -23,7 +26,11 @@ type Props = {
   onSelectEvent: (event: number) => void;
 };
 
-const PURPLE = "#37003c";
+const GREEN = "#00d982";
+const DARK_GREEN = "#071b12";
+const CARD_BG = "rgba(255, 255, 255, 0.08)";
+const CARD_BORDER = "rgba(255, 255, 255, 0.12)";
+
 const CHIP_LABELS: Record<string, string> = {
   wildcard: "Wildcard",
   freehit: "Free Hit",
@@ -45,23 +52,38 @@ export function ManagerHistory({
   onBack,
   onSelectEvent,
 }: Props) {
+  const insets = useSafeAreaInsets();
   const currentData =
     data?.entry === entry && data.event === selectedEvent ? data : null;
   const picks: Row[] =
-    currentData?.picks.map((pick) => ({
-      id: pick.id,
-      pos: pick.position,
-      name: pick.name,
-      team: pick.team,
-      teamId: 0,
-      type: pick.elementType,
-      cap: pick.captain,
-      vice: pick.viceCaptain,
-      sell: 0,
-      buy: 0,
-      displayPoints: pick.points,
-      formMood: pick.formMood,
-    })) ?? [];
+    currentData?.picks.map((pick) => {
+      const mult =
+        typeof pick.multiplier === "number" && pick.multiplier > 0
+          ? pick.multiplier
+          : pick.captain
+            ? currentData.chip === "3xc"
+              ? 3
+              : 2
+            : 1;
+      const rawPoints = pick.points ?? 0;
+      const finalPoints = rawPoints * mult;
+
+      return {
+        id: pick.id,
+        pos: pick.position,
+        name: pick.name,
+        team: pick.team,
+        teamId: 0,
+        type: pick.elementType,
+        cap: pick.captain,
+        vice: pick.viceCaptain,
+        multiplier: mult,
+        sell: 0,
+        buy: 0,
+        displayPoints: finalPoints,
+        formMood: pick.formMood,
+      };
+    }) ?? [];
   const showBlankSquad =
     showBlankSquadOnError &&
     !loading &&
@@ -92,180 +114,266 @@ export function ManagerHistory({
   });
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#f6f4f8" }}>
+    <View style={{ flex: 1, backgroundColor: DARK_GREEN }}>
+      <Image
+        source={require("../assets/images/background-texture.png")}
+        contentFit="cover"
+        style={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+        }}
+      />
+
+      {/* Top Header Section */}
       <View
         style={{
-          backgroundColor: PURPLE,
-          paddingHorizontal: 16,
-          paddingVertical: 16,
-          flexDirection: "row",
-          alignItems: "center",
-          elevation: 3,
+          paddingTop: insets.top ? insets.top + 6 : 12,
+          paddingHorizontal: 12,
+          paddingBottom: 6,
+          zIndex: 2,
         }}
       >
-        <Pressable onPress={onBack} hitSlop={10}>
-          <Text style={{ color: "#fff", fontSize: 16 }}>‹ Back</Text>
-        </Pressable>
-        <View style={{ flex: 1, marginLeft: 16 }}>
-          <Text
-            numberOfLines={1}
-            style={{ color: "#fff", fontSize: 17, fontWeight: "800" }}
+        {/* Row 1: Back Button & GW Selector Badge */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 10,
+          }}
+        >
+          <Pressable
+            onPress={onBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: "rgba(0, 217, 130, 0.15)",
+              borderWidth: 1,
+              borderColor: "rgba(0, 217, 130, 0.4)",
+              borderRadius: 16,
+              paddingHorizontal: 14,
+              height: 34,
+              gap: 4,
+              opacity: pressed ? 0.7 : 1,
+            })}
           >
-            {title} · GW {selectedEvent}
-          </Text>
-          {!!managerName && (
-            <Text numberOfLines={1} style={{ color: "#cdb9d1", marginTop: 2 }}>
-              {managerName}
+            <AppSymbol
+              name={{ ios: "chevron.left", android: "chevron_left", web: "chevron_left" }}
+              color={GREEN}
+              size={16}
+            />
+            <Text
+              style={{
+                color: "#fff",
+                fontSize: 13,
+                fontWeight: "800",
+                includeFontPadding: false,
+                textAlignVertical: "center",
+              }}
+            >
+              Back
             </Text>
-          )}
+          </Pressable>
+
+          <View
+            style={{
+              borderRadius: 16,
+              paddingHorizontal: 10,
+              paddingVertical: 4,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.18)",
+              backgroundColor: "rgba(14, 38, 26, 0.9)",
+            }}
+          >
+            <Text style={{ color: "#fff", fontSize: 11, fontWeight: "800" }}>
+              GW {selectedEvent}
+            </Text>
+          </View>
+        </View>
+
+        {/* Row 2: Team Name with Green Accent Bar & Manager Name */}
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <View
+            style={{
+              width: 3,
+              height: 14,
+              backgroundColor: GREEN,
+              borderRadius: 2,
+              marginRight: 6,
+            }}
+          />
+          <View style={{ flex: 1 }}>
+            <Text
+              numberOfLines={1}
+              style={{ color: "#fff", fontSize: 13, fontWeight: "900" }}
+            >
+              {title}
+            </Text>
+            {!!managerName && (
+              <Text
+                numberOfLines={1}
+                style={{ color: "#9db3a6", fontSize: 10, marginTop: 1 }}
+              >
+                {managerName}
+              </Text>
+            )}
+          </View>
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
-        {showGameweekSelector && (
+      {/* Gameweek Selector Horizontal Bar */}
+      {showGameweekSelector && (
+        <View style={{ height: 32, marginBottom: 4 }}>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 12 }}
+            contentContainerStyle={{ paddingHorizontal: 12 }}
           >
-            {gameweeks.map((gameweek) => (
-              <Pressable
-                key={gameweek.id}
-                onPress={() => onSelectEvent(gameweek.id)}
-                style={{
-                  backgroundColor:
-                    gameweek.id === selectedEvent ? PURPLE : "#fff",
-                  borderRadius: 14,
-                  paddingHorizontal: 14,
-                  paddingVertical: 9,
-                  marginRight: 8,
-                  borderWidth: gameweek.id === selectedEvent ? 0 : 1,
-                  borderColor: "#e6e0e9",
-                }}
-              >
-                <Text
-                  style={{
-                    color: gameweek.id === selectedEvent ? "#fff" : PURPLE,
-                    fontWeight: "700",
-                  }}
-                >
-                  GW {gameweek.id}
-                </Text>
-              </Pressable>
-            ))}
+            {gameweeks
+              .filter((gw) => gw.finished || gw.isCurrent)
+              .map((gameweek) => {
+                const isSelected = gameweek.id === selectedEvent;
+                return (
+                  <Pressable
+                    key={gameweek.id}
+                    onPress={() => onSelectEvent(gameweek.id)}
+                    style={{
+                      backgroundColor: isSelected ? GREEN : CARD_BG,
+                      borderRadius: 12,
+                      paddingHorizontal: 12,
+                      height: 28,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginRight: 6,
+                      borderWidth: 1,
+                      borderColor: isSelected ? GREEN : CARD_BORDER,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: isSelected ? DARK_GREEN : "#fff",
+                        fontWeight: isSelected ? "900" : "600",
+                        fontSize: 11,
+                        lineHeight: 14,
+                        textAlign: "center",
+                        textAlignVertical: "center",
+                        includeFontPadding: false,
+                      }}
+                    >
+                      GW {gameweek.id}
+                    </Text>
+                  </Pressable>
+                );
+              })}
           </ScrollView>
-        )}
+        </View>
+      )}
 
-        {!!error && !showBlankSquad && (
-          <Text
+      {/* Main Pitch View with Top-Right Points Overlay or Empty State */}
+      <View
+        style={{
+          flex: 1,
+          width: "100%",
+          paddingBottom: insets.bottom + 62,
+          justifyContent: !loading && !currentData && !showBlankSquad ? "center" : "flex-start",
+          position: "relative",
+        }}
+      >
+        {/* Top Right: Gameweek Points Only Badge (No Text) */}
+        {(currentData || showBlankSquad) && (
+          <View
+            pointerEvents="box-none"
             style={{
-              color: "#b00020",
-              marginHorizontal: 16,
-              marginBottom: 12,
+              position: "absolute",
+              top: 8,
+              right: 8,
+              zIndex: 10,
             }}
           >
-            {error}
-          </Text>
+            <View
+              style={{
+                borderRadius: 14,
+                paddingHorizontal: 12,
+                paddingVertical: 5,
+                borderWidth: 1,
+                borderColor: GREEN,
+                backgroundColor: "rgba(14, 38, 26, 0.9)",
+                elevation: 5,
+              }}
+            >
+              <Text
+                style={{
+                  color: (currentData?.history.points ?? 0) < 0 ? "#ff526f" : "#ffd400",
+                  fontSize: 14,
+                  fontWeight: "900",
+                }}
+              >
+                {currentData?.history.points ?? "—"}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Top Left: Chip Badge if Played */}
+        {currentData?.chip && (
+          <View
+            pointerEvents="box-none"
+            style={{
+              position: "absolute",
+              top: 8,
+              left: 8,
+              zIndex: 10,
+            }}
+          >
+            <View
+              style={{
+                backgroundColor: "rgba(0, 217, 130, 0.15)",
+                borderRadius: 12,
+                paddingHorizontal: 8,
+                paddingVertical: 4,
+                borderWidth: 1,
+                borderColor: GREEN,
+              }}
+            >
+              <Text style={{ color: GREEN, fontWeight: "800", fontSize: 10 }}>
+                {CHIP_LABELS[currentData.chip] ?? currentData.chip}
+              </Text>
+            </View>
+          </View>
         )}
 
         {loading && !currentData && (
-          <ActivityIndicator color={PURPLE} style={{ marginTop: 28 }} />
+          <ActivityIndicator color={GREEN} style={{ marginTop: 28 }} />
         )}
 
-        {(currentData || showBlankSquad) && (
-          <>
-            {currentData && (
-              <View
-                style={{
-                  flexDirection: "row",
-                  marginHorizontal: 12,
-                  marginTop: 12,
-                }}
-              >
-                {[
-                  {
-                    label: "GW points",
-                    value: currentData.history.points,
-                  },
-                  {
-                    label: "Total points",
-                    value: currentData.history.totalPoints,
-                  },
-                ].map((stat) => (
-                  <View
-                    key={stat.label}
-                    style={{
-                      flex: 1,
-                      marginHorizontal: 4,
-                      padding: 12,
-                      borderRadius: 14,
-                      backgroundColor: "#fff",
-                    }}
-                  >
-                    <Text style={{ color: "#756d78", fontSize: 12 }}>
-                      {stat.label}
-                    </Text>
-                    <Text
-                      style={{
-                        color: PURPLE,
-                        fontSize: 20,
-                        fontWeight: "800",
-                        marginTop: 2,
-                      }}
-                    >
-                      {stat.value ?? "—"}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
-            {currentData?.chip && (
-              <View
-                style={{
-                  alignSelf: "flex-start",
-                  marginHorizontal: 16,
-                  marginTop: 10,
-                  paddingHorizontal: 12,
-                  paddingVertical: 7,
-                  borderRadius: 16,
-                  backgroundColor: "#e7f8ef",
-                }}
-              >
-                <Text style={{ color: PURPLE, fontWeight: "700" }}>
-                  {CHIP_LABELS[currentData.chip] ?? currentData.chip} played
-                </Text>
-              </View>
-            )}
+        {currentData ? (
+          <Pitch picks={picks} selectedGw={selectedEvent} selectedPos={null} compactAvatar={true} />
+        ) : showBlankSquad ? (
+          <Pitch picks={blankPicks} selectedGw={selectedEvent} selectedPos={null} compactAvatar={true} />
+        ) : !loading ? (
+          <View style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: 24 }}>
             <Text
               style={{
-                color: PURPLE,
-                fontSize: 18,
-                fontWeight: "800",
-                marginHorizontal: 16,
-                marginTop: 12,
-                marginBottom: 8,
+                color: "#9db3a6",
+                fontSize: 14,
+                fontWeight: "600",
+                textAlign: "center",
+                lineHeight: 20,
               }}
             >
-              Squad
+              No past gameweek history available.
             </Text>
-            {currentData ? (
-              <Pitch picks={picks} selectedPos={null} />
-            ) : showBlankSquad ? (
-              <Pitch picks={blankPicks} selectedPos={null} />
-            ) : (
-              <Text style={{ color: "#666", marginHorizontal: 16 }}>
-                No squad details are available for this gameweek.
-              </Text>
-            )}
-          </>
-        )}
-
-        {!loading && !error && !currentData && !showBlankSquad && (
-          <Text style={{ color: "#666", marginHorizontal: 16, marginTop: 12 }}>
-            Select a gameweek to view its squad and performance.
-          </Text>
-        )}
-      </ScrollView>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
+

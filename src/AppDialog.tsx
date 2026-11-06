@@ -14,7 +14,6 @@ type Props = {
   onDismiss: () => void;
 };
 
-const PURPLE = "#37003c";
 const GREEN = "#00d982";
 
 export function AppDialog({
@@ -24,6 +23,15 @@ export function AppDialog({
   buttons,
   onDismiss,
 }: Props) {
+  const isWarning =
+    title.toLowerCase().includes("can't") ||
+    title.toLowerCase().includes("remove") ||
+    title.toLowerCase().includes("discard") ||
+    title.toLowerCase().includes("sure") ||
+    title.toLowerCase().includes("delete") ||
+    title.toLowerCase().includes("could not") ||
+    title.toLowerCase().includes("undo");
+
   return (
     <Modal
       visible={visible}
@@ -37,8 +45,8 @@ export function AppDialog({
           flex: 1,
           justifyContent: "center",
           alignItems: "center",
-          padding: 24,
-          backgroundColor: "rgba(19, 12, 24, 0.62)",
+          padding: 16,
+          backgroundColor: "rgba(5, 18, 11, 0.75)",
         }}
       >
         <Pressable
@@ -51,58 +59,101 @@ export function AppDialog({
           accessibilityViewIsModal
           style={{
             width: "100%",
-            maxWidth: 420,
-            padding: 22,
-            borderRadius: 24,
-            backgroundColor: "#fff",
-            elevation: 18,
-            shadowColor: "#150b19",
-            shadowOpacity: 0.22,
-            shadowRadius: 24,
-            shadowOffset: { width: 0, height: 12 },
+            maxWidth: 240,
+            padding: 14,
+            borderRadius: 16,
+            backgroundColor: "#11261d",
+            borderWidth: 1.5,
+            borderColor: "rgba(0, 217, 130, 0.25)",
+            alignItems: "center",
+            elevation: 20,
+            shadowColor: "#000",
+            shadowOpacity: 0.4,
+            shadowRadius: 16,
+            shadowOffset: { width: 0, height: 6 },
           }}
         >
+          {/* Close X Button in top right */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close dialog"
+            onPress={onDismiss}
+            hitSlop={8}
+            style={{
+              position: "absolute",
+              top: 8,
+              right: 8,
+              width: 22,
+              height: 22,
+              borderRadius: 11,
+              backgroundColor: "rgba(255, 255, 255, 0.08)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ color: "#b0c4b8", fontSize: 11, fontWeight: "900", includeFontPadding: false }}>✕</Text>
+          </Pressable>
+
+          {/* Top Icon Circle */}
           <View
             style={{
-              width: 42,
-              height: 5,
-              borderRadius: 3,
-              backgroundColor: GREEN,
-              marginBottom: 18,
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: "rgba(0, 217, 130, 0.12)",
+              borderWidth: 1.5,
+              borderColor: "rgba(0, 217, 130, 0.45)",
+              alignItems: "center",
+              justifyContent: "center",
+              marginTop: 2,
+              marginBottom: 10,
+              shadowColor: GREEN,
+              shadowOpacity: 0.25,
+              shadowRadius: 4,
+              elevation: 2,
             }}
-          />
+          >
+            <Text style={{ fontSize: 16, includeFontPadding: false }}>{isWarning ? "⚠️" : "🗑️"}</Text>
+          </View>
+
+          {/* Title */}
           <Text
             style={{
-              color: PURPLE,
-              fontSize: 20,
-              fontWeight: "800",
-              letterSpacing: -0.3,
+              color: "#ffffff",
+              fontSize: 15,
+              fontWeight: "900",
+              textAlign: "center",
+              letterSpacing: -0.2,
             }}
           >
             {title}
           </Text>
+
+          {/* Message */}
           <Text
             style={{
-              color: "#5e5662",
-              fontSize: 15,
-              lineHeight: 22,
-              marginTop: 10,
+              color: "#9db3a6",
+              fontSize: 11,
+              lineHeight: 15,
+              textAlign: "center",
+              marginTop: 4,
+              marginBottom: 14,
+              paddingHorizontal: 2,
             }}
           >
             {message}
           </Text>
 
+          {/* Buttons Row */}
           <View
             style={{
               flexDirection: "row",
-              justifyContent: "flex-end",
-              marginTop: 24,
+              width: "100%",
+              gap: 8,
             }}
           >
             {buttons.map((button, index) => {
-              const primary =
-                button.style !== "cancel" &&
-                (index === buttons.length - 1 || buttons.length === 1);
+              const isCancel = button.style === "cancel" || index === 0;
               return (
                 <Pressable
                   key={`${button.text}-${index}`}
@@ -112,23 +163,25 @@ export function AppDialog({
                     button.onPress?.();
                   }}
                   style={{
-                    minHeight: 44,
+                    flex: 1,
+                    minHeight: 34,
+                    borderRadius: 10,
+                    alignItems: "center",
                     justifyContent: "center",
-                    paddingHorizontal: 16,
-                    borderRadius: 16,
-                    marginLeft: 8,
-                    backgroundColor: primary
-                      ? button.style === "destructive"
-                        ? "#b3261e"
-                        : PURPLE
-                      : "#f1edf3",
+                    backgroundColor: isCancel ? "#1a3325" : GREEN,
+                    borderWidth: isCancel ? 1 : 0,
+                    borderColor: isCancel ? "rgba(255, 255, 255, 0.15)" : "transparent",
+                    shadowColor: isCancel ? "transparent" : GREEN,
+                    shadowOpacity: isCancel ? 0 : 0.25,
+                    shadowRadius: 4,
+                    elevation: isCancel ? 0 : 2,
                   }}
                 >
                   <Text
                     style={{
-                      color: primary ? "#fff" : PURPLE,
-                      fontSize: 14,
-                      fontWeight: "800",
+                      color: isCancel ? "#ffffff" : "#051a0f",
+                      fontSize: 12,
+                      fontWeight: "900",
                     }}
                   >
                     {button.text}
