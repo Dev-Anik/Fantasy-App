@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   Text,
@@ -9,33 +8,57 @@ import {
 } from "react-native";
 import { Image } from "expo-image";
 import type { ScrollViewInstance } from "react-native";
+import { leagueCategory } from "./fpl";
 import type {
   FplLeague,
   Gameweek,
+  H2hMatch,
+  LeagueCategory,
+  LeagueStanding,
   LeagueStandings,
   LeagueType,
-  MemberSquad,
 } from "./fpl";
 import { AppSymbol } from "./AppSymbol";
-import { ManagerHistory } from "./ManagerHistory";
+import { LeagueCard } from "./LeagueCard";
+import { LeagueDetails } from "./LeagueDetails";
+import { FadeIn } from "./FadeIn";
+
+const LEAGUE_SECTIONS: { category: LeagueCategory; title: string; subtitle: string }[] = [
+  { category: "classic", title: "Classic Leagues", subtitle: "Ranked by total points" },
+  { category: "h2h", title: "Head-to-Head Leagues", subtitle: "Weekly matches against other managers" },
+  { category: "general", title: "General Leagues", subtitle: "Overall, country, club and gameweek leagues" },
+];
 
 type Props = {
   leagues: FplLeague[];
   selectedLeague: FplLeague | null;
   standings: LeagueStandings | null;
+  h2hMatches: H2hMatch[];
+  h2hEvent: number | null;
+  h2hLoading: boolean;
+  userStanding: LeagueStanding | null;
+  userTotalPoints: number | null;
+  liveEventId: number | null;
+  liveEventPoints: number | null;
+  onSelectH2hEvent: (league: FplLeague, event: number) => void;
+  onCloseLeague: () => void;
   loading: boolean;
   error: string;
   gameweeks: Gameweek[];
   userEntryId?: number;
   onSelectLeague: (league: FplLeague, page?: number) => void;
   onJoin: (code: string) => void;
-  onCreate: (name: string, type: LeagueType, startEvent?: number, knockoutRounds?: number) => void;
+  onCreate: (
+    name: string,
+    type: LeagueType,
+    startEvent?: number,
+    knockoutRounds?: number,
+    maxEntries?: number,
+  ) => void;
   inviteCode: string | null;
-  memberSquad: MemberSquad | null;
-  managerLoading: boolean;
-  managerError: string;
   onGetInviteCode: (league: FplLeague) => void;
   onViewMember: (entry: number, event: number, teamName?: string, managerName?: string) => void;
+  successSignal?: number;
 };
 
 const GREEN = "#00d982";
@@ -47,6 +70,15 @@ export function LeagueHub({
   leagues,
   selectedLeague,
   standings,
+  h2hMatches,
+  h2hEvent,
+  h2hLoading,
+  userStanding,
+  userTotalPoints,
+  liveEventId,
+  liveEventPoints,
+  onSelectH2hEvent,
+  onCloseLeague,
   loading,
   error,
   gameweeks,
@@ -55,11 +87,9 @@ export function LeagueHub({
   onJoin,
   onCreate,
   inviteCode,
-  memberSquad,
-  managerLoading,
-  managerError,
   onGetInviteCode,
   onViewMember,
+  successSignal,
 }: Props) {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -80,37 +110,38 @@ export function LeagueHub({
   const [showGwDropdown, setShowGwDropdown] = useState(false);
   const [showKnockoutDropdown, setShowKnockoutDropdown] = useState(false);
   const [actionModal, setActionModal] = useState<"none" | "create" | "join">("none");
-  const [selectedMember, setSelectedMember] =
-    useState<LeagueStandings["standings"]["results"][number] | null>(null);
-  const [selectedEvent, setSelectedEvent] = useState(1);
   const [showLeagueDetails, setShowLeagueDetails] = useState(false);
   const scrollViewRef = useRef<ScrollViewInstance>(null);
+  // A league opens once its table has arrived (or the request has failed);
+  // until then the list stays put and the tapped card shows a spinner.
+  const detailsReady =
+    showLeagueDetails && !!selectedLeague && (!!standings || !!error || !loading);
+  const openingLeague = showLeagueDetails && !detailsReady ? selectedLeague : null;
 
   useEffect(() => {
-    if (standings) {
-      const timer = setTimeout(() => {
-        scrollViewRef.current?.scrollTo({
-          y: 0,
-          animated: true,
-        });
-      }, 50);
-      return () => clearTimeout(timer);
+    if (successSignal) {
+      setActionModal("none");
+      setCode("");
+      setName("");
     }
-  }, [standings]);
+  }, [successSignal]);
 
-  const userRow =
-    standings?.standings?.results?.find((row) => row.entry === userEntryId) ??
-    (selectedLeague
-      ? {
-          entry: userEntryId ?? 0,
-          entry_name: "Your Team",
-          player_name: "",
-          rank: selectedLeague.entry_rank ?? 0,
-          last_rank: selectedLeague.entry_last_rank,
-          total: 0,
-          event_total: 0,
-        }
-      : undefined);
+  // Jump to the top when a different league or standings page is shown, but
+  // not when the same page is quietly refreshed in the background.
+  const standingsLeagueId = standings?.league?.id;
+  const standingsPage = standings?.standings?.page;
+  useEffect(() => {
+    if (standingsLeagueId == null) return;
+    const timer = setTimeout(() => {
+      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [standingsLeagueId, standingsPage]);
+
+  const openLeague = (league: FplLeague) => {
+    setShowLeagueDetails(true);
+    onSelectLeague(league);
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: DARK_GREEN }}>
@@ -131,7 +162,7 @@ export function LeagueHub({
         contentContainerStyle={{ padding: 12, paddingBottom: 80 }}
         keyboardShouldPersistTaps="handled"
       >
-        {!showLeagueDetails && (
+        {!detailsReady && (
           <>
             {/* Header / Title Section */}
             <View style={{ marginBottom: 10 }}>
@@ -218,7 +249,11 @@ export function LeagueHub({
                     marginBottom: 5,
                   }}
                 >
-                  <Text style={{ fontSize: 13 }}>🔗</Text>
+                  <AppSymbol
+                    name={{ ios: "link", android: "link", web: "link" }}
+                    color={GREEN}
+                    size={14}
+                  />
                 </View>
                 <Text style={{ color: "#fff", fontWeight: "900", fontSize: 12, textAlign: "center" }}>
                   Join League
@@ -262,11 +297,7 @@ export function LeagueHub({
                 />
                 <Pressable
                   disabled={loading || !code.trim()}
-                  onPress={() => {
-                    onJoin(code.trim());
-                    setCode("");
-                    setActionModal("none");
-                  }}
+                  onPress={() => onJoin(code.trim())}
                   style={{
                     backgroundColor: GREEN,
                     borderRadius: 10,
@@ -534,11 +565,15 @@ export function LeagueHub({
 
                 <Pressable
                   disabled={loading || !name.trim()}
-                  onPress={() => {
-                    onCreate(name.trim(), leagueType, scoringStartGw, leagueType === "h2h" ? knockoutRounds : undefined);
-                    setName("");
-                    setActionModal("none");
-                  }}
+                  onPress={() =>
+                    onCreate(
+                      name.trim(),
+                      leagueType,
+                      scoringStartGw,
+                      leagueType === "h2h" ? knockoutRounds : undefined,
+                      Number(maxPlayers) >= 2 ? Number(maxPlayers) : undefined,
+                    )
+                  }
                   style={{
                     backgroundColor: GREEN,
                     borderRadius: 10,
@@ -552,496 +587,99 @@ export function LeagueHub({
               </View>
             )}
 
-            {/* Leagues List Grouped by Classics and Head to Head */}
+            {!!error && (
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "flex-start",
+                  backgroundColor: "rgba(239, 68, 68, 0.12)",
+                  borderWidth: 1,
+                  borderColor: "rgba(239, 68, 68, 0.35)",
+                  borderRadius: 12,
+                  padding: 10,
+                  marginBottom: 12,
+                  gap: 8,
+                }}
+              >
+                <AppSymbol
+                  name={{ ios: "exclamationmark.triangle.fill", android: "warning", web: "warning" }}
+                  color="#ff8080"
+                  size={14}
+                />
+                <Text style={{ color: "#ff9d9d", fontSize: 12, fontWeight: "600", flex: 1, lineHeight: 16 }}>
+                  {error}
+                </Text>
+              </View>
+            )}
+
+            {/* Leagues list, grouped as Classic / Head-to-Head / General */}
             {leagues.length === 0 ? (
               <Text style={{ color: "#9db3a6", marginTop: 8, fontSize: 12, textAlign: "center" }}>
                 No leagues were returned for your FPL account.
               </Text>
             ) : (
-              <>
-                {leagues.some((l) => l.kind === "classic") && (
-                  <View style={{ marginTop: 12, marginBottom: 4 }}>
-                    <Text style={{ color: "#fff", fontSize: 13, fontWeight: "900", letterSpacing: -0.1 }}>
-                      Classics
-                    </Text>
-                  </View>
-                )}
-                {leagues
-                  .filter((l) => l.kind === "classic")
-                  .map((league) => (
-                    <Pressable
-                      key={`${league.kind}-${league.id}`}
-                      onPress={() => {
-                        setSelectedMember(null);
-                        setShowLeagueDetails(true);
-                        onSelectLeague(league);
-                      }}
-                      style={{
-                        backgroundColor: CARD_BG,
-                        borderRadius: 12,
-                        padding: 10,
-                        marginTop: 6,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        borderWidth: 1,
-                        borderColor: CARD_BORDER,
-                      }}
+              LEAGUE_SECTIONS.map((section) => {
+                const sectionLeagues = leagues.filter(
+                  (league) => leagueCategory(league) === section.category,
+                );
+                if (sectionLeagues.length === 0) return null;
+                return (
+                  <View key={section.category} style={{ marginTop: 14 }}>
+                    <Text
+                      accessibilityRole="header"
+                      style={{ color: "#fff", fontSize: 13, fontWeight: "900", letterSpacing: -0.1 }}
                     >
-                      <View style={{ flex: 1, marginRight: 10 }}>
-                        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }} numberOfLines={1}>
-                          {league.name}
-                        </Text>
-                      </View>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                        {(() => {
-                          const currentRank = league.entry_rank ?? 0;
-                          const lastRank = league.entry_last_rank;
-                          const hasHistory = lastRank !== null && lastRank !== undefined && lastRank > 0;
-                          const isUp = hasHistory ? currentRank <= lastRank : true;
-                          return (
-                            <View
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                backgroundColor: "rgba(0, 0, 0, 0.25)",
-                                paddingHorizontal: 6,
-                                paddingVertical: 3,
-                                borderRadius: 8,
-                                borderWidth: 1,
-                                borderColor: CARD_BORDER,
-                                gap: 4,
-                              }}
-                            >
-                              {hasHistory ? (
-                                <>
-                                  <Image
-                                    source={isUp ? require("../assets/images/up.png") : require("../assets/images/down.png")}
-                                    style={{ width: 12, height: 12 }}
-                                    contentFit="contain"
-                                  />
-                                  <Text style={{ color: "#c5d8ce", fontWeight: "900", fontSize: 11 }}>
-                                    Rank {league.entry_rank ?? "0"}
-                                  </Text>
-                                </>
-                              ) : (
-                                <Text style={{ color: "#c5d8ce", fontWeight: "900", fontSize: 11 }}>
-                                  N/A
-                                </Text>
-                              )}
-                            </View>
-                          );
-                        })()}
-                        <Text style={{ color: "#9db3a6", fontSize: 14, fontWeight: "bold" }}>›</Text>
-                      </View>
-                    </Pressable>
-                  ))}
-
-                {leagues.some((l) => l.kind === "h2h") && (
-                  <View style={{ marginTop: 16, marginBottom: 4 }}>
-                    <Text style={{ color: "#fff", fontSize: 13, fontWeight: "900", letterSpacing: -0.1 }}>
-                      Head to Head
+                      {section.title}
                     </Text>
+                    <Text style={{ color: "#9db3a6", fontSize: 10, marginTop: 1 }}>
+                      {section.subtitle}
+                    </Text>
+                    {sectionLeagues.map((league) => (
+                      <LeagueCard
+                        key={`${league.kind}-${league.id}`}
+                        league={league}
+                        loading={
+                          openingLeague?.id === league.id && openingLeague.kind === league.kind
+                        }
+                        onPress={openLeague}
+                      />
+                    ))}
                   </View>
-                )}
-                {leagues
-                  .filter((l) => l.kind === "h2h")
-                  .map((league) => (
-                    <Pressable
-                      key={`${league.kind}-${league.id}`}
-                      onPress={() => {
-                        setSelectedMember(null);
-                        setShowLeagueDetails(true);
-                        onSelectLeague(league);
-                      }}
-                      style={{
-                        backgroundColor: CARD_BG,
-                        borderRadius: 12,
-                        padding: 10,
-                        marginTop: 6,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        borderWidth: 1,
-                        borderColor: CARD_BORDER,
-                      }}
-                    >
-                      <View style={{ flex: 1, marginRight: 10 }}>
-                        <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }} numberOfLines={1}>
-                          {league.name}
-                        </Text>
-                      </View>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                        {(() => {
-                          const currentRank = league.entry_rank ?? 0;
-                          const lastRank = league.entry_last_rank;
-                          const hasHistory = lastRank !== null && lastRank !== undefined && lastRank > 0;
-                          const isUp = hasHistory ? currentRank <= lastRank : true;
-                          return (
-                            <View
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                backgroundColor: "rgba(0, 0, 0, 0.25)",
-                                paddingHorizontal: 6,
-                                paddingVertical: 3,
-                                borderRadius: 8,
-                                borderWidth: 1,
-                                borderColor: CARD_BORDER,
-                                gap: 4,
-                              }}
-                            >
-                              {hasHistory ? (
-                                <>
-                                  <Image
-                                    source={isUp ? require("../assets/images/up.png") : require("../assets/images/down.png")}
-                                    style={{ width: 12, height: 12 }}
-                                    contentFit="contain"
-                                  />
-                                  <Text style={{ color: "#c5d8ce", fontWeight: "900", fontSize: 11 }}>
-                                    Rank {league.entry_rank ?? "0"}
-                                  </Text>
-                                </>
-                              ) : (
-                                <Text style={{ color: "#c5d8ce", fontWeight: "900", fontSize: 11 }}>
-                                  N/A
-                                </Text>
-                              )}
-                            </View>
-                          );
-                        })()}
-                        <Text style={{ color: "#9db3a6", fontSize: 14, fontWeight: "bold" }}>›</Text>
-                      </View>
-                    </Pressable>
-                  ))}
-              </>
+                );
+              })
             )}
           </>
         )}
 
-        {selectedLeague && showLeagueDetails && (
-          <View style={{ marginTop: 4 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Back to your leagues"
-              onPress={() => {
-                setSelectedMember(null);
-                setShowLeagueDetails(false);
-              }}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              style={({ pressed }) => ({
-                alignSelf: "flex-start",
-                backgroundColor: "rgba(0, 217, 130, 0.15)",
-                borderWidth: 1,
-                borderColor: "rgba(0, 217, 130, 0.4)",
-                borderRadius: 16,
-                paddingHorizontal: 14,
-                height: 34,
-                marginBottom: 12,
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 4,
-                opacity: pressed ? 0.7 : 1,
-              })}
-            >
-              <AppSymbol
-                name={{ ios: "chevron.left", android: "chevron_left", web: "chevron_left" }}
-                color={GREEN}
-                size={16}
-              />
-              <Text
-                style={{
-                  color: "#fff",
-                  fontSize: 13,
-                  fontWeight: "800",
-                  includeFontPadding: false,
-                  textAlignVertical: "center",
-                }}
-              >
-                Your leagues
-              </Text>
-            </Pressable>
-            <Text style={{ color: "#fff", fontSize: 16, fontWeight: "900", marginBottom: 6 }}>
-              {standings?.league?.name ?? selectedLeague.name}
-            </Text>
-
-            {/* User Position & Team Info Summary Card at Top */}
-            {userRow && (
-              <View
-                style={{
-                  backgroundColor: CARD_BG,
-                  borderRadius: 12,
-                  padding: 12,
-                  marginBottom: 10,
-                  borderWidth: 1,
-                  borderColor: CARD_BORDER,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                }}
-              >
-                {/* Left: Your Rank */}
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: "#9db3a6", fontSize: 11, fontWeight: "800", marginBottom: 2 }}>
-                    Your Rank
-                  </Text>
-                  <Text style={{ color: "#fff", fontSize: 20, fontWeight: "900", letterSpacing: -0.5 }}>
-                    #{userRow.rank}
-                  </Text>
-                </View>
-
-                {/* Vertical Divider */}
-                <View
-                  style={{
-                    width: 1,
-                    height: 28,
-                    backgroundColor: "rgba(255, 255, 255, 0.15)",
-                    marginHorizontal: 16,
-                  }}
-                />
-
-                {/* Right: Total Points */}
-                <View style={{ flex: 1, alignItems: "flex-end" }}>
-                  <Text style={{ color: "#9db3a6", fontSize: 11, fontWeight: "800", marginBottom: 2 }}>
-                    Total Points
-                  </Text>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <Text style={{ color: "#fff", fontSize: 20, fontWeight: "900", letterSpacing: -0.5 }}>
-                      {userRow.total}
-                    </Text>
-                    {(() => {
-                      const lastRank = userRow.last_rank;
-                      const hasHistory = lastRank !== null && lastRank !== undefined && lastRank > 0;
-                      const isUp = hasHistory ? userRow.rank <= lastRank : true;
-                      const eventTotal = userRow.event_total ?? 0;
-                      return (
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-                          {hasHistory && (
-                            <Image
-                              source={isUp ? require("../assets/images/up.png") : require("../assets/images/down.png")}
-                              style={{ width: 10, height: 10 }}
-                              contentFit="contain"
-                            />
-                          )}
-                          <Text style={{ color: GREEN, fontWeight: "900", fontSize: 12 }}>
-                            {eventTotal >= 0 ? `+${eventTotal}` : eventTotal}
-                          </Text>
-                        </View>
-                      );
-                    })()}
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {selectedLeague.entry_can_invite && (
-              <View style={{ marginBottom: 10 }}>
-                {inviteCode ? (
-                  <Text style={{ color: GREEN, fontWeight: "800", fontSize: 12 }}>
-                    Invite code: {inviteCode}
-                  </Text>
-                ) : (
-                  <Pressable
-                    disabled={loading}
-                    onPress={() => onGetInviteCode(selectedLeague)}
-                    style={{
-                      backgroundColor: "rgba(0, 217, 130, 0.15)",
-                      borderRadius: 10,
-                      paddingVertical: 6,
-                      paddingHorizontal: 10,
-                      alignSelf: "flex-start",
-                      borderWidth: 1,
-                      borderColor: GREEN,
-                      opacity: loading ? 0.5 : 1,
-                    }}
-                  >
-                    <Text style={{ color: GREEN, fontWeight: "900", fontSize: 11 }}>
-                      Show invite code
-                    </Text>
-                  </Pressable>
-                )}
-              </View>
-            )}
-
-            {loading && (
-              <ActivityIndicator color={GREEN} style={{ marginTop: 12 }} />
-            )}
-            {!!error && (
-              <Text style={{ color: "#ffb4b4", marginTop: 10, fontSize: 12 }}>{error}</Text>
-            )}
-
-            <View>
-              {standings?.standings?.results && (
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    paddingHorizontal: 10,
-                    paddingVertical: 6,
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text style={{ width: 55, color: "#9db3a6", fontSize: 10, fontWeight: "800", textTransform: "uppercase" }}>
-                    Rank
-                  </Text>
-                  <Text style={{ flex: 1, color: "#9db3a6", fontSize: 10, fontWeight: "800", textTransform: "uppercase", paddingLeft: 8 }}>
-                    Team
-                  </Text>
-                  <Text style={{ width: 45, textAlign: "right", color: "#9db3a6", fontSize: 10, fontWeight: "800", textTransform: "uppercase" }}>
-                    GWP
-                  </Text>
-                  <Text style={{ width: 60, textAlign: "right", color: "#9db3a6", fontSize: 10, fontWeight: "800", textTransform: "uppercase" }}>
-                    Total
-                  </Text>
-                </View>
-              )}
-
-              {standings?.standings?.results?.map((row) => {
-                const isUser = row.entry === userEntryId;
-                const lastRank = row.last_rank;
-                const hasHistory = lastRank !== null && lastRank !== undefined && lastRank > 0;
-                const isUp = hasHistory ? row.rank < lastRank : false;
-                const isDown = hasHistory ? row.rank > lastRank : false;
-
-                return (
-                  <Pressable
-                    key={row.entry}
-                    onPress={() => {
-                      const validGw = gameweeks.filter((gw) => gw.finished || gw.isCurrent);
-                      const event = validGw[validGw.length - 1]?.id ?? 1;
-                      onViewMember(row.entry, event, row.entry_name || row.player_name, row.player_name);
-                    }}
-                    style={{
-                      backgroundColor: isUser ? "rgba(0, 217, 130, 0.18)" : CARD_BG,
-                      borderRadius: 10,
-                      padding: 10,
-                      marginTop: 6,
-                      flexDirection: "row",
-                      alignItems: "center",
-                      borderWidth: isUser ? 1.5 : 1,
-                      borderColor: isUser ? GREEN : CARD_BORDER,
-                    }}
-                  >
-                    {/* Rank Column */}
-                    <View style={{ width: 55, flexDirection: "row", alignItems: "center", gap: 4 }}>
-                      <Text style={{ color: "#fff", fontSize: 12, fontWeight: "900" }}>
-                        {row.rank}
-                      </Text>
-                      {isUp && (
-                        <Image
-                          source={require("../assets/images/up.png")}
-                          style={{ width: 10, height: 10 }}
-                          contentFit="contain"
-                        />
-                      )}
-                      {isDown && (
-                        <Image
-                          source={require("../assets/images/down.png")}
-                          style={{ width: 10, height: 10 }}
-                          contentFit="contain"
-                        />
-                      )}
-                    </View>
-
-                    {/* Team Column */}
-                    <View style={{ flex: 1, marginRight: 8, paddingLeft: 8 }}>
-                      <Text style={{ color: "#fff", fontSize: 12, fontWeight: "900" }} numberOfLines={1}>
-                        {row.entry_name || row.player_name}
-                      </Text>
-                      {row.player_name && (
-                        <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "400", marginTop: 1 }} numberOfLines={1}>
-                          {row.player_name}
-                        </Text>
-                      )}
-                    </View>
-
-                    {/* GWP Column */}
-                    <Text style={{ width: 45, textAlign: "right", color: "#c5d8ce", fontSize: 11, fontWeight: "700" }}>
-                      {row.event_total}
-                    </Text>
-
-                    {/* Total Column */}
-                    <View style={{ width: 60, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 2 }}>
-                      <Text style={{ color: isUser ? GREEN : "#fff", fontSize: 12, fontWeight: "900" }}>
-                        {row.total}
-                      </Text>
-                      <Text style={{ color: "#9db3a6", fontSize: 12, fontWeight: "bold" }}>›</Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
-
-              {standings && (
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginTop: 12,
-                  }}
-                >
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Previous page of league standings"
-                    disabled={loading || standings.standings.page <= 1}
-                    onPress={() =>
-                      onSelectLeague(
-                        selectedLeague,
-                        standings.standings.page - 1,
-                      )
-                    }
-                    style={{
-                      backgroundColor: CARD_BG,
-                      borderRadius: 10,
-                      paddingHorizontal: 12,
-                      paddingVertical: 7,
-                      borderWidth: 1,
-                      borderColor: CARD_BORDER,
-                      opacity: loading || standings.standings.page <= 1 ? 0.45 : 1,
-                    }}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "800", fontSize: 11 }}>
-                      Previous
-                    </Text>
-                  </Pressable>
-                  {loading ? (
-                    <ActivityIndicator
-                      accessibilityLabel="Loading league standings"
-                      color={GREEN}
-                      size="small"
-                    />
-                  ) : (
-                    <Text style={{ color: "#9db3a6", fontSize: 11, fontWeight: "600" }}>
-                      Page {standings.standings.page}
-                    </Text>
-                  )}
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Next page of league standings"
-                    disabled={loading || !standings.standings.has_next}
-                    onPress={() =>
-                      onSelectLeague(
-                        selectedLeague,
-                        standings.standings.page + 1,
-                      )
-                    }
-                    style={{
-                      backgroundColor: CARD_BG,
-                      borderRadius: 10,
-                      paddingHorizontal: 12,
-                      paddingVertical: 7,
-                      borderWidth: 1,
-                      borderColor: CARD_BORDER,
-                      opacity: loading || !standings.standings.has_next ? 0.45 : 1,
-                    }}
-                  >
-                    <Text style={{ color: "#fff", fontWeight: "800", fontSize: 11 }}>Next</Text>
-                  </Pressable>
-                </View>
-              )}
-            </View>
-          </View>
+        {selectedLeague && detailsReady && (
+          <FadeIn key={`${selectedLeague.kind}-${selectedLeague.id}`} offsetX={24} offsetY={0}>
+          <LeagueDetails
+            // Remount per league so the Standings/Matches tab starts fresh.
+            key={`${selectedLeague.kind}-${selectedLeague.id}`}
+            league={selectedLeague}
+            standings={standings}
+            userStanding={userStanding}
+            userEntryId={userEntryId}
+            userTotalPoints={userTotalPoints}
+            liveEventId={liveEventId}
+            liveEventPoints={liveEventPoints}
+            h2hMatches={h2hMatches}
+            h2hEvent={h2hEvent}
+            h2hLoading={h2hLoading}
+            gameweeks={gameweeks}
+            loading={loading}
+            error={error}
+            inviteCode={inviteCode}
+            onBack={() => {
+              setShowLeagueDetails(false);
+              onCloseLeague();
+            }}
+            onPage={(page) => onSelectLeague(selectedLeague, page)}
+            onGetInviteCode={() => onGetInviteCode(selectedLeague)}
+            onSelectH2hEvent={(event) => onSelectH2hEvent(selectedLeague, event)}
+            onViewMember={onViewMember}
+          />
+          </FadeIn>
         )}
       </ScrollView>
 

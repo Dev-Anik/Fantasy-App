@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   Easing,
   Modal,
   Platform,
@@ -9,36 +10,54 @@ import {
   ScrollView,
   StatusBar,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { Image } from "expo-image";
 import { GlassView } from "expo-glass-effect";
 import type { SymbolViewProps } from "expo-symbols";
 import { AppDialog } from "../AppDialog";
-import type { DialogButton } from "../AppDialog";
+import type { DialogButton, DialogKind } from "../AppDialog";
 import { AppSymbol } from "../AppSymbol";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 import {
+  beginSignIn,
+  completeSignIn,
+  getAccessToken,
+  hasSession,
+  isSignInRedirect,
+  PendingSignIn,
+  SessionExpiredError,
+  signOut,
+  withAuth,
+} from "../auth";
+import {
+  buildFetchJs,
   buildLeagueActionJs,
   buildSaveJs,
   buildTransferJs,
-  FETCH_JS,
   FplLeague,
+  H2hMatch,
+  LeagueAction,
+  LeagueStanding,
   LeagueStandings,
   LeagueType,
   MemberSquad,
   Player,
   Row,
+  seasonLabel,
   Squad,
 } from "../fpl";
 import { LeagueHub } from "../LeagueHub";
 import { ManagerHistory } from "../ManagerHistory";
-import { Pitch } from "../Pitch";
+import { FadeIn } from "../FadeIn";
+import { Pitch, preloadAvatars } from "../Pitch";
 import { PlayerDetailsSheet } from "../PlayerDetailsSheet";
 import { PlayerPicker } from "../PlayerPicker";
+import { SquadSummaryBar } from "../SquadSummaryBar";
+import { TransferSummaryBar } from "../TransferSummaryBar";
 
 if ((Text as any).defaultProps == null) (Text as any).defaultProps = {};
 (Text as any).defaultProps.style = { fontFamily: "Roboto" };
@@ -50,8 +69,16 @@ type Pending = { pos: number; inn: Player };
 type PlayableChip = "wildcard" | "freehit" | "bboost" | "3xc";
 
 const STORAGE_SQUAD = "profpl_cached_squad";
+// How often league ranks are re-read from FPL while the leagues tab is open.
+const LEAGUE_REFRESH_MS = 60_000;
 const STORAGE_LOGGED_IN = "profpl_is_logged_in";
 const STORAGE_CREDS = "profpl_user_credentials";
+
+// Earlier versions stored the FPL password; this removes any that is left.
+async function clearCredentials() {
+  await SecureStore.deleteItemAsync(STORAGE_CREDS).catch(() => {});
+  await AsyncStorage.removeItem(STORAGE_CREDS).catch(() => {});
+}
 
 const CHIP_OPTIONS: { id: PlayableChip; label: string; mode: Mode }[] = [
   { id: "wildcard", label: "Wildcard", mode: "transfers" },
@@ -101,38 +128,6 @@ function Feature({
         <AppSymbol name={icon} color="#fff" size={18} />
       </View>
       <Text style={{ color: "#fff", fontSize: 15 }}>{text}</Text>
-    </View>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <View
-      style={{
-        flex: 1,
-        height: 30,
-        justifyContent: "center",
-        backgroundColor: "rgba(255,255,255,0.08)",
-        borderColor: "rgba(255,255,255,0.1)",
-        borderWidth: 1,
-        borderRadius: 8,
-        paddingHorizontal: 6,
-        marginHorizontal: 3,
-      }}
-    >
-      <Text style={{ color: "#cdb9d1", fontSize: 8, lineHeight: 9 }}>
-        {label}
-      </Text>
-      <Text
-        style={{
-          color: "#fff",
-          fontSize: 11,
-          lineHeight: 13,
-          fontWeight: "bold",
-        }}
-      >
-        {value}
-      </Text>
     </View>
   );
 }
@@ -303,6 +298,7 @@ export default function Index() {
     title: string;
     message: string;
     buttons: DialogButton[];
+    kind: DialogKind;
   } | null>(null);
   const [pickPos, setPickPos] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -318,6 +314,11 @@ export default function Index() {
     isOwnPoints?: boolean;
   } | null>(null);
   const [activeMemberEvent, setActiveMemberEvent] = useState<number>(1);
+
+  // Decode the kit avatars once, up front, so pitches render with them in place.
+  useEffect(() => {
+    preloadAvatars();
+  }, []);
 
   const [nowMs, setNowMs] = useState(Date.now());
   const [fplEvents, setFplEvents] = useState<any[]>([]);
@@ -382,36 +383,106 @@ export default function Index() {
   }, [squad, fplEvents, nowMs]);
 
   const modalWebRef = useRef<any>(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [showGoogleModal, setShowGoogleModal] = useState(false);
   const [googleModalKey, setGoogleModalKey] = useState(0);
+  // The official login page for the sign-in in progress.
+  const [signInUrl, setSignInUrl] = useState("about:blank");
+  const pendingSignIn = useRef<PendingSignIn | null>(null);
 
-  const lastAttemptedEmail = useRef("");
-  const lastAttemptedPassword = useRef("");
+  // Bumped to remount the FPL WebView if the OS kills it in the background.
+  const [webKey, setWebKey] = useState(0);
+  // False while the FPL page is (re)loading: scripts injected then are lost,
+  // so they wait here until the page is ready.
+  const webReady = useRef(false);
+  const queuedScripts = useRef<string[]>([]);
+  // Watchdog for the whole sign-in, from the login page to the squad arriving.
+  const loginTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Signed in, now waiting for the squad to load.
+  const awaitingSquad = useRef(false);
+  // Nobody is signed in: ignore anything the FPL page reports.
+  const signedOut = useRef(false);
+  // One recheck is allowed before a rejected session shows the login.
+  const sessionRetried = useRef(false);
+  // Reload the squad when the FPL page next finishes loading.
+  const checkOnLoad = useRef(true);
+  const webLoginDone = useRef(false);
+
+  const stopLoginTimer = () => {
+    if (loginTimer.current) clearTimeout(loginTimer.current);
+    loginTimer.current = null;
+  };
+  const finishLogin = (errorText = "") => {
+    stopLoginTimer();
+    awaitingSquad.current = false;
+    setLoginLoading(false);
+    setLoginError(errorText);
+  };
+  const startLoginTimer = () => {
+    stopLoginTimer();
+    loginTimer.current = setTimeout(() => {
+      loginTimer.current = null;
+      awaitingSquad.current = false;
+      setLoginLoading(false);
+      setLoginError(
+        "Sign in is taking too long. Please check your connection and try again.",
+      );
+    }, 45000);
+  };
+  useEffect(() => stopLoginTimer, []);
+
+  // The session can no longer be renewed: the user has to sign in again.
+  const sessionLost = () => {
+    if (signedOut.current) return;
+    signedOut.current = true;
+    sessionRetried.current = false;
+    signOut();
+    AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
+    if (stageRef.current === "squad" || awaitingSquad.current) {
+      finishLogin("Your FPL session has expired. Please sign in again.");
+      setStage("login");
+    } else if (stageRef.current === "checking") {
+      setStage("welcome");
+    }
+  };
+
+  // Runs a script in the FPL WebView with the user's access token attached,
+  // renewing the token first if it is about to expire.
+  const runInWeb = (script: string) => {
+    getAccessToken()
+      .then(
+        (token) => token,
+        (error) => {
+          if (error instanceof SessionExpiredError) {
+            sessionLost();
+            return undefined;
+          }
+          // Renewal failed for network reasons; the request itself reports it.
+          return null;
+        },
+      )
+      .then((token) => {
+        if (token === undefined) return;
+        const wrapped = withAuth(script, token);
+        if (webReady.current) webRef.current?.injectJavaScript(wrapped);
+        else queuedScripts.current.push(wrapped);
+      });
+  };
 
   useEffect(() => {
     (async () => {
+      // Earlier versions kept the FPL password on the device; it is no longer
+      // needed, so remove it.
+      clearCredentials();
       try {
-        const savedCreds = await AsyncStorage.getItem(STORAGE_CREDS);
-        if (savedCreds) {
-          const { email: savedEmail, password: savedPassword } = JSON.parse(savedCreds);
-          if (savedEmail) {
-            setEmail(savedEmail);
-            lastAttemptedEmail.current = savedEmail;
-          }
-          if (savedPassword) {
-            setPassword(savedPassword);
-            lastAttemptedPassword.current = savedPassword;
-          }
+        if (!(await hasSession())) {
+          signedOut.current = true;
+          setStage("welcome");
+          return;
         }
-
-        const loggedInFlag = await AsyncStorage.getItem(STORAGE_LOGGED_IN);
         const cachedSquadStr = await AsyncStorage.getItem(STORAGE_SQUAD);
-        if (loggedInFlag === "true" && cachedSquadStr) {
+        if (cachedSquadStr) {
           const cachedSquad = JSON.parse(cachedSquadStr);
           if (cachedSquad && cachedSquad.entry) {
             setSquad(cachedSquad);
@@ -422,96 +493,74 @@ export default function Index() {
     })();
   }, []);
 
+  // Coming back to the app: renew the session if it is close to expiring, so
+  // the next action does not have to wait for it.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active" || signedOut.current) return;
+      getAccessToken().catch((error) => {
+        if (error instanceof SessionExpiredError) sessionLost();
+      });
+    });
+    return () => subscription.remove();
+  }, []);
+
   const closeGoogleModal = () => {
     setShowGoogleModal(false);
-    modalWebRef.current?.injectJavaScript('window.location.href = "https://fantasy.premierleague.com/";');
   };
 
-  const handleLogin = () => {
-    const trimmedEmail = email.trim();
-    if (!trimmedEmail || !password.trim()) {
-      setLoginError("Please enter both your email address and password.");
-      return;
-    }
-    lastAttemptedEmail.current = trimmedEmail;
-    lastAttemptedPassword.current = password;
-    setLoginLoading(true);
+  // Opens the official Premier League login page.
+  const openSignIn = () => {
+    const pending = beginSignIn();
+    pendingSignIn.current = pending;
+    webLoginDone.current = false;
     setLoginError("");
+    setSignInUrl(pending.url);
+    setGoogleModalKey((k) => k + 1);
+    setShowGoogleModal(true);
+  };
 
-    const loginScript = `
-      (function() {
-        const send = (o) => window.ReactNativeWebView.postMessage(JSON.stringify(o));
-        try {
-          let form = document.getElementById("profpl_login_form");
-          if (form) form.remove();
+  // The login page has redirected back with a sign-in code: swap it for the
+  // session tokens and load the squad.
+  const finishWebSignIn = (redirectUrl: string) => {
+    const pending = pendingSignIn.current;
+    if (webLoginDone.current || !pending) return;
+    webLoginDone.current = true;
+    pendingSignIn.current = null;
+    closeGoogleModal();
+    awaitingSquad.current = true;
+    setLoginError("");
+    setLoginLoading(true);
+    startLoginTimer();
+    completeSignIn(redirectUrl, pending).then(
+      () => {
+        signedOut.current = false;
+        sessionRetried.current = false;
+        check();
+      },
+      (error) => finishLogin(error?.message || "Sign in failed. Please try again."),
+    );
+  };
 
-          form = document.createElement("form");
-          form.id = "profpl_login_form";
-          form.method = "POST";
-          form.action = "https://fantasy.premierleague.com/accounts/login/";
+  const onWebLoadEnd = () => {
+    webReady.current = true;
+    const queued = queuedScripts.current;
+    queuedScripts.current = [];
+    queued.forEach((script) => webRef.current?.injectJavaScript(script));
+    if (signedOut.current) return;
+    // Once the squad is on screen a page reload must not refetch it, as that
+    // would discard unsaved edits.
+    if (stageRef.current === "squad" && !checkOnLoad.current) return;
+    checkOnLoad.current = false;
+    // A queued script may already be the squad load.
+    if (queued.length === 0) check();
+  };
 
-          const inputLogin = document.createElement("input");
-          inputLogin.name = "login";
-          inputLogin.value = ${JSON.stringify(trimmedEmail)};
-          form.appendChild(inputLogin);
-
-          const inputPass = document.createElement("input");
-          inputPass.name = "password";
-          inputPass.value = ${JSON.stringify(password)};
-          form.appendChild(inputPass);
-
-          const inputApp = document.createElement("input");
-          inputApp.name = "app";
-          inputApp.value = "fpl-web";
-          form.appendChild(inputApp);
-
-          const inputRedir = document.createElement("input");
-          inputRedir.name = "redirect_uri";
-          inputRedir.value = "https://fantasy.premierleague.com/";
-          form.appendChild(inputRedir);
-
-          document.body.appendChild(form);
-
-          let attempts = 0;
-          const checkTimer = setInterval(async () => {
-            attempts++;
-            try {
-              const meRes = await fetch("https://fantasy.premierleague.com/api/me/", { credentials: "include" });
-              if (meRes.ok) {
-                const me = await meRes.json().catch(() => null);
-                if (me && me.player && me.player.entry) {
-                  clearInterval(checkTimer);
-                  send({ loginSuccess: true });
-                  return;
-                }
-              }
-            } catch(e) {}
-
-            if (attempts >= 15) {
-              clearInterval(checkTimer);
-              send({ loginError: "Invalid email or password. Please check your credentials and try again." });
-            }
-          }, 600);
-
-          form.submit();
-        } catch (err) {
-          send({ loginError: "Login submission failed. Please try again or sign via PL web." });
-        }
-      })();
-      true;
-    `;
-
-    webRef.current?.injectJavaScript(loginScript);
-
-    setTimeout(() => {
-      setLoginLoading((loading) => {
-        if (loading) {
-          setLoginError("Sign in timed out. Please check your network and try again.");
-          return false;
-        }
-        return false;
-      });
-    }, 15000);
+  // The OS can kill a background WebView; a dead one silently ignores every
+  // request, so start a fresh one.
+  const restartWeb = () => {
+    webReady.current = false;
+    setWebKey((k) => k + 1);
   };
 
   const handleLogout = () => {
@@ -524,22 +573,15 @@ export default function Index() {
           text: "Log Out",
           style: "destructive",
           onPress: () => {
+            // Forget the session at once, so the screen changes immediately;
+            // revoking it at FPL carries on in the background.
+            signedOut.current = true;
+            sessionRetried.current = false;
+            queuedScripts.current = [];
+            finishLogin();
+            signOut();
             AsyncStorage.removeItem(STORAGE_SQUAD).catch(() => {});
             AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
-            webRef.current?.injectJavaScript(`
-              (() => {
-                try {
-                  localStorage.clear();
-                  sessionStorage.clear();
-                } catch(e) {}
-                document.cookie.split(";").forEach(c => {
-                  document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;domain=.premierleague.com");
-                  document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;domain=.fantasy.premierleague.com");
-                  document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/");
-                });
-                window.location.href = "https://fantasy.premierleague.com/";
-              })();
-            `);
             setSquad(null);
             setDraft([]);
             setPending([]);
@@ -552,6 +594,7 @@ export default function Index() {
           },
         },
       ],
+      "danger",
     );
   };
 
@@ -572,45 +615,23 @@ export default function Index() {
       useNativeDriver: true,
     }).start();
   }, [showHistory]);
-  const gwScrollRef = useRef<any>(null);
   const mainScrollRef = useRef<any>(null);
-  const [showGameweekMenu, setShowGameweekMenu] = useState(false);
-  const gwMenuAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (showGameweekMenu) {
-      gwMenuAnim.setValue(0);
-      Animated.timing(gwMenuAnim, {
-        toValue: 1,
-        duration: 160,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [showGameweekMenu]);
-  const activeEvent = squad?.currentGw ?? squad?.gw ?? 1;
-  const gameweeks = squad?.gameweeks ?? [];
-  const reversedGameweeks = useMemo(() => [...gameweeks].reverse(), [gameweeks]);
-  const activeIndex = reversedGameweeks.findIndex(
-    (gw) => gw.id === (selectedFixtureGw ?? activeEvent),
-  );
-
-  useEffect(() => {
-    if (showGameweekMenu && activeIndex >= 0) {
-      setTimeout(() => {
-        gwScrollRef.current?.scrollTo({
-          y: Math.max(0, activeIndex * 44 - 40),
-          animated: false,
-        });
-      }, 40);
-    }
-  }, [showGameweekMenu, activeIndex]);
-  const [selectedFixtureGw, setSelectedFixtureGw] = useState<number | null>(
-    null,
-  );
   const [selectedLeague, setSelectedLeague] = useState<FplLeague | null>(null);
   const [leagueStandings, setLeagueStandings] =
     useState<LeagueStandings | null>(null);
+  const [h2hMatches, setH2hMatches] = useState<H2hMatch[]>([]);
+  const [h2hEvent, setH2hEvent] = useState<number | null>(null);
+  const [h2hLoading, setH2hLoading] = useState(false);
+  // The logged-in manager's own row, kept while paging through a league.
+  const [userStanding, setUserStanding] = useState<LeagueStanding | null>(null);
+  // What the league detail view is showing right now. Responses that don't
+  // match it are stale (the user moved on) and are dropped.
+  const leagueView = useRef<{
+    league: FplLeague;
+    page: number;
+    h2hEvent: number | null;
+  } | null>(null);
+  const [leagueActionNonce, setLeagueActionNonce] = useState(0);
   const [leagueLoading, setLeagueLoading] = useState(false);
   const wasLeagueLoading = useRef(leagueLoading);
   useEffect(() => {
@@ -633,22 +654,13 @@ export default function Index() {
     title: string,
     message: string,
     buttons: DialogButton[] = [{ text: "OK" }],
-  ) => setDialog({ title, message, buttons });
+    kind: DialogKind = "confirm",
+  ) => setDialog({ title, message, buttons, kind });
 
-  const check = () => webRef.current?.injectJavaScript(FETCH_JS);
+  const check = () =>
+    runInWeb(buildFetchJs());
   const runLeagueAction = (
-    action:
-      | { action: "standings"; league: FplLeague; page: number }
-      | { action: "join"; code: string }
-      | {
-          action: "create";
-          name: string;
-          leagueType: LeagueType;
-          startEvent: number;
-          knockoutRounds?: number;
-        }
-      | { action: "invite-code"; leagueId: number }
-      | { action: "manager-gameweek"; entry: number; event: number },
+    action: Exclude<LeagueAction, { action: "leagues" }>,
   ) => {
     if (!webRef.current) {
       if (action.action === "manager-gameweek") {
@@ -667,16 +679,104 @@ export default function Index() {
       setLeagueError("");
       setLeagueLoading(true);
     }
-    webRef.current.injectJavaScript(buildLeagueActionJs(action));
+    runInWeb(buildLeagueActionJs(action));
+  };
+
+  // Keep the ranks on the league cards current: re-read the manager's leagues
+  // when the tab opens, on an interval while it stays open, and when the app
+  // returns to the foreground. Runs silently (no spinner, errors ignored) so a
+  // failed poll never disturbs what is already on screen.
+  const squadEntry = squad?.entry;
+  useEffect(() => {
+    if (mode !== "leagues" || stage !== "squad" || !squadEntry) return;
+
+    const refreshLeagues = () => {
+      if (AppState.currentState !== "active") return;
+      runInWeb(
+        buildLeagueActionJs({ action: "leagues", entry: squadEntry }),
+      );
+      // Also refresh the league that is open, without spinners or scroll jumps.
+      const view = leagueView.current;
+      if (!view) return;
+      runInWeb(
+        buildLeagueActionJs({
+          action: "standings",
+          league: view.league,
+          page: view.page,
+          silent: true,
+        }),
+      );
+      if (view.league.kind === "h2h" && view.h2hEvent) {
+        runInWeb(
+          buildLeagueActionJs({
+            action: "h2h-matches",
+            leagueId: view.league.id,
+            event: view.h2hEvent,
+            silent: true,
+          }),
+        );
+      }
+    };
+
+    refreshLeagues();
+    const interval = setInterval(refreshLeagues, LEAGUE_REFRESH_MS);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") refreshLeagues();
+    });
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [mode, stage, squadEntry]);
+
+  const loadH2hMatches = (league: FplLeague, event: number) => {
+    if (!webRef.current) {
+      setLeagueError("The FPL connection is not ready. Try again.");
+      return;
+    }
+    if (leagueView.current) leagueView.current.h2hEvent = event;
+    setH2hEvent(event);
+    setH2hMatches([]);
+    setH2hLoading(true);
+    runInWeb(
+      buildLeagueActionJs({ action: "h2h-matches", leagueId: league.id, event }),
+    );
   };
 
   const loadLeague = (league: FplLeague, page = 1) => {
-    if (page === 1) {
+    const current = leagueView.current;
+    const sameLeague =
+      !!current && current.league.id === league.id && current.league.kind === league.kind;
+    leagueView.current = { league, page, h2hEvent: sameLeague ? current.h2hEvent : null };
+
+    if (!sameLeague) {
       setSelectedLeague(league);
       setLeagueStandings(null);
+      setUserStanding(null);
+      setH2hMatches([]);
+      setH2hEvent(null);
       setMemberSquad(null);
     }
     runLeagueAction({ action: "standings", league, page });
+
+    if (!sameLeague && league.kind === "h2h") {
+      // Start on the latest gameweek that has kicked off, so the fixtures
+      // shown have scores; later/earlier weeks are reachable from the tab.
+      const started = (squad?.gameweeks ?? []).filter((gw) => gw.finished || gw.isCurrent);
+      loadH2hMatches(league, started[started.length - 1]?.id ?? squad?.gw ?? 1);
+    }
+  };
+
+  const closeLeague = () => {
+    leagueView.current = null;
+    setSelectedLeague(null);
+    setLeagueStandings(null);
+    setUserStanding(null);
+    setLeagueError("");
+    // Any response still in flight is now stale and will be dropped, so it
+    // can't be relied on to clear the spinners.
+    setLeagueLoading(false);
+    setH2hLoading(false);
   };
 
   const getInviteCode = (league: FplLeague) => {
@@ -685,7 +785,9 @@ export default function Index() {
 
   const loadManagerGameweek = (entry: number, event: number) => {
     managerRequest.current = { entry, event };
-    setMemberSquad(null);
+    // The previous squad stays in state: a new manager's page waits for its
+    // own data before opening, and a gameweek change keeps the old pitch on
+    // screen until the new one is ready.
     runLeagueAction({
       action: "manager-gameweek",
       entry,
@@ -711,10 +813,13 @@ export default function Index() {
   const openOwnHistory = (event?: number) => {
     if (!squad) return;
     setShowLeagues(false);
+    const liveGw = squad.gameweeks.find((gw) => gw.isCurrent && !gw.finished);
     const finishedGws = squad.gameweeks.filter((gw) => gw.finished);
-    const defaultGw = finishedGws.length > 0
-      ? finishedGws[finishedGws.length - 1].id
-      : Math.max(1, squad.gw - 1);
+    const defaultGw = liveGw
+      ? liveGw.id
+      : finishedGws.length > 0
+        ? finishedGws[finishedGws.length - 1].id
+        : squad.currentGw;
     const targetGw = event ?? defaultGw;
 
     setActiveMember({
@@ -752,6 +857,7 @@ export default function Index() {
     leagueType: LeagueType,
     startEvent?: number,
     knockoutRounds?: number,
+    maxEntries?: number,
   ) => {
     if (!squad) return;
 
@@ -770,7 +876,8 @@ export default function Index() {
               name,
               leagueType,
               startEvent: startEvent ?? squad.gw,
-              knockoutRounds: knockoutRounds ?? 1,
+              knockoutRounds,
+              maxEntries,
             }),
         },
       ],
@@ -780,7 +887,6 @@ export default function Index() {
   useEffect(() => {
     if (squad) {
       setDraft(squad.picks);
-      setSelectedFixtureGw(squad.gw);
       setSelectedPos(null);
       setPlayerSheetOpen(false);
       setPending([]);
@@ -806,28 +912,8 @@ export default function Index() {
     } catch {
       return;
     }
-    if (msg.googleLoginSuccess) {
-      closeGoogleModal();
-      check();
-      return;
-    }
-    if (msg.loginSuccess) {
-      setLoginLoading(false);
-      setLoginError("");
-      if (lastAttemptedEmail.current && lastAttemptedPassword.current) {
-        AsyncStorage.setItem(
-          STORAGE_CREDS,
-          JSON.stringify({ email: lastAttemptedEmail.current, password: lastAttemptedPassword.current })
-        ).catch(() => {});
-      }
-      check();
-      return;
-    }
-    if (msg.loginError) {
-      setLoginLoading(false);
-      setLoginError(msg.loginError);
-      return;
-    }
+    // Nobody is signed in: whatever the FPL page reports is stale.
+    if (signedOut.current) return;
     if (msg.saved) {
       setSaving(false);
       setPendingChip(null);
@@ -836,7 +922,25 @@ export default function Index() {
     }
     if (msg.saveError) {
       setSaving(false);
-      showDialog("Could not save", msg.saveError);
+      if (msg.status === 401 || msg.status === 403) {
+        // The session was renewed just before this request, so a refusal is
+        // not grounds to sign the user out and lose their edits.
+        console.warn("FPL save refused", msg.status, msg.detail);
+        showDialog(
+          "FPL refused the change",
+          "Your changes were not saved. Please try again. If this keeps happening, log out and sign in again.",
+          [{ text: "OK" }],
+          "danger",
+        );
+      } else {
+        console.warn("FPL save error", msg.status, msg.detail);
+        showDialog(
+          "Could not save",
+          "We couldn't save your changes to FPL. Please check your connection and try again.",
+          [{ text: "OK" }],
+          "danger",
+        );
+      }
       return;
     }
     if (msg.transferred) {
@@ -849,21 +953,99 @@ export default function Index() {
         appliedChip
           ? `${CHIP_OPTIONS.find((chip) => chip.id === appliedChip)?.label} and your transfers were accepted. Reloading your squad.`
           : "Your transfers were accepted. Reloading your squad.",
+        [{ text: "OK" }],
+        "success",
       );
       check();
       return;
     }
     if (msg.transferError) {
       setSending(false);
-      showDialog(
-        "Transfer failed",
-        msg.transferError +
-          "\n\nNothing was retried. Please check the FPL site or app to see your real team.",
-      );
-      check();
+      if (msg.status === 401 || msg.status === 403) {
+        console.warn("FPL transfer refused", msg.status, msg.detail);
+        showDialog(
+          "FPL refused the transfers",
+          "Your transfers were not sent. Please try again. If this keeps happening, log out and sign in again.",
+          [{ text: "OK" }],
+          "danger",
+        );
+      } else if (msg.timedOut) {
+        showDialog(
+          "Transfer status unknown",
+          "The request timed out. Your transfer may or may not have gone through — please check the FPL site before trying again.",
+          [{ text: "OK" }],
+          "warning",
+        );
+        check();
+      } else {
+        console.warn("FPL transfer error", msg.status, msg.detail);
+        showDialog(
+          "Transfer failed",
+          "We couldn't send your transfers to FPL. Nothing was retried — please check the FPL site or app to see your real team.",
+          [{ text: "OK" }],
+          "danger",
+        );
+        check();
+      }
       return;
     }
     if (msg.leagueAction) {
+      // Background league refresh: update ranks in place, never touch the
+      // loading/error state owned by user-initiated league actions.
+      if (msg.leagueAction === "leagues") {
+        const leagues: FplLeague[] = Array.isArray(msg.leagues) ? msg.leagues : [];
+        if (squad && squad.entry === msg.entry) {
+          // The same response carries fresh totals, so the summary strip and
+          // the manager's own league rows stay current too.
+          const next = { ...squad, ...(msg.summary ?? {}), leagues };
+          setSquad(next);
+          AsyncStorage.setItem(STORAGE_SQUAD, JSON.stringify(next)).catch(() => {});
+        }
+        setSelectedLeague((current) =>
+          current
+            ? leagues.find(
+                (league) => league.id === current.id && league.kind === current.kind,
+              ) ?? current
+            : current,
+        );
+        return;
+      }
+      if (msg.leagueAction === "error" && (msg.action === "leagues" || msg.silent)) return;
+
+      if (msg.leagueAction === "standings") {
+        const view = leagueView.current;
+        if (
+          !view ||
+          view.league.id !== msg.leagueId ||
+          view.league.kind !== msg.kind ||
+          view.page !== msg.page
+        ) {
+          return;
+        }
+        if (!msg.silent) setLeagueLoading(false);
+        setLeagueStandings(msg.data);
+        setLeagueError("");
+        const mine = (msg.data?.standings?.results ?? []).find(
+          (row: LeagueStanding) => row.entry === squad?.entry,
+        );
+        if (mine) setUserStanding(mine);
+        return;
+      }
+      if (
+        msg.leagueAction === "h2h-matches" ||
+        (msg.leagueAction === "error" && msg.action === "h2h-matches")
+      ) {
+        const view = leagueView.current;
+        if (!view || view.league.id !== msg.leagueId || view.h2hEvent !== msg.event) return;
+        setH2hLoading(false);
+        if (msg.leagueAction === "error") {
+          setLeagueError(msg.error || "The fixtures could not be loaded.");
+        } else {
+          setH2hMatches(Array.isArray(msg.results) ? msg.results : []);
+          setLeagueError("");
+        }
+        return;
+      }
       if (msg.leagueAction === "manager-gameweek") {
         const request = managerRequest.current;
         if (
@@ -894,11 +1076,9 @@ export default function Index() {
       }
       setLeagueLoading(false);
 
-      if (msg.leagueAction === "standings") {
-        setLeagueStandings(msg.data);
+      if (msg.leagueAction === "created") {
         setLeagueError("");
-      } else if (msg.leagueAction === "created") {
-        setLeagueError("");
+        setLeagueActionNonce((n) => n + 1);
         if (msg.leagueId && msg.inviteCode) {
           setInviteCodes((current) => ({
             ...current,
@@ -910,7 +1090,12 @@ export default function Index() {
           : ` The invite code could not be loaded${
               msg.inviteCodeError ? ` (${msg.inviteCodeError})` : ""
             }. Select the league and try "Show invite code".`;
-        showDialog("League created", "Your league was created." + inviteText);
+        showDialog(
+          "League created",
+          "Your league was created." + inviteText,
+          [{ text: "OK" }],
+          "success",
+        );
         check();
       } else if (msg.leagueAction === "invite-code") {
         if (msg.leagueId && msg.inviteCode) {
@@ -924,7 +1109,13 @@ export default function Index() {
         }
       } else if (msg.leagueAction === "joined") {
         setLeagueError("");
-        showDialog("League joined", "Refreshing your FPL leagues.");
+        setLeagueActionNonce((n) => n + 1);
+        showDialog(
+          "League joined",
+          "Refreshing your FPL leagues.",
+          [{ text: "OK" }],
+          "success",
+        );
         check();
       } else if (msg.leagueAction === "error") {
         setLeagueError(msg.error || "The league request failed.");
@@ -933,18 +1124,34 @@ export default function Index() {
     }
     setRefreshing(false);
     if (msg.ok) {
+      sessionRetried.current = false;
+      finishLogin();
       setSquad(msg.squad);
       setError("");
       setStage("squad");
       AsyncStorage.setItem(STORAGE_SQUAD, JSON.stringify(msg.squad)).catch(() => {});
       AsyncStorage.setItem(STORAGE_LOGGED_IN, "true").catch(() => {});
     } else if (msg.notLoggedIn) {
-      if (stageRef.current === "checking" && !squad) {
-        setStage("welcome");
-        AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
+      if (msg.noTeam) {
+        // Signed in fine, but this account has never created an FPL team.
+        signedOut.current = true;
+        signOut();
+        finishLogin(
+          "No FPL team found on this account. Please create one at fantasy.premierleague.com and try again.",
+        );
+        setStage("login");
+      } else if (!sessionRetried.current) {
+        // FPL did not accept the session. Ask once more before giving up on
+        // it, in case that was a passing fault.
+        sessionRetried.current = true;
+        check();
+      } else {
+        sessionLost();
       }
     } else if (stageRef.current === "squad") {
       setError(msg.error || "Something went wrong");
+    } else if (awaitingSquad.current) {
+      finishLogin("You're signed in, but we couldn't load your team. Please try again.");
     }
   };
 
@@ -955,7 +1162,7 @@ export default function Index() {
   };
 
   const locked = !!squad?.chip;
-  const warn = (msg: string) => showDialog("Can't do that", msg);
+  const warn = (msg: string) => showDialog("Can't do that", msg, [{ text: "OK" }], "warning");
   const selectedChipOption = CHIP_OPTIONS.find(
     (chip) => chip.id === pendingChip,
   );
@@ -1036,8 +1243,8 @@ export default function Index() {
           text: "Save",
           onPress: () => {
             setSaving(true);
-            webRef.current?.injectJavaScript(
-              buildSaveJs(squad.entry, nextDraft, chipToPlay, lastAttemptedEmail.current || email, lastAttemptedPassword.current || password),
+            runInWeb(
+              buildSaveJs(squad.entry, nextDraft, chipToPlay),
             );
           },
         },
@@ -1158,6 +1365,7 @@ export default function Index() {
             priceChange: t.inn.priceChange,
             formMood: t.inn.formMood,
             fixtures: squad.fixturesByTeam[t.inn.teamId] ?? [],
+            pendingIn: true,
           }
         : p;
     });
@@ -1209,6 +1417,8 @@ export default function Index() {
         `${inn.name} costs ${money(inn.cost)}, but you only have ${money(
           pickInfo.maxCost,
         )} available for this spot (short by ${money(inn.cost - pickInfo.maxCost)}).`,
+        [{ text: "OK" }],
+        "warning",
       );
       return;
     }
@@ -1216,6 +1426,8 @@ export default function Index() {
       showDialog(
         "Club limit reached",
         `You already have 3 players from ${inn.team}. You can't have more than 3 from one club.`,
+        [{ text: "OK" }],
+        "warning",
       );
       return;
     }
@@ -1293,7 +1505,7 @@ export default function Index() {
         style: "destructive",
         onPress: () => {
           setSending(true);
-          webRef.current?.injectJavaScript(
+          runInWeb(
             buildTransferJs(
               squad.entry,
               squad.gw,
@@ -1304,8 +1516,6 @@ export default function Index() {
                 selling: outPlayers[i].sell,
               })),
               pendingChip,
-              email,
-              password,
             ),
           );
         },
@@ -1398,42 +1608,13 @@ export default function Index() {
       ? null
       : shownPicks.find((player) => player.pos === selectedPos) ?? null;
 
-  const currentSelectedGw = selectedFixtureGw ?? squad?.gw ?? 1;
-  const isPastGwSelected = squad ? currentSelectedGw < squad.gw : false;
-  const currentPastData =
-    isPastGwSelected && squad && memberSquad?.entry === squad.entry && memberSquad?.event === currentSelectedGw
-      ? memberSquad
-      : null;
+  // A team page opens once its squad has arrived (or the request has failed,
+  // in which case the page shows the reason).
+  const activeMemberReady =
+    !!activeMember && (memberSquad?.entry === activeMember.entry || !managerLoading);
 
-  const pastPicks: Row[] =
-    currentPastData?.picks.map((pick) => {
-      const mult =
-        typeof pick.multiplier === "number" && pick.multiplier > 0
-          ? pick.multiplier
-          : pick.captain
-            ? currentPastData.chip === "3xc"
-              ? 3
-              : 2
-            : 1;
-      const rawPoints = pick.points ?? 0;
-      const finalPoints = rawPoints * mult;
-
-      return {
-        id: pick.id,
-        pos: pick.position,
-        name: pick.name,
-        team: pick.team,
-        teamId: 0,
-        type: pick.elementType,
-        cap: pick.captain,
-        vice: pick.viceCaptain,
-        multiplier: mult,
-        sell: 0,
-        buy: 0,
-        displayPoints: finalPoints,
-        formMood: pick.formMood,
-      };
-    }) ?? [];
+  // The home pitch always shows the team for the upcoming gameweek.
+  const currentSelectedGw = squad?.gw ?? 1;
 
   return (
     <View style={{ flex: 1, backgroundColor: "#071818" }}>
@@ -1563,7 +1744,7 @@ export default function Index() {
                 Pro<Text style={{ color: GREEN }}>FPL</Text>
               </Text>
               <Text style={{ color: "#d2c4d6", fontSize: 14, marginTop: 4, textAlign: "center" }}>
-                Enter your Fantasy Premier League details
+                Sign in with your Premier League account
               </Text>
             </View>
 
@@ -1578,109 +1759,6 @@ export default function Index() {
                 elevation: 6,
               }}
             >
-              {/* Email Address */}
-              <Text style={{ color: "#e8dee9", fontSize: 12, fontWeight: "700", marginBottom: 4 }}>
-                Email address
-              </Text>
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  backgroundColor: "rgba(0, 0, 0, 0.4)",
-                  borderRadius: 12,
-                  borderWidth: 1,
-                  borderColor: "rgba(255, 255, 255, 0.18)",
-                  paddingHorizontal: 12,
-                  height: 42,
-                  marginBottom: 12,
-                }}
-              >
-                <AppSymbol
-                  name={{ ios: "envelope.fill", android: "mail", web: "mail" }}
-                  color="#a893ae"
-                  size={16}
-                />
-                <TextInput
-                  value={email}
-                  onChangeText={(text) => {
-                    setEmail(text);
-                    if (loginError) setLoginError("");
-                  }}
-                  placeholder="e.g. name@example.com"
-                  placeholderTextColor="#8a7490"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  editable={!loginLoading}
-                  style={{
-                    flex: 1,
-                    color: "#fff",
-                    fontSize: 14,
-                    marginLeft: 8,
-                    paddingVertical: 0,
-                  }}
-                />
-              </View>
-
-              {/* Password */}
-              <Text style={{ color: "#e8dee9", fontSize: 12, fontWeight: "700", marginBottom: 4 }}>
-                Password
-              </Text>
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  backgroundColor: "rgba(0, 0, 0, 0.4)",
-                  borderRadius: 12,
-                  borderWidth: 1,
-                  borderColor: "rgba(255, 255, 255, 0.18)",
-                  paddingHorizontal: 12,
-                  height: 42,
-                  marginBottom: 16,
-                }}
-              >
-                <AppSymbol
-                  name={{ ios: "lock.fill", android: "lock", web: "lock" }}
-                  color="#a893ae"
-                  size={16}
-                />
-                <TextInput
-                  value={password}
-                  onChangeText={(text) => {
-                    setPassword(text);
-                    if (loginError) setLoginError("");
-                  }}
-                  placeholder="Your FPL password"
-                  placeholderTextColor="#8a7490"
-                  secureTextEntry={!showPassword}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  editable={!loginLoading}
-                  style={{
-                    flex: 1,
-                    color: "#fff",
-                    fontSize: 14,
-                    marginLeft: 8,
-                    paddingVertical: 0,
-                  }}
-                />
-                <Pressable
-                  onPress={() => setShowPassword(!showPassword)}
-                  hitSlop={8}
-                  style={{ padding: 4 }}
-                >
-                  <AppSymbol
-                    name={{
-                      ios: showPassword ? "eye.slash.fill" : "eye.fill",
-                      android: showPassword ? "visibility_off" : "visibility",
-                      web: showPassword ? "visibility_off" : "visibility",
-                    }}
-                    color="#a893ae"
-                    size={16}
-                  />
-                </Pressable>
-              </View>
-
               {/* Error Alert */}
               {!!loginError && (
                 <View
@@ -1707,73 +1785,47 @@ export default function Index() {
                 </View>
               )}
 
-              {/* Submit Button */}
+              {/* Sign in on the official Premier League page */}
               <Pressable
-                onPress={handleLogin}
-                disabled={loginLoading || !email.trim() || !password.trim()}
+                onPress={openSignIn}
+                disabled={loginLoading}
+                accessibilityRole="button"
+                accessibilityLabel="Sign in with Premier League"
                 style={({ pressed }) => ({
                   backgroundColor: GREEN,
-                  height: 36,
-                  borderRadius: 18,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  opacity: pressed || loginLoading || !email.trim() || !password.trim() ? 0.7 : 1,
-                  marginTop: 2,
-                })}
-              >
-                {loginLoading ? (
-                  <ActivityIndicator color="#051a0f" size="small" />
-                ) : (
-                  <Text style={{ color: "#051a0f", fontSize: 14, fontWeight: "900" }}>
-                    Login
-                  </Text>
-                )}
-              </Pressable>
-
-              {/* OR Divider */}
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  marginVertical: 10,
-                }}
-              >
-                <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255, 255, 255, 0.15)" }} />
-                <Text style={{ color: "#a893ae", fontSize: 11, fontWeight: "700", marginHorizontal: 10 }}>
-                  OR
-                </Text>
-                <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255, 255, 255, 0.15)" }} />
-              </View>
-
-              {/* Sign in via Premier League Web Button */}
-              <Pressable
-                onPress={() => {
-                  setGoogleModalKey((k) => k + 1);
-                  setShowGoogleModal(true);
-                }}
-                disabled={loginLoading}
-                style={({ pressed }) => ({
-                  backgroundColor: "#ffffff",
-                  height: 36,
-                  borderRadius: 18,
+                  height: 44,
+                  borderRadius: 22,
                   flexDirection: "row",
                   alignItems: "center",
                   justifyContent: "center",
-                  opacity: pressed ? 0.85 : 1,
+                  opacity: pressed || loginLoading ? 0.7 : 1,
                   paddingHorizontal: 12,
                 })}
               >
-                <View style={{ marginRight: 6 }}>
-                  <AppSymbol
-                    name={{ ios: "globe", android: "language", web: "language" }}
-                    color="#37003c"
-                    size={16}
-                  />
-                </View>
-                <Text style={{ color: "#1f1f1f", fontSize: 13, fontWeight: "700" }}>
-                  Sign via pl web
-                </Text>
+                {loginLoading ? (
+                  <>
+                    <ActivityIndicator color="#051a0f" size="small" />
+                    <Text style={{ color: "#051a0f", fontSize: 14, fontWeight: "900", marginLeft: 8 }}>
+                      Signing you in…
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={{ color: "#051a0f", fontSize: 14, fontWeight: "900" }}>
+                    Sign in with Premier League
+                  </Text>
+                )}
               </Pressable>
+              <Text
+                style={{
+                  color: "#a893ae",
+                  fontSize: 12,
+                  textAlign: "center",
+                  marginTop: 10,
+                  lineHeight: 16,
+                }}
+              >
+                You only need to do this once. You stay signed in until you log out.
+              </Text>
             </View>
 
             {/* Privacy notice */}
@@ -1800,7 +1852,7 @@ export default function Index() {
                   lineHeight: 16,
                 }}
               >
-                Your credentials are sent directly to FPL servers to authenticate. ProFPL never stores your password.
+                You sign in on the official Premier League page. ProFPL never sees or stores your password.
               </Text>
             </View>
           </ScrollView>
@@ -1809,13 +1861,19 @@ export default function Index() {
 
       <View style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}>
         <WebView
+          key={webKey}
           ref={webRef}
           source={{ uri: "https://fantasy.premierleague.com/" }}
           userAgent="Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
           javaScriptEnabled
           domStorageEnabled
           onMessage={onMessage}
-          onLoadEnd={check}
+          onLoadStart={() => {
+            webReady.current = false;
+          }}
+          onLoadEnd={onWebLoadEnd}
+          onRenderProcessGone={restartWeb}
+          onContentProcessDidTerminate={restartWeb}
           sharedCookiesEnabled
           thirdPartyCookiesEnabled
         />
@@ -1851,30 +1909,41 @@ export default function Index() {
             <WebView
               key={googleModalKey}
               ref={modalWebRef}
-              source={{ uri: "https://fantasy.premierleague.com/" }}
+              source={{ uri: signInUrl }}
               userAgent="Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
               javaScriptEnabled
               domStorageEnabled
               sharedCookiesEnabled
               thirdPartyCookiesEnabled
-              injectedJavaScript={`
-                (function() {
-                  if (window.__googleAuthCheckStarted) return;
-                  window.__googleAuthCheckStarted = true;
-                  setInterval(async () => {
-                    try {
-                      const meRes = await fetch("https://fantasy.premierleague.com/api/me/", { credentials: "include" });
-                      if (meRes.ok) {
-                        const me = await meRes.json().catch(() => null);
-                        if (me && me.player && me.player.entry) {
-                          window.ReactNativeWebView.postMessage(JSON.stringify({ googleLoginSuccess: true }));
-                        }
-                      }
-                    } catch(e) {}
-                  }, 2000);
-                })();
-              `}
-              onMessage={onMessage}
+              // Signing in ends with a redirect back to the FPL site carrying
+              // the sign-in code. Catch it instead of loading that page.
+              onShouldStartLoadWithRequest={(request) => {
+                if (!isSignInRedirect(request.url)) return true;
+                finishWebSignIn(request.url);
+                return false;
+              }}
+              // Backstop for redirects the hook above is not consulted for.
+              onLoadStart={(event) => {
+                const { url } = event.nativeEvent;
+                if (isSignInRedirect(url)) finishWebSignIn(url);
+              }}
+              startInLoadingState
+              renderLoading={() => (
+                <View
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    left: 0,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: "#ffffff",
+                  }}
+                >
+                  <ActivityIndicator color="#37003c" />
+                </View>
+              )}
               style={{ flex: 1 }}
             />
           </View>
@@ -1988,37 +2057,25 @@ export default function Index() {
                       </Text>
                     </View>
                   ) : (
-                    <Pressable
-                      onPress={() => setShowGameweekMenu(true)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Select gameweek. Default gameweek ${squad.gw}. Selected gameweek ${selectedFixtureGw ?? squad.gw}`}
-                      style={({ pressed }) => ({
+                    // The lineup always edits the upcoming gameweek; past
+                    // gameweeks are browsed from the points page.
+                    <View
+                      accessible
+                      accessibilityLabel={`Picking team for gameweek ${squad.gw}`}
+                      style={{
                         borderRadius: 16,
                         paddingHorizontal: 10,
                         paddingVertical: 5,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: 8,
-                        minWidth: 84,
                         borderWidth: 1,
-                        borderColor: "rgba(255,255,255,0.18)",
-                        backgroundColor: "rgba(14, 38, 26, 0.9)",
-                        opacity: pressed ? 0.68 : 1,
-                        transform: [{ scale: pressed ? 0.97 : 1 }],
-                        elevation: 4,
-                      })}
+                        borderColor: "rgba(255,255,255,0.12)",
+                        backgroundColor: "rgba(14, 38, 26, 0.6)",
+                      }}
                     >
-                      <Text style={{ color: "#fff", fontSize: 11, fontWeight: "800" }}>
-                        GW {selectedFixtureGw ?? squad.gw}
+                      <Text style={{ color: "#c5d8ce", fontSize: 11, fontWeight: "800" }}>
+                        GW {squad.gw}
                         {squad.chip ? ` · ${squad.chip}` : ""}
                       </Text>
-                      <AppSymbol
-                        name={{ ios: "chevron.down", android: "expand_more", web: "expand_more" }}
-                        color="#fff"
-                        size={12}
-                      />
-                    </Pressable>
+                    </View>
                   )
                 )}
               </View>
@@ -2057,60 +2114,43 @@ export default function Index() {
                       {squad.teamName || "Your team"}
                     </Text>
                   </View>
-
-                  <Pressable
-                    onPress={() => openOwnHistory()}
-                    accessibilityRole="button"
-                    accessibilityLabel="Points. Open current gameweek points"
-                    style={({ pressed }) => ({
-                      borderRadius: 16,
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 6,
-                      minWidth: 84,
-                      borderWidth: 1,
-                      borderColor: "rgba(255,255,255,0.18)",
-                      backgroundColor: "rgba(14, 38, 26, 0.9)",
-                      opacity: pressed ? 0.68 : 1,
-                      transform: [{ scale: pressed ? 0.97 : 1 }],
-                      elevation: 4,
-                    })}
-                  >
-                    <AppSymbol
-                      name={{ ios: "chart.bar.fill", android: "bar_chart", web: "bar_chart" }}
-                      color={GREEN}
-                      size={13}
-                    />
-                    <Text style={{ color: "#fff", fontSize: 11, fontWeight: "800" }}>
-                      Points
-                    </Text>
-                  </Pressable>
                 </View>
               )}
+
+              {/* Row 3: Gameweek points (opens breakdown) | Season total | Overall rank */}
+              {!showLeagues && mode === "lineup" && (() => {
+                const eventId = squad.eventId ?? squad.currentGw;
+                const eventGw = squad.gameweeks.find((gw) => gw.id === eventId);
+                return (
+                  <View style={{ marginTop: 4, marginHorizontal: 2 }}>
+                    <SquadSummaryBar
+                      gameweek={eventId ?? null}
+                      gameweekPoints={squad.eventPoints ?? null}
+                      live={Boolean(eventGw?.isCurrent && !eventGw.finished)}
+                      season={seasonLabel(squad.gameweeks)}
+                      totalPoints={squad.totalPoints ?? null}
+                      overallRank={squad.overallRank ?? null}
+                      onOpenPoints={() => openOwnHistory()}
+                    />
+                  </View>
+                );
+              })()}
             </View>
           </View>
 
           {!showLeagues && transferStatsVisible && (
-            <View
-              style={{
-                flexDirection: "row",
-                paddingHorizontal: 6,
-                paddingTop: 2,
-                marginBottom: 4,
-              }}
-            >
-              <Stat
-                label="Free transfers"
-                value={
-                  squad.freeTransfers == null
-                    ? "∞"
-                    : String(squad.freeTransfers)
-                }
+            <View style={{ paddingHorizontal: 8, paddingTop: 2, marginBottom: 6 }}>
+              <TransferSummaryBar
+                gameweek={nextGwDeadlineInfo?.id ?? squad.gw}
+                deadlineDate={nextGwDeadlineInfo?.formattedDate ?? null}
+                deadlineRemaining={nextGwDeadlineInfo?.remainingText ?? null}
+                freeTransfers={squad.freeTransfers}
+                pendingCount={pending.length}
+                bank={bankAfter}
+                pointsCost={pendingChip ? 0 : hit}
+                chipLabel={pendingChip ? selectedChipOption?.label ?? "Chip active" : null}
+                squadValue={squad.value}
               />
-              <Stat label="Bank" value={money(bankAfter)} />
-              <Stat label="Squad value" value={money(squad.value)} />
             </View>
           )}
 
@@ -2134,17 +2174,24 @@ export default function Index() {
                 leagues={squad.leagues}
                 selectedLeague={selectedLeague}
                 standings={leagueStandings}
+                h2hMatches={h2hMatches}
+                h2hEvent={h2hEvent}
+                h2hLoading={h2hLoading}
+                userStanding={userStanding}
+                liveEventId={squad.eventId ?? null}
+                liveEventPoints={squad.eventPoints ?? null}
+                onSelectH2hEvent={loadH2hMatches}
+                onCloseLeague={closeLeague}
                 loading={leagueLoading}
                 error={leagueError}
+                successSignal={leagueActionNonce}
                 gameweeks={squad.gameweeks.filter(
                   (gameweek) => gameweek.finished || gameweek.isCurrent,
                 )}
                 inviteCode={
                   selectedLeague ? inviteCodes[selectedLeague.id] ?? null : null
                 }
-                memberSquad={memberSquad}
-                managerLoading={managerLoading}
-                managerError={managerError}
+                userTotalPoints={squad.totalPoints ?? null}
                 onSelectLeague={loadLeague}
                 onJoin={joinLeague}
                 onCreate={createLeague}
@@ -2353,76 +2400,12 @@ export default function Index() {
                   />
                 )}
               <View style={{ zIndex: 2, flex: 1, width: "100%" }}>
-                {isPastGwSelected ? (
-                  managerLoading ? (
-                    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", minHeight: 320 }}>
-                      <ActivityIndicator color={GREEN} size="large" />
-                    </View>
-                  ) : currentPastData && pastPicks.length > 0 ? (
-                    <Pitch
-                      picks={pastPicks}
-                      selectedGw={currentSelectedGw}
-                      selectedPos={null}
-                      compactAvatar={true}
-                      overlay={
-                        <View
-                          pointerEvents="box-none"
-                          style={{
-                            position: "absolute",
-                            top: 8,
-                            right: 8,
-                            zIndex: 10,
-                          }}
-                        >
-                          <View
-                            style={{
-                              borderRadius: 14,
-                              paddingHorizontal: 9,
-                              paddingVertical: 5,
-                              borderWidth: 1,
-                              borderColor: "rgba(255, 255, 255, 0.18)",
-                              backgroundColor: "rgba(14, 38, 26, 0.95)",
-                              flexDirection: "row",
-                              alignItems: "center",
-                              gap: 5,
-                              elevation: 6,
-                              shadowColor: "#000000",
-                              shadowOpacity: 0.25,
-                              shadowRadius: 6,
-                              shadowOffset: { width: 0, height: 2 },
-                            }}
-                          >
-                            <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "800", textTransform: "uppercase" }}>
-                              GW {currentSelectedGw} Points
-                            </Text>
-                            <Text style={{ color: "#ffd400", fontSize: 14, fontWeight: "900" }}>
-                              {currentPastData.history.points ?? "—"}
-                            </Text>
-                          </View>
-                        </View>
-                      }
-                    />
-                  ) : (
-                    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24, minHeight: 320 }}>
-                      <Text
-                        style={{
-                          color: "#9db3a6",
-                          fontSize: 14,
-                          fontWeight: "600",
-                          textAlign: "center",
-                          lineHeight: 20,
-                        }}
-                      >
-                        No past gameweek history available.
-                      </Text>
-                    </View>
-                  )
-                ) : (
                   <Pitch
                     picks={shownPicks}
                     selectedGw={currentSelectedGw}
                     selectedPos={selectedPos}
                     showPrice={mode === "transfers"}
+                    swapHint={mode !== "transfers" && !locked}
                     onPress={onPlayerPress}
                     onSetCaptain={(r) => setRole("cap", r.pos)}
                     onSetViceCaptain={(r) => setRole("vice", r.pos)}
@@ -2691,88 +2674,9 @@ export default function Index() {
                           )}
                         </View>
 
-                        {/* Top Right Total Points Card (Lineup mode on homepage only) */}
-                        {mode === "lineup" && (
-                          <View
-                            pointerEvents="box-none"
-                            style={{
-                              position: "absolute",
-                              top: 8,
-                              right: 8,
-                              zIndex: 10,
-                            }}
-                          >
-                            <View
-                              style={{
-                                borderRadius: 14,
-                                paddingHorizontal: 9,
-                                paddingVertical: 5,
-                                borderWidth: 1,
-                                borderColor: "rgba(255, 255, 255, 0.18)",
-                                backgroundColor: "rgba(14, 38, 26, 0.95)",
-                                flexDirection: "row",
-                                alignItems: "center",
-                                gap: 5,
-                                elevation: 6,
-                                shadowColor: "#000000",
-                                shadowOpacity: 0.25,
-                                shadowRadius: 6,
-                                shadowOffset: { width: 0, height: 2 },
-                              }}
-                            >
-                              <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "800", textTransform: "uppercase" }}>
-                                Total Points
-                              </Text>
-                              <Text style={{ color: "#ffd400", fontSize: 14, fontWeight: "900" }}>
-                                {squad.totalPoints ?? "—"}
-                              </Text>
-                            </View>
-                          </View>
-                        )}
-
-                        {/* Top Right Transfer Deadline Badge (Transfers mode only - 3-line card) */}
-                        {mode === "transfers" && nextGwDeadlineInfo && (
-                          <View
-                            pointerEvents="box-none"
-                            style={{
-                              position: "absolute",
-                              top: 8,
-                              right: 8,
-                              zIndex: 10,
-                            }}
-                          >
-                            <View
-                              style={{
-                                borderRadius: 14,
-                                paddingHorizontal: 9,
-                                paddingVertical: 5,
-                                borderWidth: 1,
-                                borderColor: "rgba(255, 255, 255, 0.18)",
-                                backgroundColor: "rgba(14, 38, 26, 0.95)",
-                                alignItems: "flex-end",
-                                elevation: 6,
-                                shadowColor: "#000000",
-                                shadowOpacity: 0.25,
-                                shadowRadius: 6,
-                                shadowOffset: { width: 0, height: 2 },
-                              }}
-                            >
-                              <Text style={{ color: "#9db3a6", fontSize: 8.5, fontWeight: "800", letterSpacing: 0.4, textTransform: "uppercase" }}>
-                                Deadline
-                              </Text>
-                              <Text style={{ color: "#ffffff", fontSize: 10.5, fontWeight: "700", marginTop: 1 }}>
-                                {nextGwDeadlineInfo.formattedDate}
-                              </Text>
-                              <Text style={{ color: "#ffd400", fontSize: 11.5, fontWeight: "900", marginTop: 1.5 }}>
-                                {nextGwDeadlineInfo.remainingText}
-                              </Text>
-                            </View>
-                          </View>
-                        )}
                       </View>
                     }
                   />
-                )}
               </View>
             </View>
           )}
@@ -2814,18 +2718,18 @@ export default function Index() {
                   left: 16,
                   right: 16,
                   bottom: insets.bottom + 116,
-                  backgroundColor: "rgba(13, 36, 23, 0.95)",
-                  borderRadius: 20,
-                  paddingVertical: 12,
-                  paddingHorizontal: 18,
+                  backgroundColor: "rgba(4, 16, 10, 0.96)",
+                  borderRadius: 18,
+                  padding: 8,
                   flexDirection: "row",
                   alignItems: "center",
-                  justifyContent: "space-between",
-                  borderWidth: 1.5,
-                  borderColor: "rgba(0, 217, 130, 0.3)",
+                  gap: 10,
+                  borderWidth: 1,
+                  borderColor: "rgba(0, 217, 130, 0.35)",
                   shadowColor: "#000",
                   shadowOpacity: 0.4,
                   shadowRadius: 16,
+                  shadowOffset: { width: 0, height: 6 },
                   elevation: 10,
                 }}
               >
@@ -2834,41 +2738,63 @@ export default function Index() {
                     setPending([]);
                     setPendingChip(null);
                   }}
-                  style={{ paddingVertical: 8, paddingHorizontal: 12 }}
+                  disabled={sending}
+                  accessibilityRole="button"
+                  accessibilityLabel="Reset all transfers"
+                  style={({ pressed }) => ({
+                    height: 44,
+                    paddingHorizontal: 16,
+                    borderRadius: 14,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.2)",
+                    backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
+                    opacity: sending ? 0.5 : 1,
+                  })}
                 >
-                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 14 }}>Reset</Text>
+                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 13 }}>Reset</Text>
                 </Pressable>
-                <View style={{ alignItems: "center" }}>
-                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 13 }}>
-                    {pending.length} transfer
-                    {pending.length === 1 ? "" : "s"} · {money(bankAfter)} left
+                <View style={{ flex: 1, alignItems: "center" }}>
+                  <Text numberOfLines={1} style={{ color: "#ffffff", fontWeight: "900", fontSize: 14 }}>
+                    {pending.length} transfer{pending.length === 1 ? "" : "s"}
                   </Text>
                   <Text
+                    numberOfLines={1}
                     style={{
-                      color: hit > 0 && !pendingChip ? "#ff9aa2" : GREEN,
-                      fontSize: 12,
+                      color: hit > 0 && !pendingChip ? "#ff526f" : GREEN,
+                      fontSize: 11,
+                      fontWeight: "800",
+                      marginTop: 1,
                     }}
                   >
                     {pendingChip
-                      ? `${selectedChipOption?.label ?? "Chip"} · no points cost`
+                      ? `${selectedChipOption?.label ?? "Chip"} · free`
                       : hit > 0
-                        ? `-${hit} points`
+                        ? `Costs ${hit} points`
                         : "No points cost"}
                   </Text>
                 </View>
                 <Pressable
                   onPress={reviewTransfers}
                   disabled={sending || pending.length === 0}
-                  style={{
+                  accessibilityRole="button"
+                  accessibilityLabel="Review and confirm transfers"
+                  style={({ pressed }) => ({
+                    height: 44,
+                    paddingHorizontal: 20,
+                    borderRadius: 14,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
                     backgroundColor: GREEN,
-                    paddingVertical: 10,
-                    paddingHorizontal: 22,
-                    borderRadius: 24,
-                    opacity: sending || pending.length === 0 ? 0.5 : 1,
-                  }}
+                    opacity: sending || pending.length === 0 ? 0.45 : pressed ? 0.8 : 1,
+                  })}
                 >
-                  <Text style={{ color: PURPLE, fontWeight: "800" }}>
-                    {sending ? "Sending..." : "Review"}
+                  {sending && <ActivityIndicator color="#071b12" size="small" />}
+                  <Text style={{ color: "#071b12", fontWeight: "900", fontSize: 14 }}>
+                    {sending ? "Sending" : "Review"}
                   </Text>
                 </Pressable>
               </View>
@@ -3009,8 +2935,51 @@ export default function Index() {
         </View>
       )}
 
-      {stage === "squad" && squad && activeMember && (
-        <View
+      {/* Team page is opening: hold the current screen until its data is in */}
+      {stage === "squad" && squad && activeMember && !activeMemberReady && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Loading team. Tap to cancel"
+          onPress={() => setActiveMember(null)}
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
+            zIndex: 15,
+            elevation: 15,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(0, 0, 0, 0.35)",
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 10,
+              paddingHorizontal: 18,
+              paddingVertical: 12,
+              borderRadius: 14,
+              backgroundColor: "rgba(4, 16, 10, 0.95)",
+              borderWidth: 1,
+              borderColor: "rgba(0, 217, 130, 0.35)",
+            }}
+          >
+            <ActivityIndicator color={GREEN} />
+            <Text style={{ color: "#fff", fontSize: 13, fontWeight: "800" }}>
+              Loading team…
+            </Text>
+          </View>
+        </Pressable>
+      )}
+
+      {stage === "squad" && squad && activeMember && activeMemberReady && (
+        <FadeIn
+          key={activeMember.entry}
+          offsetX={28}
+          offsetY={0}
           style={{
             position: "absolute",
             top: 0,
@@ -3032,132 +3001,21 @@ export default function Index() {
             data={memberSquad}
             loading={managerLoading}
             error={managerError}
-            showGameweekSelector={!activeMember.isOwnPoints}
+            fixturesByTeam={squad.fixturesByTeam}
             onBack={() => setActiveMember(null)}
             onSelectEvent={(event) => {
               setActiveMemberEvent(event);
               loadManagerGameweek(activeMember.entry, event);
             }}
           />
-        </View>
+        </FadeIn>
       )}
-      <Modal
-        visible={showGameweekMenu}
-        transparent
-        animationType="none"
-        statusBarTranslucent
-        onRequestClose={() => setShowGameweekMenu(false)}
-      >
-        <View
-          style={{
-            flex: 1,
-            justifyContent: "flex-start",
-            alignItems: "flex-end",
-            paddingTop: insets.top + 52,
-            paddingHorizontal: 14,
-            backgroundColor: "rgba(19, 12, 24, 0.45)",
-          }}
-        >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Close gameweek selector"
-            onPress={() => setShowGameweekMenu(false)}
-            style={{
-              position: "absolute",
-              top: 0,
-              bottom: 0,
-              left: 0,
-              right: 0,
-            }}
-          />
-          <Animated.View
-            style={{
-              width: 220,
-              maxHeight: "70%",
-              backgroundColor: "#fff",
-              borderRadius: 18,
-              padding: 14,
-              elevation: 16,
-              shadowColor: "#150b19",
-              shadowOpacity: 0.2,
-              shadowRadius: 18,
-              shadowOffset: { width: 0, height: 8 },
-              opacity: gwMenuAnim,
-              transform: [
-                {
-                  scale: gwMenuAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0.92, 1],
-                  }),
-                },
-              ],
-            }}
-          >
-            <Text
-              style={{
-                color: PURPLE,
-                fontSize: 16,
-                fontWeight: "800",
-                paddingHorizontal: 4,
-                paddingBottom: 8,
-              }}
-            >
-              Select gameweek
-            </Text>
-            <ScrollView ref={gwScrollRef}>
-              {reversedGameweeks.map((gameweek) => {
-                const activeEvent = squad?.currentGw ?? squad?.gw;
-                const selected = gameweek.id === selectedFixtureGw;
-                return (
-                  <Pressable
-                    key={gameweek.id}
-                    onPress={() => {
-                      setSelectedFixtureGw(gameweek.id);
-                      setShowGameweekMenu(false);
-                      if (squad && gameweek.id < squad.gw) {
-                        loadManagerGameweek(squad.entry, gameweek.id);
-                      }
-                    }}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      paddingHorizontal: 10,
-                      paddingVertical: 11,
-                      marginTop: 3,
-                      borderRadius: 12,
-                      backgroundColor: selected ? "#f0eaf3" : "#fff",
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: PURPLE,
-                        fontWeight: selected ? "800" : "600",
-                      }}
-                    >
-                      GW {gameweek.id}
-                    </Text>
-                    <Text style={{ color: "#777", fontSize: 12 }}>
-                      {gameweek.id === activeEvent
-                        ? "Current"
-                        : selected
-                          ? "Selected"
-                          : gameweek.finished
-                            ? "Finished"
-                            : gameweek.name}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </Animated.View>
-        </View>
-      </Modal>
       <AppDialog
         visible={dialog !== null}
         title={dialog?.title ?? ""}
         message={dialog?.message ?? ""}
         buttons={dialog?.buttons ?? []}
+        kind={dialog?.kind ?? "confirm"}
         onDismiss={() => setDialog(null)}
       />
     </View>

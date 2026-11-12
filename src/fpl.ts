@@ -14,8 +14,12 @@ export type Row = {
   ownership?: string;
   priceChange?: number;
   displayPoints?: number;
+  multiplier?: number;
+  minutes?: number;
   formMood?: "good" | "bad";
   fixtures?: PlayerFixture[];
+  // Brought in by a transfer that hasn't been confirmed yet.
+  pendingIn?: boolean;
 };
 
 export type PlayerFixture = {
@@ -47,6 +51,10 @@ export type Squad = {
   teamName: string;
   managerName: string;
   totalPoints: number;
+  // Optional: squads cached by older app versions don't have these yet.
+  overallRank?: number | null;
+  eventPoints?: number | null;
+  eventId?: number | null;
   gw: number;
   currentGw: number;
   bank: number;
@@ -73,7 +81,32 @@ export type Gameweek = {
   deadlineTime?: string | null;
 };
 
+// Season label such as "26-27", derived from the first gameweek's deadline.
+// Falls back to the calendar (seasons start in August) if no deadline is known.
+export function seasonLabel(gameweeks: Gameweek[]): string {
+  const firstDeadline = gameweeks.find((gw) => gw.id === 1)?.deadlineTime;
+  const parsed = firstDeadline ? new Date(firstDeadline) : null;
+  const startYear =
+    parsed && !Number.isNaN(parsed.getTime())
+      ? parsed.getFullYear()
+      : new Date().getMonth() >= 6
+        ? new Date().getFullYear()
+        : new Date().getFullYear() - 1;
+  const short = (year: number) => String(year % 100).padStart(2, "0");
+  return `${short(startYear)}-${short(startYear + 1)}`;
+}
+
 export type LeagueType = "classic" | "h2h";
+
+// How leagues are grouped on the leagues screen. "general" covers the leagues
+// FPL enrols every manager in automatically (Overall, country, favourite club,
+// gameweek leagues...), which the API reports with league_type "s" (system).
+export type LeagueCategory = "classic" | "h2h" | "general";
+
+export function leagueCategory(league: FplLeague): LeagueCategory {
+  if (league.league_type === "s") return "general";
+  return league.kind;
+}
 
 export type FplLeague = {
   id: number;
@@ -85,6 +118,8 @@ export type FplLeague = {
   entry_rank: number | null;
   entry_last_rank: number | null;
   rank_count: number;
+  // First gameweek that counts towards this league's table.
+  start_event?: number;
   has_cup?: boolean;
   entry_can_invite?: boolean;
 };
@@ -97,6 +132,37 @@ export type LeagueStanding = {
   last_rank: number | null;
   total: number;
   event_total: number;
+  // h2h standings only
+  matches_played?: number;
+  matches_won?: number;
+  matches_drawn?: number;
+  matches_lost?: number;
+  points_for?: number;
+};
+
+// One head-to-head fixture. An entry id of null is FPL's "AVERAGE" opponent,
+// used when a league has an odd number of teams.
+export type H2hMatch = {
+  id: number;
+  event: number;
+  entry_1_entry: number | null;
+  entry_1_name: string;
+  entry_1_player_name: string;
+  entry_1_points: number;
+  entry_2_entry: number | null;
+  entry_2_name: string;
+  entry_2_player_name: string;
+  entry_2_points: number;
+  is_knockout?: boolean;
+  winner?: number | null;
+};
+
+// Fresh headline numbers for the logged-in manager, read with their leagues.
+export type EntrySummary = {
+  totalPoints: number;
+  overallRank: number | null;
+  eventPoints: number | null;
+  eventId: number | null;
 };
 
 export type LeagueStandings = {
@@ -116,6 +182,7 @@ export type MemberPick = {
   position: number;
   name: string;
   team: string;
+  teamId: number;
   elementType: number;
   captain: boolean;
   viceCaptain: boolean;
@@ -146,32 +213,53 @@ export type MemberSquad = {
   };
   picks: MemberPick[];
 };
-// Runs inside the WebView, because the login session lives there
-export const FETCH_JS = `
+// The session is renewed by the app before a script runs (see auth.ts), so a
+// script that is still refused has nothing left to try. Kept as a small stub
+// so the save and transfer scripts keep their existing shape.
+const NO_RELOGIN = `
+    const attemptRelogin = async () => false;
+    const hasStoredCreds = false;
+  `;
+
+// Runs inside the WebView, as a page on the FPL site. The caller wraps it with
+// `withAuth`, which gives its `fetch` calls the access token.
+export function buildFetchJs() {
+  return `
 (async () => {
   const send = (o) => window.ReactNativeWebView.postMessage(JSON.stringify(o));
   try {
-    const meRes = await fetch("https://fantasy.premierleague.com/api/me/", { credentials: "include" });
-    if (meRes.status === 401 || meRes.status === 403) { send({ ok: false, notLoggedIn: true }); return; }
-    const me = await meRes.json().catch(() => null);
+    // null = FPL says nobody is signed in. Anything else that goes wrong (the
+    // game updating, a server error, no network) throws, so an outage is never
+    // mistaken for a sign-out.
+    const getMe = async () => {
+      const r = await fetch("https://fantasy.premierleague.com/api/me/", { credentials: "include", cache: "no-store" });
+      if (r.status === 401 || r.status === 403) return null;
+      if (!r.ok) throw new Error("api/me -> " + r.status);
+      return r.json();
+    };
+    const me = await getMe();
+    // FPL answers a rejected session with 200 and an empty player, so this
+    // covers both that and a 401/403.
+    if (!(me && me.player)) { send({ ok: false, notLoggedIn: true }); return; }
     const entry = me && me.player && me.player.entry;
-    if (!entry) { send({ ok: false, notLoggedIn: true }); return; }
+    // A signed-in account with no entry has not created an FPL team yet.
+    if (!entry) { send({ ok: false, notLoggedIn: true, noTeam: true }); return; }
 
     const j = async (u) => {
       const r = await fetch(u, { credentials: "include" });
       if (!r.ok) throw new Error(u + " -> " + r.status);
       return r.json();
     };
-    const [bs, d, fixtures] = await Promise.all([
+    const [bs, d, fixtures, entryData] = await Promise.all([
       j("https://fantasy.premierleague.com/api/bootstrap-static/"),
       j("https://fantasy.premierleague.com/api/my-team/" + entry + "/"),
-      j("https://fantasy.premierleague.com/api/fixtures/")
+      j("https://fantasy.premierleague.com/api/fixtures/"),
+      j("https://fantasy.premierleague.com/api/entry/" + entry + "/")
     ]);
     const currentEvent = bs.events.find(e => e.is_current && !e.finished);
     const nextEvent = bs.events.find(e => e.is_next && !e.finished);
     const activeEvent = currentEvent || nextEvent || bs.events.find(e => !e.finished) || bs.events[0];
     const nextGameweek = nextEvent || activeEvent;
-    const entryData = await j("https://fantasy.premierleague.com/api/entry/" + entry + "/");
     const leagues = [
       ...(entryData.leagues.classic || []).map(l => ({ ...l, kind: "classic" })),
       ...(entryData.leagues.h2h || []).map(l => ({ ...l, kind: "h2h" }))
@@ -293,6 +381,9 @@ export const FETCH_JS = `
         teamName: entryData.name || "",
         managerName: entryData.player_name || "",
         totalPoints: entryData.summary_overall_points || 0,
+        overallRank: entryData.summary_overall_rank || null,
+        eventPoints: entryData.summary_event_points == null ? null : entryData.summary_event_points,
+        eventId: entryData.current_event || null,
         gw: nextGameweek.id,
         currentGw: activeEvent.id,
         bank: t.bank,
@@ -316,13 +407,12 @@ export const FETCH_JS = `
 })();
 true;
 `;
+}
 
 export function buildSaveJs(
   entry: number,
   picks: Row[],
   chip: string | null = null,
-  email?: string,
-  password?: string,
 ) {
   const body = {
     chip,
@@ -338,6 +428,7 @@ export function buildSaveJs(
   return `
 (async () => {
   const send = (o) => window.ReactNativeWebView.postMessage(JSON.stringify(o));
+  ${NO_RELOGIN}
   const getCsrf = () => {
     const parts = document.cookie.split(";").map((p) => p.trim());
     const c = parts.find((p) => p.startsWith("csrftoken="));
@@ -362,29 +453,19 @@ export function buildSaveJs(
 
   try {
     let r = await doSave();
+    let reloginAttempted = false;
 
-    if ((r.status === 403 || r.status === 401) && ${JSON.stringify(email || "")} && ${JSON.stringify(password || "")}) {
-      const formData = new URLSearchParams();
-      formData.append("login", ${JSON.stringify(email || "")});
-      formData.append("password", ${JSON.stringify(password || "")});
-      formData.append("app", "fpl-web");
-      formData.append("redirect_uri", "https://fantasy.premierleague.com/");
-
-      await fetch("https://fantasy.premierleague.com/accounts/login/", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: formData.toString(),
-        credentials: "include",
-      }).catch(() => {});
-
-      r = await doSave();
+    if (r.status === 403 || r.status === 401) {
+      reloginAttempted = hasStoredCreds;
+      const relogged = await attemptRelogin();
+      if (relogged) r = await doSave();
     }
 
     const text = await r.text();
     if (r.ok || r.status === 200) send({ saved: true });
-    else send({ ok: false, saveError: "Status " + r.status + ": " + text.slice(0, 150) });
+    else send({ saveError: true, status: r.status, detail: text.slice(0, 300), reloginAttempted });
   } catch (e) {
-    send({ ok: false, saveError: String(e) });
+    send({ saveError: true, status: null, detail: String(e) });
   }
 })();
 true;
@@ -402,8 +483,6 @@ export function buildTransferJs(
   event: number,
   items: TransferItem[],
   chip: string | null = null,
-  email?: string,
-  password?: string,
 ) {
   const body = {
     chip,
@@ -419,6 +498,7 @@ export function buildTransferJs(
   return `
 (async () => {
   const send = (o) => window.ReactNativeWebView.postMessage(JSON.stringify(o));
+  ${NO_RELOGIN}
   const getCsrf = () => {
     const parts = document.cookie.split(";").map((p) => p.trim());
     const c = parts.find((p) => p.startsWith("csrftoken="));
@@ -446,41 +526,35 @@ export function buildTransferJs(
 
   try {
     let r = await doTransfer();
+    let reloginAttempted = false;
 
-    if ((r.status === 403 || r.status === 401) && ${JSON.stringify(email || "")} && ${JSON.stringify(password || "")}) {
-      const formData = new URLSearchParams();
-      formData.append("login", ${JSON.stringify(email || "")});
-      formData.append("password", ${JSON.stringify(password || "")});
-      formData.append("app", "fpl-web");
-      formData.append("redirect_uri", "https://fantasy.premierleague.com/");
-
-      await fetch("https://fantasy.premierleague.com/accounts/login/", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: formData.toString(),
-        credentials: "include",
-      }).catch(() => {});
-
-      r = await doTransfer();
+    if (r.status === 403 || r.status === 401) {
+      reloginAttempted = hasStoredCreds;
+      const relogged = await attemptRelogin();
+      if (relogged) r = await doTransfer();
     }
 
     clearTimeout(timer);
     const text = await r.text();
     if (r.ok || r.status === 200) send({ transferred: true });
-    else send({ transferError: "Status " + r.status + ": " + text.slice(0, 200) });
+    else send({ transferError: true, status: r.status, detail: text.slice(0, 300), reloginAttempted });
   } catch (e) {
-    send({
-      transferError: (e && e.name === "AbortError")
-        ? "Timed out. The transfer may or may not have gone through. Check the FPL site before trying again."
-        : String(e)
-    });
+    clearTimeout(timer);
+    if (e && e.name === "AbortError") {
+      send({ transferError: true, timedOut: true, detail: "timeout" });
+    } else {
+      send({ transferError: true, status: null, detail: String(e) });
+    }
   }
 })();
 true;
 `;
 }
-type LeagueAction =
-  | { action: "standings"; league: FplLeague; page: number }
+export type LeagueAction =
+  | { action: "leagues"; entry: number }
+  // silent: background refresh; its errors are not shown to the user.
+  | { action: "standings"; league: FplLeague; page: number; silent?: boolean }
+  | { action: "h2h-matches"; leagueId: number; event: number; silent?: boolean }
   | { action: "join"; code: string }
   | {
       action: "create";
@@ -488,6 +562,7 @@ type LeagueAction =
       leagueType: LeagueType;
       startEvent: number;
       knockoutRounds?: number;
+      maxEntries?: number;
     }
   | { action: "invite-code"; leagueId: number }
   | { action: "manager-gameweek"; entry: number; event: number };
@@ -499,7 +574,8 @@ export function buildLeagueActionJs(action: LeagueAction) {
   const action = ${JSON.stringify(action)};
   const api = "https://fantasy.premierleague.com/api/";
 
-  const request = async (path, method, body) => {
+  // fresh: skip the WebView HTTP cache, for data that changes during a gameweek.
+  const request = async (path, method, body, fresh) => {
     const headers = {};
     if (method === "POST") {
   headers["Content-Type"] = "application/json";
@@ -519,6 +595,7 @@ export function buildLeagueActionJs(action: LeagueAction) {
       method,
       credentials: "include",
       headers,
+      ...(fresh ? { cache: "no-store" } : {}),
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     });
     const text = await response.text();
@@ -531,18 +608,101 @@ export function buildLeagueActionJs(action: LeagueAction) {
     }
 
     if (!response.ok) {
-      throw new Error("FPL returned " + response.status + ": " + String(text).slice(0, 250));
+      let detail = null;
+      if (data && typeof data === "object") {
+        if (typeof data.detail === "string") {
+          detail = data.detail;
+        } else {
+          const parts = Object.values(data)
+            .map((value) =>
+              Array.isArray(value)
+                ? value.filter((v) => typeof v === "string").join(" ")
+                : typeof value === "string"
+                  ? value
+                  : null
+            )
+            .filter(Boolean);
+          if (parts.length) detail = parts.join(" ");
+        }
+      } else if (typeof data === "string" && data.trim()) {
+        detail = data.trim().slice(0, 200);
+      }
+      throw new Error(
+        detail ||
+          (response.status === 401 || response.status === 403
+            ? "You need to be logged in to do that."
+            : "FPL rejected this request (status " + response.status + ").")
+      );
     }
     return data;
   };
 
   try {
+    if (action.action === "leagues") {
+      // Bypass the WebView HTTP cache so ranks reflect FPL's latest table update.
+      const response = await fetch(api + "entry/" + action.entry + "/", {
+        credentials: "include",
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error("FPL rejected this request (status " + response.status + ").");
+      }
+      const entryData = await response.json();
+      const source = (entryData && entryData.leagues) || {};
+      send({
+        leagueAction: "leagues",
+        entry: action.entry,
+        summary: {
+          totalPoints: entryData.summary_overall_points || 0,
+          overallRank: entryData.summary_overall_rank || null,
+          eventPoints: entryData.summary_event_points == null ? null : entryData.summary_event_points,
+          eventId: entryData.current_event || null
+        },
+        leagues: [
+          ...(source.classic || []).map((l) => ({ ...l, kind: "classic" })),
+          ...(source.h2h || []).map((l) => ({ ...l, kind: "h2h" }))
+        ]
+      });
+      return;
+    }
+
     if (action.action === "standings") {
       const path = action.league.kind === "classic"
         ? "leagues-classic/" + action.league.id + "/standings/?page_standings=" + action.page
         : "leagues-h2h/" + action.league.id + "/standings/?page_standings=" + action.page;
-      const data = await request(path, "GET");
-      send({ leagueAction: "standings", data });
+      const data = await request(path, "GET", undefined, true);
+      // Echo what was asked for so a slow response can't land on another league.
+      send({
+        leagueAction: "standings",
+        leagueId: action.league.id,
+        kind: action.league.kind,
+        page: action.page,
+        silent: !!action.silent,
+        data
+      });
+      return;
+    }
+
+    if (action.action === "h2h-matches") {
+      // Big leagues split a gameweek's fixtures across pages; read them all.
+      const results = [];
+      for (let page = 1; page <= 20; page++) {
+        const data = await request(
+          "leagues-h2h-matches/league/" + action.leagueId + "/?event=" + action.event + "&page=" + page,
+          "GET",
+          undefined,
+          true
+        );
+        results.push(...((data && data.results) || []));
+        if (!data || !data.has_next) break;
+      }
+      send({
+        leagueAction: "h2h-matches",
+        leagueId: action.leagueId,
+        event: action.event,
+        silent: !!action.silent,
+        results
+      });
       return;
     }
 
@@ -625,6 +785,7 @@ if (action.action === "manager-gameweek") {
       position: pick.position,
       name: player.web_name,
       team: teams[player.team] || "",
+      teamId: player.team,
       elementType: player.element_type,
       captain: pick.is_captain,
       viceCaptain: pick.is_vice_captain,
@@ -674,6 +835,10 @@ if (action.action === "manager-gameweek") {
     const body = action.leagueType === "classic"
       ? { name: action.name, has_cup: true, start_event: action.startEvent }
       : { name: action.name, start_event: action.startEvent };
+    if (action.maxEntries) body.max_entries = action.maxEntries;
+    if (action.leagueType === "h2h" && action.knockoutRounds) {
+      body.ko_rounds = action.knockoutRounds;
+    }
 
     const created = await request(path, "POST", body);
     const leagueId = created && (created.id || (created.league && created.league.id));
@@ -685,7 +850,7 @@ if (action.action === "manager-gameweek") {
         const codeResponse = await request("league/" + leagueId + "/code/", "GET");
         inviteCode = codeResponse && codeResponse.code;
       } catch (e) {
-        inviteCodeError = String(e);
+        inviteCodeError = (e && e.message) || String(e);
       }
     }
 
@@ -696,7 +861,9 @@ if (action.action === "manager-gameweek") {
       action: action.action,
       entry: action.entry,
       event: action.event,
-      error: String(e)
+      leagueId: action.leagueId || (action.league && action.league.id),
+      silent: !!action.silent,
+      error: (e && e.message) || String(e)
     });
   }
 })();
