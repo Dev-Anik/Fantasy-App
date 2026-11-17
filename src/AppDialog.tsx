@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Modal, Pressable, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
 import type { SymbolViewProps } from "expo-symbols";
@@ -16,18 +17,17 @@ type Props = {
   message: string;
   buttons: DialogButton[];
   kind?: DialogKind;
+  // Extra content under the message, e.g. substitution rows.
+  content?: ReactNode;
   onDismiss: () => void;
 };
 
 const GREEN = "#00d982";
 const AMBER = "#ffb020";
-const RED = "#ef4444";
-const NEUTRAL = "#cfead9";
+const RED = "#ff5a5f";
 
-const KIND_STYLES: Record<
-  DialogKind,
-  { icon: SymbolViewProps["name"]; color: string }
-> = {
+// A small icon beside the title marks the outcome; plain questions have none.
+const KIND_ICONS: Partial<Record<DialogKind, { icon: SymbolViewProps["name"]; color: string }>> = {
   success: {
     icon: { ios: "checkmark.circle.fill", android: "check_circle", web: "check_circle" },
     color: GREEN,
@@ -37,24 +37,67 @@ const KIND_STYLES: Record<
     color: AMBER,
   },
   danger: {
-    icon: { ios: "exclamationmark.octagon.fill", android: "error", web: "error" },
+    icon: { ios: "exclamationmark.circle.fill", android: "error", web: "error" },
     color: RED,
-  },
-  confirm: {
-    icon: { ios: "questionmark.circle.fill", android: "help", web: "help" },
-    color: NEUTRAL,
   },
 };
 
+const IN_COLOR = "#00d982";
+const OUT_COLOR = "#ff6b7a";
+
+// One substitution: the player coming in (green, up arrow), a swap icon,
+// then the player going out (red, down arrow). Either side may be missing.
+export function SubstitutionRow({ inName, outName }: { inName?: string; outName?: string }) {
+  const side = (name: string, coming: boolean) => (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 1 }}>
+      <AppSymbol
+        name={
+          coming
+            ? { ios: "arrow.up", android: "arrow_upward", web: "arrow_upward" }
+            : { ios: "arrow.down", android: "arrow_downward", web: "arrow_downward" }
+        }
+        color={coming ? IN_COLOR : OUT_COLOR}
+        size={13}
+      />
+      <Text
+        numberOfLines={1}
+        style={{ flexShrink: 1, color: coming ? IN_COLOR : OUT_COLOR, fontSize: 14, fontWeight: "800" }}
+      >
+        {name}
+      </Text>
+    </View>
+  );
+  return (
+    <View
+      accessible
+      accessibilityLabel={[inName && `${inName} in`, outName && `${outName} out`].filter(Boolean).join(", ")}
+      style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 3 }}
+    >
+      {!!inName && side(inName, true)}
+      {!!inName && !!outName && (
+        <AppSymbol
+          name={{ ios: "arrow.left.arrow.right", android: "swap_horiz", web: "swap_horiz" }}
+          color="#6f877a"
+          size={15}
+        />
+      )}
+      {!!outName && side(outName, false)}
+    </View>
+  );
+}
+
+// A compact, left-aligned dialog: title, short message, and actions on the
+// right. Cancel is a quiet text button; the main action is a solid button.
 export function AppDialog({
   visible,
   title,
   message,
   buttons,
   kind = "confirm",
+  content,
   onDismiss,
 }: Props) {
-  const { icon, color } = KIND_STYLES[kind];
+  const marker = KIND_ICONS[kind];
 
   return (
     <Modal
@@ -69,8 +112,8 @@ export function AppDialog({
           flex: 1,
           justifyContent: "center",
           alignItems: "center",
-          padding: 20,
-          backgroundColor: "rgba(5, 18, 11, 0.75)",
+          padding: 24,
+          backgroundColor: "rgba(2, 10, 6, 0.7)",
         }}
       >
         <Pressable
@@ -83,108 +126,67 @@ export function AppDialog({
           accessibilityViewIsModal
           style={{
             width: "100%",
-            maxWidth: 320,
-            padding: 20,
-            borderRadius: 20,
-            backgroundColor: "#11261d",
-            borderWidth: 1.5,
-            borderColor: "rgba(255, 255, 255, 0.1)",
-            alignItems: "center",
-            elevation: 20,
+            maxWidth: 340,
+            paddingTop: 20,
+            paddingHorizontal: 20,
+            paddingBottom: 14,
+            borderRadius: 16,
+            backgroundColor: "#0f1f17",
+            borderWidth: 1,
+            borderColor: "rgba(255, 255, 255, 0.08)",
+            elevation: 16,
             shadowColor: "#000",
-            shadowOpacity: 0.4,
-            shadowRadius: 16,
-            shadowOffset: { width: 0, height: 6 },
+            shadowOpacity: 0.35,
+            shadowRadius: 18,
+            shadowOffset: { width: 0, height: 8 },
           }}
         >
-          {/* Close X Button in top right */}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Close dialog"
-            onPress={onDismiss}
-            hitSlop={8}
-            style={{
-              position: "absolute",
-              top: 10,
-              right: 10,
-              width: 26,
-              height: 26,
-              borderRadius: 13,
-              backgroundColor: "rgba(255, 255, 255, 0.08)",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <AppSymbol
-              name={{ ios: "xmark", android: "close", web: "close" }}
-              color="#b0c4b8"
-              size={13}
-            />
-          </Pressable>
-
-          {/* Top Icon Circle */}
-          <View
-            style={{
-              width: 48,
-              height: 48,
-              borderRadius: 24,
-              backgroundColor: `${color}1f`,
-              borderWidth: 1.5,
-              borderColor: `${color}73`,
-              alignItems: "center",
-              justifyContent: "center",
-              marginTop: 4,
-              marginBottom: 14,
-              shadowColor: color,
-              shadowOpacity: 0.3,
-              shadowRadius: 6,
-              elevation: 2,
-            }}
-          >
-            <AppSymbol name={icon} color={color} size={22} />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {marker && <AppSymbol name={marker.icon} color={marker.color} size={18} />}
+            <Text
+              accessibilityRole="header"
+              style={{
+                flex: 1,
+                color: "#ffffff",
+                fontSize: 16,
+                fontWeight: "800",
+                letterSpacing: -0.1,
+              }}
+            >
+              {title}
+            </Text>
           </View>
 
-          {/* Title */}
-          <Text
-            style={{
-              color: "#ffffff",
-              fontSize: 17,
-              fontWeight: "900",
-              textAlign: "center",
-              letterSpacing: -0.2,
-            }}
-          >
-            {title}
-          </Text>
+          {!!message && (
+            <Text
+              style={{
+                color: "#a9beb3",
+                fontSize: 13.5,
+                lineHeight: 20,
+                marginTop: 8,
+              }}
+            >
+              {message}
+            </Text>
+          )}
 
-          {/* Message */}
-          <Text
-            style={{
-              color: "#a9beb3",
-              fontSize: 13,
-              lineHeight: 19,
-              textAlign: "center",
-              marginTop: 6,
-              marginBottom: 18,
-              paddingHorizontal: 2,
-            }}
-          >
-            {message}
-          </Text>
+          {!!content && <View style={{ marginTop: 10 }}>{content}</View>}
 
-          {/* Buttons Row */}
           <View
             style={{
               flexDirection: "row",
-              width: "100%",
-              gap: 10,
+              justifyContent: "flex-end",
+              alignItems: "center",
+              gap: 6,
+              marginTop: 18,
             }}
           >
             {buttons.map((button, index) => {
-              const isCancel = button.style === "cancel" || (index === 0 && buttons.length > 1 && !button.style);
+              const isCancel =
+                button.style === "cancel" ||
+                (index === 0 && buttons.length > 1 && !button.style);
               const isDestructive = button.style === "destructive";
-              const backgroundColor = isDestructive ? RED : isCancel ? "#1a3325" : GREEN;
-              const textColor = isDestructive ? "#ffffff" : isCancel ? "#ffffff" : "#051a0f";
+              const solid = isDestructive ? RED : GREEN;
               return (
                 <Pressable
                   key={`${button.text}-${index}`}
@@ -193,26 +195,25 @@ export function AppDialog({
                     onDismiss();
                     button.onPress?.();
                   }}
-                  style={{
-                    flex: 1,
-                    minHeight: 40,
-                    borderRadius: 12,
+                  style={({ pressed }) => ({
+                    minHeight: 38,
+                    paddingHorizontal: 16,
+                    borderRadius: 10,
                     alignItems: "center",
                     justifyContent: "center",
-                    backgroundColor,
-                    borderWidth: isCancel ? 1 : 0,
-                    borderColor: isCancel ? "rgba(255, 255, 255, 0.15)" : "transparent",
-                    shadowColor: isCancel ? "transparent" : backgroundColor,
-                    shadowOpacity: isCancel ? 0 : 0.25,
-                    shadowRadius: 4,
-                    elevation: isCancel ? 0 : 2,
-                  }}
+                    backgroundColor: isCancel
+                      ? pressed
+                        ? "rgba(255, 255, 255, 0.08)"
+                        : "transparent"
+                      : solid,
+                    opacity: !isCancel && pressed ? 0.85 : 1,
+                  })}
                 >
                   <Text
                     style={{
-                      color: textColor,
-                      fontSize: 13,
-                      fontWeight: "900",
+                      color: isCancel ? "#c7d8ce" : isDestructive ? "#ffffff" : "#04210f",
+                      fontSize: 13.5,
+                      fontWeight: isCancel ? "700" : "800",
                     }}
                   >
                     {button.text}

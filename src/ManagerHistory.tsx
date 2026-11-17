@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Gameweek, MemberSquad, PlayerFixture, Row } from "./fpl";
 import { AppSymbol } from "./AppSymbol";
 import { GameweekPicker } from "./GameweekPicker";
+import { computeLive } from "./live";
 import { Pitch } from "./Pitch";
 import { PointsBadge } from "./PointsBadge";
 
@@ -25,6 +26,18 @@ type Props = {
 
 const GREEN = "#00d982";
 const DARK_GREEN = "#071b12";
+
+// Small status lines under the points badge.
+const STATUS_TEXT = {
+  color: "#d7e6dd",
+  fontSize: 10,
+  fontWeight: "800" as const,
+  backgroundColor: "rgba(4, 16, 10, 0.88)",
+  borderRadius: 8,
+  paddingHorizontal: 7,
+  paddingVertical: 2,
+  overflow: "hidden" as const,
+};
 
 const CHIP_LABELS: Record<string, string> = {
   wildcard: "Wildcard",
@@ -55,19 +68,17 @@ export function ManagerHistory({
   const stale = !!ownData && ownData.event !== selectedEvent;
   const currentData = ownData && (!stale || loading) ? ownData : null;
   const shownEvent = currentData?.event ?? selectedEvent;
+  const selectedGwData = gameweeks.find((gw) => gw.id === shownEvent);
+  const isLive = Boolean(selectedGwData?.isCurrent && !selectedGwData.finished);
+  // Provisional bonus, projected auto-subs and the armband, as FPL will
+  // settle them. For a finished gameweek these match what FPL applied.
+  const live = currentData
+    ? computeLive(currentData.picks, currentData.fixtures ?? [], currentData.chip)
+    : null;
   const picks: Row[] =
-    currentData?.picks.map((pick) => {
-      const mult =
-        typeof pick.multiplier === "number" && pick.multiplier > 0
-          ? pick.multiplier
-          : pick.captain
-            ? currentData.chip === "3xc"
-              ? 3
-              : 2
-            : 1;
-      const rawPoints = pick.points ?? 0;
-      const finalPoints = rawPoints * mult;
-
+    live?.picks.map((pick) => {
+      // Bench players show their own points; only counted ones are multiplied.
+      const shownMultiplier = Math.max(1, pick.effectiveMultiplier);
       return {
         id: pick.id,
         pos: pick.position,
@@ -75,28 +86,25 @@ export function ManagerHistory({
         team: pick.team,
         teamId: pick.teamId,
         type: pick.elementType,
-        cap: pick.captain,
-        vice: pick.viceCaptain,
-        multiplier: mult,
+        cap: pick.captain || !!pick.actingCaptain,
+        vice: pick.viceCaptain && !pick.actingCaptain,
+        multiplier: pick.effectiveMultiplier,
         minutes: pick.minutes,
         sell: 0,
         buy: 0,
-        displayPoints: finalPoints,
+        displayPoints: pick.livePoints * shownMultiplier,
         formMood: pick.formMood,
         fixtures: fixturesByTeam?.[pick.teamId] ?? [],
+        autoSub: pick.autoSub,
+        provisionalBonus: pick.provisionalBonus,
       };
     }) ?? [];
-  const isBenchBoost = currentData?.chip === "bboost";
-  const computedTotal = picks
-    .filter((p) => isBenchBoost || p.pos <= 11)
-    .reduce((sum, p) => sum + (p.displayPoints ?? 0), 0);
-  const selectedGwData = gameweeks.find((gw) => gw.id === shownEvent);
-  // For finished GWs, history.points is authoritative (includes auto-subs).
-  // For live GWs, the picks endpoint lags; use the live-computed total instead.
+  // For finished gameweeks FPL's own figure is authoritative; while one is in
+  // play its total lags, so use the live calculation.
   const totalPts =
     selectedGwData?.finished && currentData?.history.points != null
       ? currentData.history.points
-      : computedTotal;
+      : (live?.total ?? 0);
   const showBlankSquad =
     showBlankSquadOnError &&
     !loading &&
@@ -290,8 +298,31 @@ export function ManagerHistory({
                   <PointsBadge
                     gameweek={shownEvent}
                     points={currentData ? totalPts : null}
-                    live={Boolean(selectedGwData?.isCurrent && !selectedGwData.finished)}
+                    live={isLive}
                   />
+                  {currentData && (isLive || (currentData.history.transferCost ?? 0) > 0) && (
+                    <View
+                      style={{
+                        marginTop: 4,
+                        alignSelf: "flex-end",
+                        alignItems: "flex-end",
+                        gap: 2,
+                      }}
+                    >
+                      {isLive && live && (
+                        <Text style={STATUS_TEXT}>
+                          {live.stillToPlay > 0
+                            ? `${live.stillToPlay} still to play`
+                            : "All played"}
+                        </Text>
+                      )}
+                      {(currentData.history.transferCost ?? 0) > 0 && (
+                        <Text style={[STATUS_TEXT, { color: "#ff8a9c" }]}>
+                          {`−${currentData.history.transferCost} hit`}
+                        </Text>
+                      )}
+                    </View>
+                  )}
                 </View>
                 {currentData?.chip && (
                   <View pointerEvents="none" style={{ position: "absolute", top: 8, left: 8, zIndex: 10 }}>

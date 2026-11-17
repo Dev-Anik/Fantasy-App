@@ -1,8 +1,19 @@
-import { useMemo, useState } from "react";
-import { FlatList, Modal, Pressable, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  FlatList,
+  Modal,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from "react-native";
+import type { GestureResponderEvent } from "react-native";
+import type { SymbolViewProps } from "expo-symbols";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Player } from "./fpl";
+import { availability } from "./availability";
 import { PlayerArt } from "./Pitch";
 import { AppSymbol } from "./AppSymbol";
 
@@ -10,17 +21,82 @@ const GREEN = "#00d982";
 const DARK_GREEN = "#051a0f";
 const MUTED = "#9db3a6";
 const RED = "#ff526f";
-const GOLD = "#ffd400";
 const POS = ["", "GKP", "DEF", "MID", "FWD"];
 
 // FPL availability codes, in words.
-const STATUS_LABELS: Record<string, { text: string; color: string }> = {
-  d: { text: "Doubtful", color: GOLD },
-  i: { text: "Injured", color: RED },
-  s: { text: "Suspended", color: RED },
-  u: { text: "Unavailable", color: RED },
-  n: { text: "Not available", color: RED },
+
+const GOLD_TEXT = "#ffd400";
+const TIP_WIDTH = 210;
+
+// Icons that stand in for text labels in a player row. Tapping one shows
+// its meaning in a tooltip.
+type IconName = SymbolViewProps["name"];
+const ICONS: Record<string, { name: IconName; tip: string }> = {
+  form: {
+    name: { ios: "chart.line.uptrend.xyaxis", android: "trending_up", web: "trending_up" },
+    tip: "Form: average points per match over the last 30 days",
+  },
+  owned: {
+    name: { ios: "person.2.fill", android: "group", web: "group" },
+    tip: "Ownership: share of all managers who own this player",
+  },
+  points: {
+    name: { ios: "star.fill", android: "star", web: "star" },
+    tip: "Total points this season",
+  },
+  clubFull: {
+    name: { ios: "nosign", android: "block", web: "block" },
+    tip: "Club limit reached: you already have 3 players from this club",
+  },
+  overBudget: {
+    name: { ios: "banknote.fill", android: "payments", web: "payments" },
+    tip: "Over budget: costs more than you can spend on this spot",
+  },
+  inSquad: {
+    name: { ios: "checkmark.circle.fill", android: "check_circle", web: "check_circle" },
+    tip: "Already in your squad",
+  },
+  replacing: {
+    name: { ios: "arrow.left.arrow.right", android: "swap_horiz", web: "swap_horiz" },
+    tip: "The player you are replacing",
+  },
 };
+
+type ShowTip = (text: string, event: GestureResponderEvent) => void;
+
+// An icon with its value. The icon replaces a text label; tapping explains it.
+function IconStat({
+  icon,
+  value,
+  color = MUTED,
+  onTip,
+  size = 12,
+  bold = false,
+}: {
+  icon: keyof typeof ICONS;
+  value?: string;
+  color?: string;
+  onTip: ShowTip;
+  size?: number;
+  bold?: boolean;
+}) {
+  const { name, tip } = ICONS[icon];
+  return (
+    <Pressable
+      onPress={(event) => onTip(tip, event)}
+      hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+      accessibilityRole="button"
+      accessibilityLabel={`${tip}${value ? `: ${value}` : ""}`}
+      accessibilityHint="Shows what this icon means"
+      style={{ flexDirection: "row", alignItems: "center", gap: 3 }}
+    >
+      <AppSymbol name={name} color={color} size={size + 1} />
+      {!!value && (
+        <Text style={{ color, fontSize: size, fontWeight: bold ? "800" : "600" }}>{value}</Text>
+      )}
+    </Pressable>
+  );
+}
 
 type SortMode = "pts" | "form" | "cost-desc" | "cost-asc";
 
@@ -68,6 +144,8 @@ export function PlayerPicker({
   candidates,
   maxCost,
   fullClubs,
+  squadIds = [],
+  outgoingId = null,
   onPick,
   onClose,
 }: {
@@ -77,6 +155,10 @@ export function PlayerPicker({
   candidates: Player[];
   maxCost: number;
   fullClubs: number[];
+  // Players already in the squad: listed, but can't be picked again.
+  squadIds?: number[];
+  // The squad player this transfer replaces.
+  outgoingId?: number | null;
   onPick: (p: Player) => void;
   onClose: () => void;
 }) {
@@ -85,12 +167,31 @@ export function PlayerPicker({
   const [sort, setSort] = useState<SortMode>("pts");
   const [affordableOnly, setAffordableOnly] = useState(false);
 
+  // Tooltip for a tapped icon, anchored above the touch point.
+  const { width: windowWidth } = useWindowDimensions();
+  const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const tipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideTip = () => {
+    if (tipTimer.current) clearTimeout(tipTimer.current);
+    tipTimer.current = null;
+    setTip(null);
+  };
+  const showTip: ShowTip = (text, event) => {
+    if (tipTimer.current) clearTimeout(tipTimer.current);
+    setTip({ text, x: event.nativeEvent.pageX, y: event.nativeEvent.pageY });
+    tipTimer.current = setTimeout(() => setTip(null), 3000);
+  };
+  useEffect(() => () => {
+    if (tipTimer.current) clearTimeout(tipTimer.current);
+  }, []);
+
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
     const filtered = candidates.filter(
       (c) =>
         (!s || c.name.toLowerCase().includes(s) || c.team.toLowerCase().includes(s)) &&
-        (!affordableOnly || (c.cost <= maxCost && !fullClubs.includes(c.teamId))),
+        (!affordableOnly ||
+          (c.cost <= maxCost && !fullClubs.includes(c.teamId) && !squadIds.includes(c.id))),
     );
     return filtered.sort((a, b) => {
       if (sort === "pts") return b.pts - a.pts;
@@ -98,14 +199,16 @@ export function PlayerPicker({
       if (sort === "cost-desc") return b.cost - a.cost;
       return a.cost - b.cost;
     });
-  }, [candidates, q, sort, affordableOnly, maxCost, fullClubs]);
+  }, [candidates, q, sort, affordableOnly, maxCost, fullClubs, squadIds]);
 
   // Start each visit with a clean search; the sort and filter are kept.
   const close = () => {
+    hideTip();
     setQ("");
     onClose();
   };
   const pick = (player: Player) => {
+    hideTip();
     setQ("");
     onPick(player);
   };
@@ -233,19 +336,42 @@ export function PlayerPicker({
                 : "No players found."}
             </Text>
           }
+          onScrollBeginDrag={hideTip}
           renderItem={({ item }) => {
-            const tooPricey = item.cost > maxCost;
-            const clubFull = fullClubs.includes(item.teamId);
+            const inSquad = squadIds.includes(item.id);
+            const outgoing = item.id === outgoingId;
+            const tooPricey = !inSquad && item.cost > maxCost;
+            const clubFull = !inSquad && fullClubs.includes(item.teamId);
             const blocked = tooPricey || clubFull;
-            const status = item.status !== "a" ? STATUS_LABELS[item.status] : undefined;
+            const flag = availability(item.status, item.chance);
+            const status = flag
+              ? {
+                  // Doubtful players show their chance of playing, e.g. "75%".
+                  text: flag.level === "doubtful" ? flag.short : flag.label,
+                  label: flag.label,
+                  color: flag.color,
+                }
+              : undefined;
 
             return (
               <Pressable
                 onPress={() => pick(item)}
+                disabled={inSquad}
                 accessibilityRole="button"
-                accessibilityLabel={`${item.name}, ${item.team}, ${money(item.cost)}, ${item.pts} points${
-                  status ? `, ${status.text}` : ""
-                }${clubFull ? ", club limit reached" : tooPricey ? ", over budget" : ""}`}
+                accessibilityState={{ disabled: inSquad }}
+                accessibilityLabel={`${item.name}, ${item.team}, ${money(item.cost)}, ${item.pts} points, form ${item.form}, owned by ${item.ownership} percent${
+                  status ? `, ${status.label}` : ""
+                }${
+                  outgoing
+                    ? ", the player you are replacing"
+                    : inSquad
+                      ? ", already in your squad"
+                      : clubFull
+                        ? ", club limit reached"
+                        : tooPricey
+                          ? ", over budget"
+                          : ""
+                }`}
                 android_ripple={{ color: "rgba(0, 217, 130, 0.18)" }}
                 style={({ pressed }) => ({
                   flexDirection: "row",
@@ -256,8 +382,12 @@ export function PlayerPicker({
                   marginTop: 6,
                   borderRadius: 14,
                   borderWidth: 1,
-                  borderColor: blocked ? "rgba(255, 82, 111, 0.3)" : "rgba(255, 255, 255, 0.1)",
-                  opacity: pressed ? 0.75 : blocked ? 0.55 : 1,
+                  borderColor: inSquad
+                    ? "rgba(0, 217, 130, 0.35)"
+                    : blocked
+                      ? "rgba(255, 82, 111, 0.3)"
+                      : "rgba(255, 255, 255, 0.1)",
+                  opacity: pressed ? 0.75 : inSquad ? 0.6 : blocked ? 0.55 : 1,
                 })}
               >
                 <View style={{ marginRight: 12 }}>
@@ -285,30 +415,74 @@ export function PlayerPicker({
                       </View>
                     )}
                   </View>
-                  <Text numberOfLines={1} style={{ color: MUTED, fontSize: 12, marginTop: 2, fontWeight: "600" }}>
-                    {item.team} · {POS[item.type]} · Form {item.form} · {item.ownership}% owned
-                  </Text>
-                  {blocked && (
-                    <Text style={{ color: RED, fontSize: 11, fontWeight: "700", marginTop: 2 }}>
-                      {clubFull
-                        ? "Club limit reached (3 players)"
-                        : `Over budget by ${money(item.cost - maxCost)}`}
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 3 }}>
+                    <Text numberOfLines={1} style={{ color: MUTED, fontSize: 12, fontWeight: "700" }}>
+                      {item.team} · {POS[item.type]}
                     </Text>
-                  )}
+                    <IconStat icon="form" value={item.form} onTip={showTip} />
+                    <IconStat icon="owned" value={`${item.ownership}%`} onTip={showTip} />
+                    {inSquad && (
+                      <IconStat
+                        icon={outgoing ? "replacing" : "inSquad"}
+                        color={outgoing ? GOLD_TEXT : GREEN}
+                        onTip={showTip}
+                      />
+                    )}
+                    {clubFull && <IconStat icon="clubFull" color={RED} onTip={showTip} />}
+                    {tooPricey && !clubFull && (
+                      <IconStat
+                        icon="overBudget"
+                        value={`+${money(item.cost - maxCost)}`}
+                        color={RED}
+                        bold
+                        onTip={showTip}
+                      />
+                    )}
+                  </View>
                 </View>
 
                 <View style={{ alignItems: "flex-end" }}>
                   <Text style={{ fontSize: 15, fontWeight: "900", color: tooPricey ? RED : "#ffffff" }}>
                     {money(item.cost)}
                   </Text>
-                  <Text style={{ color: GREEN, fontSize: 12, fontWeight: "800", marginTop: 2 }}>
-                    {item.pts} pts
-                  </Text>
+                  <View style={{ marginTop: 3 }}>
+                    <IconStat icon="points" value={String(item.pts)} color={GREEN} bold onTip={showTip} />
+                  </View>
                 </View>
               </Pressable>
             );
           }}
         />
+        {tip && (
+          <Pressable
+            onPress={hideTip}
+            accessibilityRole="button"
+            accessibilityLabel={`${tip.text}. Dismiss`}
+            style={{
+              position: "absolute",
+              // Above the finger, kept inside the screen edges.
+              top: Math.max(8, tip.y - 58),
+              left: Math.min(Math.max(8, tip.x - TIP_WIDTH / 2), windowWidth - TIP_WIDTH - 8),
+              width: TIP_WIDTH,
+              paddingHorizontal: 10,
+              paddingVertical: 7,
+              borderRadius: 10,
+              backgroundColor: "#f4fbf7",
+              borderWidth: 1,
+              borderColor: "rgba(0, 217, 130, 0.6)",
+              elevation: 12,
+              shadowColor: "#000",
+              shadowOpacity: 0.35,
+              shadowRadius: 8,
+              shadowOffset: { width: 0, height: 3 },
+              zIndex: 50,
+            }}
+          >
+            <Text style={{ color: DARK_GREEN, fontSize: 12, fontWeight: "700", lineHeight: 16 }}>
+              {tip.text}
+            </Text>
+          </Pressable>
+        )}
       </View>
     </Modal>
   );

@@ -3,19 +3,23 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
+  BackHandler,
   Easing,
+  Linking,
   Modal,
   Platform,
   Pressable,
   ScrollView,
   StatusBar,
+  Switch,
   Text,
   View,
 } from "react-native";
 import { Image } from "expo-image";
 import { GlassView } from "expo-glass-effect";
 import type { SymbolViewProps } from "expo-symbols";
-import { AppDialog } from "../AppDialog";
+import { AppDialog, SubstitutionRow } from "../AppDialog";
+import type { ReactNode } from "react";
 import type { DialogButton, DialogKind } from "../AppDialog";
 import { AppSymbol } from "../AppSymbol";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -50,12 +54,27 @@ import {
   seasonLabel,
   Squad,
 } from "../fpl";
+import { computeLive } from "../live";
 import { LeagueHub } from "../LeagueHub";
 import { ManagerHistory } from "../ManagerHistory";
 import { FadeIn } from "../FadeIn";
 import { Pitch, preloadAvatars } from "../Pitch";
 import { PlayerDetailsSheet } from "../PlayerDetailsSheet";
 import { PlayerPicker } from "../PlayerPicker";
+import { SeasonInsights } from "../SeasonInsights";
+import {
+  checkSquadNews,
+  clearNotifications,
+  DEFAULT_SETTINGS,
+  getPermission,
+  loadSettings,
+  requestPermission,
+  saveSettings,
+  STORAGE_SQUAD,
+} from "../notifications";
+import type { NotificationSettings, PermissionState } from "../notifications";
+import { stopBackgroundTask, syncBackgroundTask } from "../backgroundTasks";
+import type { FplElement } from "../PlayerProfile";
 import { SquadSummaryBar } from "../SquadSummaryBar";
 import { TransferSummaryBar } from "../TransferSummaryBar";
 
@@ -68,10 +87,18 @@ type BottomTabId = Mode;
 type Pending = { pos: number; inn: Player };
 type PlayableChip = "wildcard" | "freehit" | "bboost" | "3xc";
 
-const STORAGE_SQUAD = "profpl_cached_squad";
+// Left-to-right order of the tabs in the bottom bar.
+const TAB_ORDER: Mode[] = ["lineup", "transfers", "leagues", "more"];
+
 // How often league ranks are re-read from FPL while the leagues tab is open.
 const LEAGUE_REFRESH_MS = 60_000;
+// Least time between two reads of FPL's injury news.
+const AVAILABILITY_REFRESH_MS = 5 * 60_000;
+// How often live points are re-read while a gameweek is in play.
+const LIVE_REFRESH_MS = 60_000;
 const STORAGE_LOGGED_IN = "profpl_is_logged_in";
+// Set once the app has asked for notification permission, so it asks only once.
+const STORAGE_NOTIF_PROMPTED = "profpl_notifications_prompted";
 const STORAGE_CREDS = "profpl_user_credentials";
 
 // Earlier versions stored the FPL password; this removes any that is left.
@@ -299,6 +326,7 @@ export default function Index() {
     message: string;
     buttons: DialogButton[];
     kind: DialogKind;
+    content?: ReactNode;
   } | null>(null);
   const [pickPos, setPickPos] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -314,6 +342,79 @@ export default function Index() {
     isOwnPoints?: boolean;
   } | null>(null);
   const [activeMemberEvent, setActiveMemberEvent] = useState<number>(1);
+  // Notification settings shown in More.
+  const [notifSettings, setNotifSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
+  const [notifPermission, setNotifPermission] = useState<PermissionState>("undetermined");
+  useEffect(() => {
+    loadSettings().then(setNotifSettings);
+    getPermission().then(setNotifPermission);
+  }, []);
+
+  // While signed in: ask for permission once, keep the background task in
+  // step, and re-check squad news whenever the app returns to the foreground.
+  const signedInEntry = stage === "squad" ? (squad?.entry ?? null) : null;
+  useEffect(() => {
+    if (!signedInEntry) return;
+    (async () => {
+      const prompted = await AsyncStorage.getItem(STORAGE_NOTIF_PROMPTED);
+      if (!prompted && (await getPermission()) === "undetermined") {
+        await AsyncStorage.setItem(STORAGE_NOTIF_PROMPTED, "true").catch(() => {});
+        setNotifPermission(await requestPermission());
+      }
+      await syncBackgroundTask();
+      checkSquadNews().catch(() => {});
+    })();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      getPermission().then(setNotifPermission);
+      checkSquadNews().catch(() => {});
+    });
+    return () => subscription.remove();
+  }, [signedInEntry]);
+
+  const toggleNotification = async (key: keyof NotificationSettings) => {
+    const next = { ...notifSettings, [key]: !notifSettings[key] };
+    if (next[key]) {
+      const permission = await requestPermission();
+      setNotifPermission(permission);
+      if (permission !== "granted") {
+        showDialog(
+          "Notifications are off",
+          "Allow notifications for ProFPL in your phone's settings to get deadline reminders and squad news.",
+          [
+            { text: "Not now", style: "cancel" },
+            { text: "Open settings", onPress: () => Linking.openSettings() },
+          ],
+          "warning",
+        );
+        return;
+      }
+    }
+    setNotifSettings(next);
+    await saveSettings(next);
+    await syncBackgroundTask();
+    // Reschedule reminders for the new settings, without re-alerting news.
+    checkSquadNews({ notify: false }).catch(() => {});
+  };
+
+  // "My season" page, opened from More.
+  const [showSeason, setShowSeason] = useState(false);
+  useEffect(() => {
+    if (!showSeason) return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      setShowSeason(false);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [showSeason]);
+  // The signed-in manager's live numbers for the gameweek in play.
+  const [ownLive, setOwnLive] = useState<{
+    entry: number;
+    event: number;
+    total: number;
+    seasonTotal: number | null;
+    overallRank: number | null;
+  } | null>(null);
 
   // Decode the kit avatars once, up front, so pitches render with them in place.
   useEffect(() => {
@@ -323,18 +424,88 @@ export default function Index() {
   const [nowMs, setNowMs] = useState(Date.now());
   const [fplEvents, setFplEvents] = useState<any[]>([]);
 
+  // Latest injury / suspension news per player id. Kept apart from the squad
+  // and laid over it when shown, so refreshing it never resets unsaved edits.
+  const [playerStatus, setPlayerStatus] = useState<
+    Record<number, { status: string; chance: number | null; news: string }>
+  >({});
+  // FPL's full player records and club short names, for the player profile.
+  const [elements, setElements] = useState<Record<number, FplElement>>({});
+  const [teamNames, setTeamNames] = useState<Record<number, string>>({});
+  // The last read of FPL's player data failed (shown in the player sheet).
+  const [elementsFailed, setElementsFailed] = useState(false);
+  // Reads FPL's player data now; `force` skips the few-minutes throttle.
+  const readFplData = useRef<(force?: boolean) => void>(() => {});
+
+  // FPL's public player data: gameweek deadlines and availability. Read on
+  // launch and again whenever the app returns to the foreground (at most
+  // every few minutes), as FPL updates injury news through the day.
   useEffect(() => {
-    (async () => {
+    let lastRead = 0;
+    let reading = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let failures = 0;
+    const read = async (force = false) => {
+      if (reading) return;
+      if (!force && Date.now() - lastRead < AVAILABILITY_REFRESH_MS) return;
+      reading = true;
+      lastRead = Date.now();
       try {
         const res = await fetch("https://fantasy.premierleague.com/api/bootstrap-static/");
-        if (res.ok) {
-          const json = await res.json();
-          if (json && json.events) {
-            setFplEvents(json.events);
-          }
+        if (!res.ok) throw new Error(`FPL returned ${res.status}`);
+        const json = await res.json();
+        if (json?.events) setFplEvents(json.events);
+        if (Array.isArray(json?.elements)) {
+          const next: Record<number, { status: string; chance: number | null; news: string }> = {};
+          json.elements.forEach((element: any) => {
+            next[element.id] = {
+              status: element.status,
+              chance: element.chance_of_playing_next_round ?? null,
+              news: element.news || "",
+            };
+          });
+          setPlayerStatus(next);
+          const records: Record<number, FplElement> = {};
+          json.elements.forEach((element: FplElement) => {
+            records[element.id] = element;
+          });
+          setElements(records);
         }
-      } catch (e) {}
-    })();
+        if (Array.isArray(json?.teams)) {
+          const names: Record<number, string> = {};
+          json.teams.forEach((team: { id: number; short_name: string }) => {
+            names[team.id] = team.short_name;
+          });
+          setTeamNames(names);
+        }
+        failures = 0;
+        setElementsFailed(false);
+      } catch {
+        // Try again soon (10s, 30s, then every 2 minutes) instead of waiting
+        // for the next time the app returns to the foreground.
+        lastRead = 0;
+        failures += 1;
+        setElementsFailed(true);
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = setTimeout(
+          () => read(true),
+          failures === 1 ? 10_000 : failures === 2 ? 30_000 : 120_000,
+        );
+      } finally {
+        reading = false;
+      }
+    };
+    readFplData.current = (force = false) => {
+      read(force);
+    };
+    read();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") read();
+    });
+    return () => {
+      subscription.remove();
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, []);
 
   useEffect(() => {
@@ -419,6 +590,21 @@ export default function Index() {
     setLoginLoading(false);
     setLoginError(errorText);
   };
+  // Signed in, but loading the team failed: automatic retries so far, and
+  // whether to offer loading again instead of signing in again.
+  const squadRetries = useRef(0);
+  const [squadLoadFailed, setSquadLoadFailed] = useState(false);
+  const [squadLoadDetail, setSquadLoadDetail] = useState("");
+  const retrySquadLoad = () => {
+    setSquadLoadFailed(false);
+    setSquadLoadDetail("");
+    squadRetries.current = 0;
+    awaitingSquad.current = true;
+    setLoginError("");
+    setLoginLoading(true);
+    startLoginTimer();
+    check();
+  };
   const startLoginTimer = () => {
     stopLoginTimer();
     loginTimer.current = setTimeout(() => {
@@ -465,8 +651,19 @@ export default function Index() {
       .then((token) => {
         if (token === undefined) return;
         const wrapped = withAuth(script, token);
-        if (webReady.current) webRef.current?.injectJavaScript(wrapped);
-        else queuedScripts.current.push(wrapped);
+        if (webReady.current) {
+          webRef.current?.injectJavaScript(wrapped);
+          return;
+        }
+        queuedScripts.current.push(wrapped);
+        // Safety net: never hold a request for long if the page does not
+        // report that it finished loading.
+        setTimeout(() => {
+          const index = queuedScripts.current.indexOf(wrapped);
+          if (index < 0) return;
+          queuedScripts.current.splice(index, 1);
+          webRef.current?.injectJavaScript(wrapped);
+        }, 6000);
       });
   };
 
@@ -536,6 +733,9 @@ export default function Index() {
       () => {
         signedOut.current = false;
         sessionRetried.current = false;
+        squadRetries.current = 0;
+        setSquadLoadFailed(false);
+        setSquadLoadDetail("");
         check();
       },
       (error) => finishLogin(error?.message || "Sign in failed. Please try again."),
@@ -580,6 +780,8 @@ export default function Index() {
             queuedScripts.current = [];
             finishLogin();
             signOut();
+            clearNotifications();
+            stopBackgroundTask();
             AsyncStorage.removeItem(STORAGE_SQUAD).catch(() => {});
             AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
             setSquad(null);
@@ -589,6 +791,7 @@ export default function Index() {
             setSelectedPos(null);
             setPickPos(null);
             setStage("welcome");
+            setShowSeason(false);
             setActiveBottomTab("lineup");
             setMode("lineup");
           },
@@ -655,7 +858,8 @@ export default function Index() {
     message: string,
     buttons: DialogButton[] = [{ text: "OK" }],
     kind: DialogKind = "confirm",
-  ) => setDialog({ title, message, buttons, kind });
+    content?: ReactNode,
+  ) => setDialog({ title, message, buttons, kind, content });
 
   const check = () =>
     runInWeb(buildFetchJs());
@@ -682,11 +886,61 @@ export default function Index() {
     runInWeb(buildLeagueActionJs(action));
   };
 
+  // Live points while a gameweek is in play: the home summary bar shows the
+  // live total, and an open points page keeps updating. Both are refreshed
+  // every minute and when the app comes back to the foreground, silently.
+  const squadEntry = squad?.entry;
+  const liveGwId =
+    squad?.gameweeks?.find((gw) => gw.isCurrent && !gw.finished)?.id ?? null;
+  const viewingEntry = activeMember?.entry ?? null;
+  const homeVisible = stage === "squad" && mode === "lineup" && !viewingEntry;
+  useEffect(() => {
+    if (!squadEntry || !liveGwId) return;
+    const watchingMember = viewingEntry !== null && activeMemberEvent === liveGwId;
+    if (!homeVisible && !watchingMember) return;
+
+    const refreshLive = () => {
+      if (AppState.currentState !== "active") return;
+      if (watchingMember) {
+        managerRequest.current = { entry: viewingEntry, event: liveGwId };
+        runInWeb(
+          buildLeagueActionJs({
+            action: "manager-gameweek",
+            entry: viewingEntry,
+            event: liveGwId,
+            silent: true,
+          }),
+        );
+      } else {
+        runInWeb(
+          buildLeagueActionJs({
+            action: "manager-gameweek",
+            entry: squadEntry,
+            event: liveGwId,
+            silent: true,
+            target: "home",
+          }),
+        );
+      }
+    };
+
+    // An open points page has just loaded its own data; the home bar needs
+    // its first reading now.
+    if (!watchingMember) refreshLive();
+    const interval = setInterval(refreshLive, LIVE_REFRESH_MS);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") refreshLive();
+    });
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [squadEntry, liveGwId, homeVisible, viewingEntry, activeMemberEvent]);
+
   // Keep the ranks on the league cards current: re-read the manager's leagues
   // when the tab opens, on an interval while it stays open, and when the app
   // returns to the foreground. Runs silently (no spinner, errors ignored) so a
   // failed poll never disturbs what is already on screen.
-  const squadEntry = squad?.entry;
   useEffect(() => {
     if (mode !== "leagues" || stage !== "squad" || !squadEntry) return;
 
@@ -1046,6 +1300,25 @@ export default function Index() {
         }
         return;
       }
+      if (msg.leagueAction === "manager-gameweek" && msg.target === "home") {
+        const data = msg.data as MemberSquad | undefined;
+        if (!data || data.entry !== squad?.entry) return;
+        const live = computeLive(data.picks, data.fixtures ?? [], data.chip);
+        const history = data.history;
+        setOwnLive({
+          entry: data.entry,
+          event: data.event,
+          total: live.total,
+          // FPL's season total includes the gameweek's settled points;
+          // swap those for the live figure.
+          seasonTotal:
+            history.totalPoints != null && history.points != null
+              ? history.totalPoints - history.points + live.total
+              : null,
+          overallRank: history.overallRank,
+        });
+        return;
+      }
       if (msg.leagueAction === "manager-gameweek") {
         const request = managerRequest.current;
         if (
@@ -1125,11 +1398,17 @@ export default function Index() {
     setRefreshing(false);
     if (msg.ok) {
       sessionRetried.current = false;
+      squadRetries.current = 0;
+      setSquadLoadFailed(false);
+      setSquadLoadDetail("");
       finishLogin();
       setSquad(msg.squad);
       setError("");
       setStage("squad");
-      AsyncStorage.setItem(STORAGE_SQUAD, JSON.stringify(msg.squad)).catch(() => {});
+      // The news check reads the squad from storage, so run it once saved.
+      AsyncStorage.setItem(STORAGE_SQUAD, JSON.stringify(msg.squad))
+        .then(() => checkSquadNews())
+        .catch(() => {});
       AsyncStorage.setItem(STORAGE_LOGGED_IN, "true").catch(() => {});
     } else if (msg.notLoggedIn) {
       if (msg.noTeam) {
@@ -1151,7 +1430,19 @@ export default function Index() {
     } else if (stageRef.current === "squad") {
       setError(msg.error || "Something went wrong");
     } else if (awaitingSquad.current) {
-      finishLogin("You're signed in, but we couldn't load your team. Please try again.");
+      // FPL often fails briefly right after a sign-in (or while the game is
+      // updating): try twice more on our own before asking the user.
+      if (squadRetries.current < 2) {
+        squadRetries.current += 1;
+        setTimeout(() => {
+          if (awaitingSquad.current) check();
+        }, 2000 * squadRetries.current);
+        return;
+      }
+      console.warn("Squad load failed after sign-in:", msg.error);
+      setSquadLoadDetail(typeof msg.error === "string" ? msg.error.slice(0, 160) : "");
+      setSquadLoadFailed(true);
+      finishLogin("You're signed in, but we couldn't load your team from FPL. Tap Try again.");
     }
   };
 
@@ -1197,8 +1488,10 @@ export default function Index() {
 
   const confirmLineupChange = (nextDraft: Row[], chipToPlay: PlayableChip | null = pendingChip) => {
     if (!squad) return;
-    const cap = nextDraft.find((p) => p.cap)?.name;
-    const vice = nextDraft.find((p) => p.vice)?.name;
+    const cap = nextDraft.find((p) => p.cap);
+    const vice = nextDraft.find((p) => p.vice);
+    const capChanged = cap?.id !== squad.picks.find((p) => p.cap)?.id;
+    const viceChanged = vice?.id !== squad.picks.find((p) => p.vice)?.id;
     const before = new Set(
       squad.picks.filter((p) => p.pos <= 11).map((p) => p.id),
     );
@@ -1209,12 +1502,17 @@ export default function Index() {
     const out = squad.picks
       .filter((p) => p.pos <= 11 && !after.has(p.id))
       .map((p) => p.name);
+    // Only what changed: each substitution as its own coloured row, then the
+    // armband if it moved. A reshuffle of the bench alone gets one short line.
+    const swaps = Array.from({ length: Math.max(inn.length, out.length) }, (_, index) => ({
+      inName: inn[index],
+      outName: out[index],
+    }));
     const lines = [
-      inn.length ? `In: ${inn.join(", ")}` : "",
-      out.length ? `Out: ${out.join(", ")}` : "",
-      `Captain: ${cap}`,
-      `Vice-captain: ${vice}`,
+      capChanged && cap ? `Captain: ${cap.name}` : "",
+      viceChanged && vice ? `Vice-captain: ${vice.name}` : "",
     ].filter(Boolean);
+    if (lines.length === 0 && swaps.length === 0) lines.push("New bench order");
     if (chipToPlay) {
       lines.push(
         `Chip: ${selectedChipOption?.label ?? chipToPlay}`,
@@ -1229,7 +1527,7 @@ export default function Index() {
     showDialog(
       chipToPlay
         ? `Activate ${selectedChipOption?.label ?? "chip"}?`
-        : "Save lineup to FPL?",
+        : "Save lineup?",
       lines.join("\n"),
       [
         {
@@ -1249,6 +1547,14 @@ export default function Index() {
           },
         },
       ],
+      "confirm",
+      swaps.length > 0 ? (
+        <View>
+          {swaps.map((swap, index) => (
+            <SubstitutionRow key={index} inName={swap.inName} outName={swap.outName} />
+          ))}
+        </View>
+      ) : undefined,
     );
   };
 
@@ -1364,6 +1670,9 @@ export default function Index() {
             ownership: t.inn.ownership,
             priceChange: t.inn.priceChange,
             formMood: t.inn.formMood,
+            status: t.inn.status,
+            chance: t.inn.chance,
+            news: t.inn.news,
             fixtures: squad.fixturesByTeam[t.inn.teamId] ?? [],
             pendingIn: true,
           }
@@ -1403,14 +1712,18 @@ export default function Index() {
   // Show ALL players of the same position (except ones already in the squad)
   const candidates: Player[] = useMemo(() => {
     if (!squad || !pickInfo) return [];
-    return squad.pool.filter(
-      (pl) =>
-        pl.type === pickInfo.slot.type && !tdraft.some((p) => p.id === pl.id),
-    );
-  }, [squad, pickInfo, tdraft]);
+    // Every player in this position, your own squad included; the picker
+    // marks squad players and doesn't let them be picked twice.
+    return squad.pool
+      .filter((pl) => pl.type === pickInfo.slot.type)
+      .map((pl) => (playerStatus[pl.id] ? { ...pl, ...playerStatus[pl.id] } : pl));
+  }, [squad, pickInfo, playerStatus]);
+
+  const squadIds = useMemo(() => tdraft.map((p) => p.id), [tdraft]);
 
   const pickPlayer = (inn: Player) => {
     if (!squad || pickPos === null || !pickInfo) return;
+    if (squadIds.includes(inn.id)) return;
     if (inn.cost > pickInfo.maxCost) {
       showDialog(
         "Not enough budget",
@@ -1561,6 +1874,8 @@ export default function Index() {
 
   const switchMode = (m: Mode) => {
     if (m === mode) return;
+    // Slide in from the side the new tab sits on in the bottom bar.
+    const fromRight = TAB_ORDER.indexOf(m) > TAB_ORDER.indexOf(mode);
 
     // Stop any in-flight animations and reset transition lock to prevent getting stuck on rapid taps
     modeTransitionX.stopAnimation();
@@ -1574,8 +1889,7 @@ export default function Index() {
     setSelectedPos(null);
     setPlayerSheetOpen(false);
 
-    // Lineup slides in from left (-320 -> 0), Transfers and Leagues slide in from right (320 -> 0)
-    const startX = m === "lineup" ? -320 : 320;
+    const startX = fromRight ? 320 : -320;
     modeTransitionX.setValue(startX);
     modeTransitionOpacity.setValue(0);
 
@@ -1602,7 +1916,14 @@ export default function Index() {
     pickPos !== null ? tdraft.find((p) => p.pos === pickPos) : null;
   const selectedIsReplaced =
     selectedPos !== null && pending.some((x) => x.pos === selectedPos);
-  const shownPicks = mode === "transfers" ? tdraft : draft;
+  // Newest availability over the rows on screen (the squad may be older).
+  const shownPicks = useMemo(() => {
+    const rows = mode === "transfers" ? tdraft : draft;
+    return rows.map((row) => {
+      const latest = playerStatus[row.id];
+      return latest ? { ...row, ...latest } : row;
+    });
+  }, [mode, tdraft, draft, playerStatus]);
   const selectedPlayer =
     selectedPos === null
       ? null
@@ -1781,16 +2102,21 @@ export default function Index() {
                   />
                   <Text style={{ color: "#ff8080", fontSize: 12, fontWeight: "600", marginLeft: 6, flex: 1 }}>
                     {loginError}
+                    {squadLoadFailed && !!squadLoadDetail && (
+                      <Text style={{ color: "#c98a8a", fontSize: 10.5, fontWeight: "500" }}>
+                        {`\n(${squadLoadDetail})`}
+                      </Text>
+                    )}
                   </Text>
                 </View>
               )}
 
               {/* Sign in on the official Premier League page */}
               <Pressable
-                onPress={openSignIn}
+                onPress={squadLoadFailed ? retrySquadLoad : openSignIn}
                 disabled={loginLoading}
                 accessibilityRole="button"
-                accessibilityLabel="Sign in with Premier League"
+                accessibilityLabel={squadLoadFailed ? "Try loading your team again" : "Sign in with Premier League"}
                 style={({ pressed }) => ({
                   backgroundColor: GREEN,
                   height: 44,
@@ -1811,10 +2137,24 @@ export default function Index() {
                   </>
                 ) : (
                   <Text style={{ color: "#051a0f", fontSize: 14, fontWeight: "900" }}>
-                    Sign in with Premier League
+                    {squadLoadFailed ? "Try again" : "Sign in with Premier League"}
                   </Text>
                 )}
               </Pressable>
+              {squadLoadFailed && !loginLoading && (
+                <Pressable
+                  onPress={() => {
+                    setSquadLoadFailed(false);
+                    setSquadLoadDetail("");
+                    openSignIn();
+                  }}
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  style={{ alignSelf: "center", marginTop: 10 }}
+                >
+                  <Text style={{ color: GREEN, fontSize: 13, fontWeight: "800" }}>Sign in again instead</Text>
+                </Pressable>
+              )}
               <Text
                 style={{
                   color: "#a893ae",
@@ -1868,9 +2208,9 @@ export default function Index() {
           javaScriptEnabled
           domStorageEnabled
           onMessage={onMessage}
-          onLoadStart={() => {
-            webReady.current = false;
-          }}
+          // No onLoadStart here: Android also reports it when the FPL site
+          // changes its own address in place (e.g. "/" to "/en/"), with no
+          // load-end after it, which would hold every request forever.
           onLoadEnd={onWebLoadEnd}
           onRenderProcessGone={restartWeb}
           onContentProcessDidTerminate={restartWeb}
@@ -2121,15 +2461,19 @@ export default function Index() {
               {!showLeagues && mode === "lineup" && (() => {
                 const eventId = squad.eventId ?? squad.currentGw;
                 const eventGw = squad.gameweeks.find((gw) => gw.id === eventId);
+                const liveNow =
+                  ownLive && ownLive.entry === squad.entry && ownLive.event === eventId
+                    ? ownLive
+                    : null;
                 return (
                   <View style={{ marginTop: 4, marginHorizontal: 2 }}>
                     <SquadSummaryBar
                       gameweek={eventId ?? null}
-                      gameweekPoints={squad.eventPoints ?? null}
+                      gameweekPoints={liveNow ? liveNow.total : (squad.eventPoints ?? null)}
                       live={Boolean(eventGw?.isCurrent && !eventGw.finished)}
                       season={seasonLabel(squad.gameweeks)}
-                      totalPoints={squad.totalPoints ?? null}
-                      overallRank={squad.overallRank ?? null}
+                      totalPoints={liveNow?.seasonTotal ?? squad.totalPoints ?? null}
+                      overallRank={liveNow?.overallRank ?? squad.overallRank ?? null}
                       onOpenPoints={() => openOwnHistory()}
                     />
                   </View>
@@ -2160,7 +2504,9 @@ export default function Index() {
               flex: 1,
               opacity: modeTransitionOpacity,
               transform: [{ translateX: modeTransitionX }],
-              marginBottom: 64,
+              // Clear the floating tab bar: it is 56 tall and sits 2 above the
+              // phone's navigation area, whose height differs between devices.
+              marginBottom: insets.bottom + 62,
             }}
             scrollEnabled={mode === "leagues" || mode === "more"}
             showsVerticalScrollIndicator={false}
@@ -2212,11 +2558,11 @@ export default function Index() {
                 {/* Manager Profile Card */}
                 <View
                   style={{
-                    backgroundColor: "rgba(14, 38, 26, 0.95)",
+                    backgroundColor: "#212826",
                     borderRadius: 20,
                     padding: 18,
-                    borderWidth: 1.5,
-                    borderColor: "rgba(0, 217, 130, 0.25)",
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.08)",
                     marginBottom: 24,
                     elevation: 4,
                   }}
@@ -2227,9 +2573,9 @@ export default function Index() {
                         width: 50,
                         height: 50,
                         borderRadius: 25,
-                        backgroundColor: "rgba(0, 217, 130, 0.15)",
+                        backgroundColor: "rgba(255, 255, 255, 0.06)",
                         borderWidth: 1.5,
-                        borderColor: GREEN,
+                        borderColor: "rgba(0, 217, 130, 0.5)",
                         alignItems: "center",
                         justifyContent: "center",
                         marginRight: 14,
@@ -2252,6 +2598,186 @@ export default function Index() {
                   </View>
                 </View>
 
+                {/* Section: Insights */}
+                <Text
+                  style={{
+                    color: "#9db3a6",
+                    fontSize: 12,
+                    fontWeight: "800",
+                    letterSpacing: 0.5,
+                    textTransform: "uppercase",
+                    marginBottom: 8,
+                    marginLeft: 4,
+                  }}
+                >
+                  Insights
+                </Text>
+                <View
+                  style={{
+                    backgroundColor: "#212826",
+                    borderRadius: 18,
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.08)",
+                    overflow: "hidden",
+                    marginBottom: 24,
+                    elevation: 4,
+                  }}
+                >
+                  <Pressable
+                    onPress={() => setShowSeason(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel="My season. Your strengths, weak spots and season stats"
+                    style={({ pressed }) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      paddingHorizontal: 16,
+                      paddingVertical: 16,
+                      backgroundColor: pressed ? "rgba(0, 217, 130, 0.12)" : "transparent",
+                    })}
+                  >
+                    <View
+                      style={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: 10,
+                        backgroundColor: "rgba(255, 255, 255, 0.06)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginRight: 12,
+                      }}
+                    >
+                      <AppSymbol
+                        name={{ ios: "chart.bar.fill", android: "insights", web: "insights" }}
+                        color={GREEN}
+                        size={18}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: "#ffffff", fontSize: 15, fontWeight: "800" }}>My season</Text>
+                      <Text style={{ color: "#9db3a6", fontSize: 12, marginTop: 1 }}>
+                        Strengths, weak spots and season stats
+                      </Text>
+                    </View>
+                    <AppSymbol
+                      name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
+                      color="#9db3a6"
+                      size={18}
+                    />
+                  </Pressable>
+                </View>
+
+                {/* Section: Notifications */}
+                <Text
+                  style={{
+                    color: "#9db3a6",
+                    fontSize: 12,
+                    fontWeight: "800",
+                    letterSpacing: 0.5,
+                    textTransform: "uppercase",
+                    marginBottom: 8,
+                    marginLeft: 4,
+                  }}
+                >
+                  Notifications
+                </Text>
+                <View
+                  style={{
+                    backgroundColor: "#212826",
+                    borderRadius: 18,
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.08)",
+                    overflow: "hidden",
+                    marginBottom: 24,
+                    elevation: 4,
+                  }}
+                >
+                  {notifPermission === "denied" && (
+                    <Pressable
+                      onPress={() => Linking.openSettings()}
+                      accessibilityRole="button"
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 10,
+                        paddingHorizontal: 16,
+                        paddingVertical: 12,
+                        backgroundColor: "rgba(255, 159, 28, 0.12)",
+                      }}
+                    >
+                      <AppSymbol
+                        name={{ ios: "bell.slash.fill", android: "notifications_off", web: "notifications_off" }}
+                        color="#ff9f1c"
+                        size={18}
+                      />
+                      <Text style={{ flex: 1, color: "#ffd9a8", fontSize: 12.5, fontWeight: "700" }}>
+                        Notifications are blocked for ProFPL. Tap to open settings.
+                      </Text>
+                    </Pressable>
+                  )}
+                  {(
+                    [
+                      {
+                        key: "deadline24h",
+                        title: "Deadline: 24 hours before",
+                        detail: "A day's notice to plan transfers",
+                        icon: { ios: "calendar", android: "event", web: "event" },
+                      },
+                      {
+                        key: "deadline1h",
+                        title: "Deadline: 1 hour before",
+                        detail: "Last call, naming any flagged starters",
+                        icon: { ios: "alarm.fill", android: "alarm", web: "alarm" },
+                      },
+                      {
+                        key: "news",
+                        title: "Squad news",
+                        detail: "Injuries, suspensions and returns for your players",
+                        icon: { ios: "cross.case.fill", android: "medical_services", web: "medical_services" },
+                      },
+                    ] as const
+                  ).map((row, index) => {
+                    const on = notifSettings[row.key] && notifPermission === "granted";
+                    return (
+                      <View
+                        key={row.key}
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          paddingHorizontal: 16,
+                          paddingVertical: 12,
+                          borderTopWidth: index === 0 && notifPermission !== "denied" ? 0 : 1,
+                          borderTopColor: "rgba(255, 255, 255, 0.06)",
+                        }}
+                      >
+                        <View
+                          style={{
+                            width: 36,
+                            height: 36,
+                            borderRadius: 10,
+                            backgroundColor: "rgba(255, 255, 255, 0.06)",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            marginRight: 12,
+                          }}
+                        >
+                          <AppSymbol name={row.icon} color={GREEN} size={18} />
+                        </View>
+                        <View style={{ flex: 1, paddingRight: 8 }}>
+                          <Text style={{ color: "#ffffff", fontSize: 14.5, fontWeight: "800" }}>{row.title}</Text>
+                          <Text style={{ color: "#9db3a6", fontSize: 12, marginTop: 1 }}>{row.detail}</Text>
+                        </View>
+                        <Switch
+                          value={on}
+                          onValueChange={() => toggleNotification(row.key)}
+                          accessibilityLabel={row.title}
+                          trackColor={{ false: "rgba(255, 255, 255, 0.2)", true: "rgba(0, 217, 130, 0.6)" }}
+                          thumbColor={on ? GREEN : "#d7e6dd"}
+                        />
+                      </View>
+                    );
+                  })}
+                </View>
+
                 {/* Section: Account */}
                 <Text
                   style={{
@@ -2269,10 +2795,10 @@ export default function Index() {
 
                 <View
                   style={{
-                    backgroundColor: "rgba(14, 38, 26, 0.95)",
+                    backgroundColor: "#212826",
                     borderRadius: 18,
-                    borderWidth: 1.5,
-                    borderColor: "rgba(0, 217, 130, 0.25)",
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.08)",
                     overflow: "hidden",
                     marginBottom: 24,
                     elevation: 4,
@@ -2342,10 +2868,10 @@ export default function Index() {
 
                 <View
                   style={{
-                    backgroundColor: "rgba(14, 38, 26, 0.95)",
+                    backgroundColor: "#212826",
                     borderRadius: 18,
-                    borderWidth: 1.5,
-                    borderColor: "rgba(0, 217, 130, 0.25)",
+                    borderWidth: 1,
+                    borderColor: "rgba(255, 255, 255, 0.08)",
                     padding: 16,
                     elevation: 4,
                   }}
@@ -2455,37 +2981,42 @@ export default function Index() {
                             style={({ pressed }) => ({
                               width: 38,
                               height: 38,
-                              borderRadius: 20,
+                              borderRadius: 19,
                               alignItems: "center",
                               justifyContent: "center",
                               borderWidth: 1,
-                              borderColor: "rgba(255,255,255,0.8)",
-                              backgroundColor: "rgba(55,0,60,0.82)",
-                              opacity: pressed ? 0.75 : 1,
+                              borderColor: showChipMenu
+                                ? "rgba(255, 255, 255, 0.35)"
+                                : "rgba(255, 255, 255, 0.14)",
+                              backgroundColor: pressed ? "#2c3431" : "#212826",
                               elevation: 5,
+                              shadowColor: "#000",
+                              shadowOpacity: 0.3,
+                              shadowRadius: 6,
+                              shadowOffset: { width: 0, height: 2 },
                             })}
                           >
                             <AppSymbol
                               name={{
-                                ios: "trophy.fill",
-                                android: "trophy",
-                                web: "trophy",
+                                ios: "square.stack.3d.up.fill",
+                                android: "layers",
+                                web: "layers",
                               }}
-                              color="#fff"
-                              size={19}
+                              color="#e6efe9"
+                              size={18}
                             />
                             {(pendingChip || squad.chip) && (
                               <View
                                 style={{
                                   position: "absolute",
-                                  top: 1,
-                                  right: 1,
+                                  top: 2,
+                                  right: 2,
                                   width: 9,
                                   height: 9,
                                   borderRadius: 5,
                                   backgroundColor: GREEN,
-                                  borderWidth: 1,
-                                  borderColor: "#fff",
+                                  borderWidth: 1.5,
+                                  borderColor: "#212826",
                                 }}
                               />
                             )}
@@ -2494,20 +3025,19 @@ export default function Index() {
                             <View
                               style={{
                                 position: "absolute",
-                                top: 44,
+                                top: 46,
                                 left: 0,
-                                width: 220,
-                                maxWidth: 260,
-                                padding: 9,
-                                borderRadius: 18,
+                                width: 236,
+                                padding: 12,
+                                borderRadius: 16,
                                 borderWidth: 1,
-                                borderColor: "rgba(255,255,255,0.9)",
-                                backgroundColor: "rgba(250,247,255,0.97)",
+                                borderColor: "rgba(255, 255, 255, 0.08)",
+                                backgroundColor: "#212826",
                                 elevation: 14,
-                                shadowColor: "#210027",
-                                shadowOpacity: 0.28,
-                                shadowRadius: 14,
-                                shadowOffset: { width: 0, height: 6 },
+                                shadowColor: "#000",
+                                shadowOpacity: 0.4,
+                                shadowRadius: 16,
+                                shadowOffset: { width: 0, height: 8 },
                               }}
                             >
                               <View
@@ -2515,21 +3045,23 @@ export default function Index() {
                                   flexDirection: "row",
                                   alignItems: "center",
                                   justifyContent: "space-between",
-                                  marginBottom: 7,
+                                  marginBottom: 10,
                                 }}
                               >
                                 <Text
+                                  accessibilityRole="header"
                                   style={{
-                                    color: PURPLE,
-                                    fontSize: 12,
-                                    fontWeight: "900",
+                                    color: "#9db3a6",
+                                    fontSize: 11,
+                                    fontWeight: "800",
+                                    letterSpacing: 0.6,
                                   }}
                                 >
                                   CHIPS
                                 </Text>
                                 <Pressable
                                   onPress={() => setShowChipMenu(false)}
-                                  hitSlop={8}
+                                  hitSlop={10}
                                   accessibilityRole="button"
                                   accessibilityLabel="Close chips"
                                 >
@@ -2539,8 +3071,8 @@ export default function Index() {
                                       android: "close",
                                       web: "close",
                                     }}
-                                    color={PURPLE}
-                                    size={17}
+                                    color="#9db3a6"
+                                    size={16}
                                   />
                                 </Pressable>
                               </View>
@@ -2548,7 +3080,8 @@ export default function Index() {
                                 style={{
                                   flexDirection: "row",
                                   flexWrap: "wrap",
-                                  gap: 6,
+                                  justifyContent: "space-between",
+                                  rowGap: 6,
                                 }}
                               >
                                 {CHIP_OPTIONS.map((chip) => {
@@ -2558,86 +3091,73 @@ export default function Index() {
                                   const selected = pendingChip === chip.id;
                                   const active = squad.chip === chip.id;
                                   const chipStatus = squad.chipStatuses[chip.id];
+                                  const usable = available && !locked;
+                                  const highlighted = selected || active;
+                                  const statusText = selected
+                                    ? "Selected"
+                                    : active
+                                      ? "Active"
+                                      : available
+                                        ? "Available"
+                                        : chipStatus === "played"
+                                          ? "Used"
+                                          : "Unavailable";
                                   return (
                                     <Pressable
                                       key={chip.id}
                                       onPress={() => selectChip(chip)}
-                                      disabled={!available || locked}
+                                      disabled={!usable}
+                                      accessibilityRole="button"
+                                      accessibilityLabel={`${chip.label}, ${statusText}`}
+                                      accessibilityState={{ disabled: !usable, selected }}
                                       style={({ pressed }) => ({
-                                        width: 97,
-                                        minHeight: 44,
-                                        paddingHorizontal: 6,
+                                        width: "48.5%",
+                                        minHeight: 46,
+                                        paddingHorizontal: 8,
+                                        paddingVertical: 6,
                                         borderRadius: 12,
                                         borderWidth: 1,
-                                        borderColor: selected
-                                          ? "#7800b8"
-                                          : available
-                                            ? "#c7a6df"
-                                            : "#e0dceb",
-                                        backgroundColor: selected
-                                          ? PURPLE
-                                          : "#fff",
+                                        borderColor: highlighted
+                                          ? "rgba(0, 217, 130, 0.7)"
+                                          : "rgba(255, 255, 255, 0.08)",
+                                        backgroundColor: highlighted
+                                          ? "rgba(0, 217, 130, 0.14)"
+                                          : pressed
+                                            ? "rgba(255, 255, 255, 0.1)"
+                                            : "rgba(255, 255, 255, 0.05)",
                                         flexDirection: "row",
                                         alignItems: "center",
-                                        opacity:
-                                          available && !locked
-                                            ? pressed
-                                              ? 0.76
-                                              : 1
-                                            : 0.58,
+                                        gap: 7,
+                                        opacity: usable || highlighted ? 1 : 0.45,
                                       })}
                                     >
                                       <AppSymbol
                                         name={CHIP_SYMBOLS[chip.id]}
-                                        color={
-                                          selected
-                                            ? GREEN
-                                            : available
-                                              ? "#7800b8"
-                                              : "#767184"
-                                        }
+                                        color={highlighted ? GREEN : usable ? "#e6efe9" : "#9db3a6"}
                                         size={17}
                                       />
-                                      <View
-                                        style={{
-                                          flex: 1,
-                                          marginLeft: 5,
-                                        }}
-                                      >
+                                      <View style={{ flex: 1 }}>
                                         <Text
                                           numberOfLines={1}
+                                          adjustsFontSizeToFit
+                                          minimumFontScale={0.8}
                                           style={{
-                                            color: selected
-                                              ? "#fff"
-                                              : available
-                                                ? PURPLE
-                                                : "#696476",
-                                            fontSize: 9,
-                                            fontWeight: "900",
+                                            color: "#ffffff",
+                                            fontSize: 11,
+                                            fontWeight: "800",
                                           }}
                                         >
                                           {chip.label}
                                         </Text>
                                         <Text
                                           style={{
-                                            color: selected
-                                              ? "#e7d5f4"
-                                              : available
-                                                ? "#7a35a8"
-                                                : "#777386",
-                                            fontSize: 8,
+                                            color: highlighted ? GREEN : "#9db3a6",
+                                            fontSize: 9.5,
+                                            fontWeight: highlighted ? "800" : "600",
                                             marginTop: 1,
                                           }}
                                         >
-                                          {selected
-                                            ? "Selected"
-                                            : active
-                                              ? "Active"
-                                              : available
-                                                ? "Available"
-                                                : chipStatus === "played"
-                                                  ? "Used"
-                                                  : "Unavailable"}
+                                          {statusText}
                                         </Text>
                                       </View>
                                     </Pressable>
@@ -2650,19 +3170,23 @@ export default function Index() {
                                     setPendingChip(null);
                                     setShowChipMenu(false);
                                   }}
-                                  style={{
+                                  accessibilityRole="button"
+                                  hitSlop={6}
+                                  style={({ pressed }) => ({
                                     alignSelf: "flex-end",
-                                    marginTop: 7,
-                                    paddingHorizontal: 9,
-                                    paddingVertical: 5,
-                                    borderRadius: 12,
-                                    backgroundColor: "#f0e5f5",
-                                  }}
+                                    marginTop: 10,
+                                    paddingHorizontal: 10,
+                                    paddingVertical: 6,
+                                    borderRadius: 10,
+                                    backgroundColor: pressed
+                                      ? "rgba(255, 107, 122, 0.18)"
+                                      : "transparent",
+                                  })}
                                 >
                                   <Text
                                     style={{
-                                      color: "#8d1b3d",
-                                      fontSize: 10,
+                                      color: "#ff6b7a",
+                                      fontSize: 11.5,
                                       fontWeight: "800",
                                     }}
                                   >
@@ -2702,6 +3226,10 @@ export default function Index() {
             }}
             onUndoTransfer={undoSlot}
             onStartSubstitution={() => setPlayerSheetOpen(false)}
+            element={selectedPlayer ? (elements[selectedPlayer.id] ?? null) : null}
+            elementFailed={elementsFailed}
+            onRetryElement={() => readFplData.current(true)}
+            teamNames={teamNames}
           />
 
 
@@ -2811,6 +3339,8 @@ export default function Index() {
             candidates={candidates}
             maxCost={pickInfo ? pickInfo.maxCost : 0}
             fullClubs={pickInfo ? pickInfo.fullClubs : []}
+            squadIds={squadIds}
+            outgoingId={pickSlot?.id ?? null}
             onPick={pickPlayer}
             onClose={() => setPickPos(null)}
           />
@@ -2881,6 +3411,7 @@ export default function Index() {
                 onPressIn={() => setActiveBottomTab("lineup")}
                 onPress={() => {
                   setActiveMember(null);
+                  setShowSeason(false);
                   setShowLeagues(false);
                   switchMode("lineup");
                 }}
@@ -2896,6 +3427,7 @@ export default function Index() {
                 onPressIn={() => setActiveBottomTab("transfers")}
                 onPress={() => {
                   setActiveMember(null);
+                  setShowSeason(false);
                   setShowLeagues(false);
                   switchMode("transfers");
                 }}
@@ -2911,6 +3443,7 @@ export default function Index() {
                 onPressIn={() => setActiveBottomTab("leagues")}
                 onPress={() => {
                   setActiveMember(null);
+                  setShowSeason(false);
                   setActiveBottomTab("leagues");
                   switchMode("leagues");
                 }}
@@ -2926,6 +3459,7 @@ export default function Index() {
                 onPressIn={() => setActiveBottomTab("more")}
                 onPress={() => {
                   setActiveMember(null);
+                  setShowSeason(false);
                   setActiveBottomTab("more");
                   switchMode("more");
                 }}
@@ -2975,6 +3509,28 @@ export default function Index() {
         </Pressable>
       )}
 
+      {stage === "squad" && squad && showSeason && (
+        <FadeIn
+          offsetX={28}
+          offsetY={0}
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
+            zIndex: 16,
+            elevation: 16,
+          }}
+        >
+          <SeasonInsights
+            entry={squad.entry}
+            teamName={squad.teamName || "Your team"}
+            onBack={() => setShowSeason(false)}
+          />
+        </FadeIn>
+      )}
+
       {stage === "squad" && squad && activeMember && activeMemberReady && (
         <FadeIn
           key={activeMember.entry}
@@ -3016,6 +3572,7 @@ export default function Index() {
         message={dialog?.message ?? ""}
         buttons={dialog?.buttons ?? []}
         kind={dialog?.kind ?? "confirm"}
+        content={dialog?.content}
         onDismiss={() => setDialog(null)}
       />
     </View>

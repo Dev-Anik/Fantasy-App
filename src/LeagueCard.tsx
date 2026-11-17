@@ -1,8 +1,10 @@
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
-import { Image } from "expo-image";
+import { AppSymbol } from "./AppSymbol";
 import type { FplLeague } from "./fpl";
 
-const CARD_BG = "rgba(255, 255, 255, 0.08)";
+// Solid, so the pitch-texture background does not show through.
+const CARD_BG = "#212826";
+const CARD_BG_PRESSED = "#2c3431";
 const CARD_BORDER = "rgba(255, 255, 255, 0.12)";
 
 type RankMovement = "up" | "down" | "same" | "new";
@@ -15,6 +17,70 @@ function rankMovement(rank: number, lastRank: number | null | undefined): RankMo
   if (rank < lastRank) return "up";
   if (rank > lastRank) return "down";
   return "same";
+}
+
+// Compact place counts, so a big jump in a huge league still fits: 1.2k, 35k.
+function formatDelta(places: number) {
+  if (places < 1000) return String(places);
+  if (places < 10_000) return `${(places / 1000).toFixed(1).replace(/.0$/, "")}k`;
+  if (places < 1_000_000) return `${Math.round(places / 1000)}k`;
+  return `${(places / 1_000_000).toFixed(1).replace(/.0$/, "")}m`;
+}
+
+const MOVEMENT_STYLE: Record<RankMovement, { color: string; bg: string; border: string }> = {
+  up: { color: "#00e676", bg: "rgba(0, 230, 118, 0.14)", border: "rgba(0, 230, 118, 0.4)" },
+  down: { color: "#ff5a72", bg: "rgba(255, 90, 114, 0.14)", border: "rgba(255, 90, 114, 0.4)" },
+  same: { color: "#9db3a6", bg: "rgba(255, 255, 255, 0.06)", border: "rgba(255, 255, 255, 0.14)" },
+  new: { color: "#7cc4ff", bg: "rgba(124, 196, 255, 0.12)", border: "rgba(124, 196, 255, 0.4)" },
+};
+
+// Rank change since the last gameweek: arrow and places for a move, a dash
+// for no change, "NEW" when there is nothing to compare with yet.
+function MovementChip({ movement, places }: { movement: RankMovement; places: number }) {
+  const tone = MOVEMENT_STYLE[movement];
+  const moved = movement === "up" || movement === "down";
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 26,
+        height: 18,
+        paddingHorizontal: 5,
+        borderRadius: 9,
+        gap: 1,
+        backgroundColor: tone.bg,
+        borderWidth: 1,
+        borderColor: tone.border,
+      }}
+    >
+      {moved && (
+        <AppSymbol
+          name={
+            movement === "up"
+              ? { ios: "arrowtriangle.up.fill", android: "arrow_drop_up", web: "arrow_drop_up" }
+              : { ios: "arrowtriangle.down.fill", android: "arrow_drop_down", web: "arrow_drop_down" }
+          }
+          color={tone.color}
+          size={14}
+        />
+      )}
+      <Text
+        numberOfLines={1}
+        allowFontScaling={false}
+        style={{
+          color: tone.color,
+          fontSize: movement === "new" ? 9 : 10.5,
+          fontWeight: "900",
+          letterSpacing: movement === "new" ? 0.4 : 0,
+          includeFontPadding: false,
+        }}
+      >
+        {moved ? formatDelta(places) : movement === "new" ? "NEW" : "–"}
+      </Text>
+    </View>
+  );
 }
 
 const MOVEMENT_LABEL: Record<RankMovement, string> = {
@@ -34,20 +100,25 @@ type Props = {
 export function LeagueCard({ league, loading = false, onPress }: Props) {
   const rank = league.entry_rank && league.entry_rank > 0 ? league.entry_rank : null;
   const movement = rank ? rankMovement(rank, league.entry_last_rank) : "new";
+  const places = rank && league.entry_last_rank ? Math.abs(league.entry_last_rank - rank) : 0;
+  const movementText =
+    movement === "up" || movement === "down"
+      ? `${MOVEMENT_LABEL[movement]} ${places} ${places === 1 ? "place" : "places"}`
+      : MOVEMENT_LABEL[movement];
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={
         rank
-          ? `${league.name}, rank ${formatRank(rank)}, ${MOVEMENT_LABEL[movement]}`
+          ? `${league.name}, rank ${formatRank(rank)}, ${movementText}`
           : `${league.name}, not ranked yet`
       }
       accessibilityState={{ busy: loading }}
       disabled={loading}
       onPress={() => onPress(league)}
       style={({ pressed }) => ({
-        backgroundColor: CARD_BG,
+        backgroundColor: pressed ? CARD_BG_PRESSED : CARD_BG,
         borderRadius: 12,
         padding: 10,
         marginTop: 6,
@@ -56,7 +127,6 @@ export function LeagueCard({ league, loading = false, onPress }: Props) {
         justifyContent: "space-between",
         borderWidth: 1,
         borderColor: loading ? "rgba(0, 217, 130, 0.5)" : CARD_BORDER,
-        opacity: pressed ? 0.75 : 1,
       })}
     >
       <View style={{ flex: 1, marginRight: 10 }}>
@@ -65,6 +135,7 @@ export function LeagueCard({ league, loading = false, onPress }: Props) {
         </Text>
       </View>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        {rank ? <MovementChip movement={movement} places={places} /> : null}
         <View
           style={{
             flexDirection: "row",
@@ -80,27 +151,6 @@ export function LeagueCard({ league, loading = false, onPress }: Props) {
         >
           {rank ? (
             <>
-              {movement === "up" || movement === "down" ? (
-                <Image
-                  source={
-                    movement === "up"
-                      ? require("../assets/images/up.png")
-                      : require("../assets/images/down.png")
-                  }
-                  style={{ width: 12, height: 12 }}
-                  contentFit="contain"
-                />
-              ) : (
-                <View
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: 3,
-                    marginHorizontal: 3,
-                    backgroundColor: "#7a9988",
-                  }}
-                />
-              )}
               <Text style={{ color: "#c5d8ce", fontWeight: "900", fontSize: 11 }}>
                 {formatRank(rank)}
               </Text>
