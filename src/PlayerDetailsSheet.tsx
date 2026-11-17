@@ -7,7 +7,13 @@ import {
   View,
 } from "react-native";
 import type { ScrollViewInstance } from "react-native";
+import { Image } from "expo-image";
 import type { PlayerFixture, Row } from "./fpl";
+import { teamAvatar } from "./Pitch";
+import { AppSymbol } from "./AppSymbol";
+import { availability } from "./availability";
+import { PlayerProfile } from "./PlayerProfile";
+import type { FplElement, GameweekRow, PastSeason } from "./PlayerProfile";
 
 const GREEN = "#00d982";
 
@@ -15,26 +21,16 @@ function price(value: number) {
   return `£${(value / 10).toFixed(1)}m`;
 }
 
+// Solid difficulty colours: green easy, ash grey average, red hard. `ink`
+// is the main text on that colour and `muted` the gameweek label.
 function fixtureCardStyle(difficulty: PlayerFixture["difficulty"]) {
   if (difficulty === "easy") {
-    return {
-      bg: "rgba(0, 230, 118, 0.22)",
-      border: "rgba(0, 230, 118, 0.5)",
-      accent: "#00e676",
-    };
+    return { bg: "#14b866", border: "#1fd479", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.78)" };
   }
   if (difficulty === "hard") {
-    return {
-      bg: "rgba(240, 45, 85, 0.22)",
-      border: "rgba(240, 45, 85, 0.5)",
-      accent: "#ff526f",
-    };
+    return { bg: "#d92b4f", border: "#ef4766", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.78)" };
   }
-  return {
-    bg: "rgba(255, 255, 255, 0.12)",
-    border: "rgba(255, 255, 255, 0.25)",
-    accent: "#ffffff",
-  };
+  return { bg: "#5d6863", border: "#738079", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.72)" };
 }
 
 export function PlayerDetailsSheet({
@@ -50,9 +46,20 @@ export function PlayerDetailsSheet({
   onTransfer,
   onUndoTransfer,
   onStartSubstitution,
+  element = null,
+  elementFailed = false,
+  onRetryElement,
+  teamNames = {},
 }: {
   visible: boolean;
   player: Row | null;
+  // FPL's full record for this player (season stats), when loaded.
+  element?: FplElement | null;
+  // Reading FPL's player records failed; offer a retry.
+  elementFailed?: boolean;
+  onRetryElement?: () => void;
+  // Club short names by FPL team id, for the recent-gameweeks table.
+  teamNames?: Record<number, string>;
   currentGw: number;
   bottomInset: number;
   isTransferMode: boolean;
@@ -65,12 +72,17 @@ export function PlayerDetailsSheet({
   onStartSubstitution: () => void;
 }) {
   const fixturesRef = useRef<ScrollViewInstance>(null);
-  const [showFullProfile, setShowFullProfile] = useState(false);
-  const [playerHistory, setPlayerHistory] = useState<Record<number, number>>({});
+  const [history, setHistory] = useState<GameweekRow[] | null>(null);
+  const [pastSeasons, setPastSeasons] = useState<PastSeason[] | null>(null);
+  const playerHistory: Record<number, number> = {};
+  history?.forEach((row) => {
+    playerHistory[row.round] = (playerHistory[row.round] ?? 0) + row.total_points;
+  });
 
   useEffect(() => {
     if (!visible || !player?.id) {
-      setPlayerHistory({});
+      setHistory(null);
+      setPastSeasons(null);
       return;
     }
 
@@ -79,16 +91,15 @@ export function PlayerDetailsSheet({
     fetch(`https://fantasy.premierleague.com/api/element-summary/${player.id}/`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!isMounted || !data?.history) return;
-        const map: Record<number, number> = {};
-        data.history.forEach((h: any) => {
-          if (h.round != null && h.total_points != null) {
-            map[h.round] = h.total_points;
-          }
-        });
-        setPlayerHistory(map);
+        if (!isMounted) return;
+        setHistory(Array.isArray(data?.history) ? data.history : []);
+        setPastSeasons(Array.isArray(data?.history_past) ? data.history_past : []);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!isMounted) return;
+        setHistory([]);
+        setPastSeasons([]);
+      });
 
     return () => {
       isMounted = false;
@@ -103,12 +114,6 @@ export function PlayerDetailsSheet({
         : player.priceChange < 0
           ? `-${price(Math.abs(player.priceChange))} this GW`
           : "No change this GW";
-
-  useEffect(() => {
-    if (!visible) {
-      setShowFullProfile(false);
-    }
-  }, [visible]);
 
   useEffect(() => {
     if (!visible || !player?.fixtures?.length) return;
@@ -188,6 +193,28 @@ export function PlayerDetailsSheet({
                 justifyContent: "space-between",
               }}
             >
+              {/* 3D kit avatar in the club colours */}
+              <View
+                style={{
+                  width: 64,
+                  height: 64,
+                  marginRight: 12,
+                  borderRadius: 32,
+                  overflow: "hidden",
+                  backgroundColor: "rgba(0, 217, 130, 0.12)",
+                  borderWidth: 1.5,
+                  borderColor: "rgba(0, 217, 130, 0.45)",
+                  alignItems: "center",
+                }}
+              >
+                <Image
+                  source={teamAvatar(player.team)}
+                  contentFit="contain"
+                  cachePolicy="memory-disk"
+                  accessible={false}
+                  style={{ width: 60, height: 66, marginTop: 4 }}
+                />
+              </View>
               <View style={{ flex: 1, paddingRight: 12 }}>
                 <Text
                   numberOfLines={1}
@@ -230,6 +257,59 @@ export function PlayerDetailsSheet({
                 </Text>
               </Pressable>
             </View>
+
+            <ScrollView
+              style={{ flexGrow: 0, flexShrink: 1 }}
+              contentContainerStyle={{ paddingBottom: 4 }}
+              showsVerticalScrollIndicator={false}
+            >
+            {/* Injury / suspension news from FPL */}
+            {(() => {
+              const flag = availability(player.status, player.chance);
+              const news = player.news?.trim();
+              if (!flag && !news) return null;
+              const color = flag?.color ?? "#9db3a6";
+              return (
+                <View
+                  accessible
+                  accessibilityLabel={[flag?.label, news].filter(Boolean).join(". ")}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "flex-start",
+                    gap: 8,
+                    marginTop: 12,
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    borderRadius: 12,
+                    backgroundColor: `${color}1f`,
+                    borderWidth: 1,
+                    borderColor: `${color}80`,
+                  }}
+                >
+                  <View style={{ marginTop: 1 }}>
+                    <AppSymbol
+                      name={
+                        flag?.level === "out"
+                          ? { ios: "cross.circle.fill", android: "medical_services", web: "medical_services" }
+                          : { ios: "exclamationmark.circle.fill", android: "error", web: "error" }
+                      }
+                      color={color}
+                      size={16}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    {!!flag && (
+                      <Text style={{ color, fontSize: 12, fontWeight: "900" }}>{flag.label}</Text>
+                    )}
+                    {!!news && (
+                      <Text style={{ color: "#e6efe9", fontSize: 12, marginTop: flag ? 2 : 0, lineHeight: 16 }}>
+                        {news}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              );
+            })()}
 
             {/* Quick Stat Cards */}
             <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
@@ -336,23 +416,18 @@ export function PlayerDetailsSheet({
 
                     const historyPts = playerHistory[fixture.event];
                     let pointsText = "";
-                    let isPoints = false;
 
                     if (historyPts !== undefined && historyPts !== null) {
-                      isPoints = true;
                       pointsText = historyPts > 0 ? `${historyPts} pts` : "-";
                     } else if (fixture.points !== undefined && fixture.points !== null) {
-                      isPoints = true;
                       pointsText = fixture.points > 0 ? `${fixture.points} pts` : "-";
                     } else if (isCurrentGw) {
-                      isPoints = true;
                       if (player.displayPoints !== undefined && player.displayPoints !== null && player.displayPoints > 0) {
                         pointsText = `${player.displayPoints} pts`;
                       } else {
                         pointsText = "-";
                       }
                     } else if (isPastGw) {
-                      isPoints = true;
                       pointsText = "-";
                     } else {
                       pointsText = fixture.venue;
@@ -370,12 +445,13 @@ export function PlayerDetailsSheet({
                           backgroundColor: style.bg,
                           borderWidth: 1,
                           borderColor: style.border,
-                          opacity: isPastGw ? 0.65 : 1,
+                          // Played gameweeks recede but keep their colour.
+                          opacity: isPastGw ? 0.55 : 1,
                         }}
                       >
                         <Text
                           style={{
-                            color: "#9db3a6",
+                            color: style.muted,
                             fontSize: 8,
                             fontWeight: "800",
                           }}
@@ -395,7 +471,7 @@ export function PlayerDetailsSheet({
                         </Text>
                         <Text
                           style={{
-                            color: isPoints && pointsText !== "-" ? "#ffd400" : style.accent,
+                            color: style.ink,
                             fontSize: pointsText === "-" ? 12 : 8.5,
                             fontWeight: "900",
                             marginTop: 2,
@@ -414,51 +490,15 @@ export function PlayerDetailsSheet({
               )}
             </View>
 
-            {/* Full Profile Details Collapsible Card */}
-            {showFullProfile && (
-              <View
-                style={{
-                  marginTop: 14,
-                  padding: 12,
-                  borderRadius: 14,
-                  backgroundColor: "rgba(5, 20, 16, 0.9)",
-                  borderWidth: 1,
-                  borderColor: "rgba(0, 217, 130, 0.3)",
-                }}
-              >
-                <Text style={{ color: GREEN, fontSize: 12, fontWeight: "900", marginBottom: 8 }}>
-                  FULL PLAYER PROFILE
-                </Text>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-                  <View style={{ width: "47%" }}>
-                    <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "700" }}>Name</Text>
-                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800", marginTop: 1 }}>{player.name}</Text>
-                  </View>
-                  <View style={{ width: "47%" }}>
-                    <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "700" }}>Club</Text>
-                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800", marginTop: 1 }}>{player.team}</Text>
-                  </View>
-                  <View style={{ width: "47%" }}>
-                    <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "700" }}>Position</Text>
-                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800", marginTop: 1 }}>
-                      {["", "Goalkeeper", "Defender", "Midfielder", "Forward"][player.type] ?? "Player"}
-                    </Text>
-                  </View>
-                  <View style={{ width: "47%" }}>
-                    <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "700" }}>Price</Text>
-                    <Text style={{ color: "#ffd400", fontSize: 12, fontWeight: "800", marginTop: 1 }}>{price(player.price ?? player.buy)}</Text>
-                  </View>
-                  <View style={{ width: "47%" }}>
-                    <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "700" }}>GW Points</Text>
-                    <Text style={{ color: GREEN, fontSize: 12, fontWeight: "800", marginTop: 1 }}>{player.displayPoints ?? 0} pts</Text>
-                  </View>
-                  <View style={{ width: "47%" }}>
-                    <Text style={{ color: "#9db3a6", fontSize: 10, fontWeight: "700" }}>Form</Text>
-                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "800", marginTop: 1 }}>{player.form || "0.0"}</Text>
-                  </View>
-                </View>
-              </View>
-            )}
+            <PlayerProfile
+              element={element}
+              failed={elementFailed}
+              onRetry={onRetryElement}
+              history={history}
+              pastSeasons={pastSeasons}
+              teamNames={teamNames}
+            />
+            </ScrollView>
 
             {/* Action Buttons Row */}
             {actionsEnabled && (
@@ -481,27 +521,6 @@ export function PlayerDetailsSheet({
                     >
                       <Text style={{ color: "#ffffff", fontWeight: "900", fontSize: 13.5 }}>
                         {isReplaced ? "Change player" : "Transfer out"}
-                      </Text>
-                    </Pressable>
-
-                    {/* Full Profile Button */}
-                    <Pressable
-                      onPress={() => setShowFullProfile(!showFullProfile)}
-                      style={({ pressed }) => ({
-                        flex: 1,
-                        minHeight: 42,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        borderRadius: 14,
-                        backgroundColor: showFullProfile ? "rgba(0, 217, 130, 0.2)" : "rgba(255, 255, 255, 0.1)",
-                        borderWidth: 1.5,
-                        borderColor: "rgba(0, 217, 130, 0.4)",
-                        opacity: pressed ? 0.8 : 1,
-                        elevation: 4,
-                      })}
-                    >
-                      <Text style={{ color: GREEN, fontWeight: "900", fontSize: 13.5 }}>
-                        {showFullProfile ? "Hide profile" : "Full profile"}
                       </Text>
                     </Pressable>
 
@@ -587,23 +606,6 @@ export function PlayerDetailsSheet({
                     >
                       <Text style={{ color: "#ffffff", fontWeight: "900", fontSize: 12 }}>
                         Substitute
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => setShowFullProfile(!showFullProfile)}
-                      style={{
-                        flex: 1,
-                        minHeight: 40,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        borderRadius: 12,
-                        backgroundColor: showFullProfile ? "rgba(0, 217, 130, 0.2)" : "rgba(255, 255, 255, 0.1)",
-                        borderWidth: 1.5,
-                        borderColor: "rgba(0, 217, 130, 0.4)",
-                      }}
-                    >
-                      <Text style={{ color: GREEN, fontWeight: "900", fontSize: 12 }}>
-                        {showFullProfile ? "Hide" : "Profile"}
                       </Text>
                     </Pressable>
                   </>

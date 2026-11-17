@@ -20,6 +20,16 @@ export type Row = {
   fixtures?: PlayerFixture[];
   // Brought in by a transfer that hasn't been confirmed yet.
   pendingIn?: boolean;
+  // Next-gameweek availability, from FPL: status "a" available, "d" doubtful,
+  // "i" injured, "s" suspended, "u"/"n" unavailable.
+  status?: string;
+  // Percentage chance of playing next round when FPL has set one.
+  chance?: number | null;
+  news?: string;
+  // Points view, live gameweek: projected automatic substitution.
+  autoSub?: "in" | "out";
+  // Points view, live gameweek: bonus from matches still in play.
+  provisionalBonus?: number;
 };
 
 export type PlayerFixture = {
@@ -43,6 +53,8 @@ export type Player = {
   ownership: string;
   priceChange: number;
   status: string;
+  chance?: number | null;
+  news?: string;
   formMood?: "good" | "bad";
 };
 
@@ -212,6 +224,20 @@ export type MemberSquad = {
     pointsOnBench: number | null;
   };
   picks: MemberPick[];
+  // The gameweek's matches, for live bonus and automatic substitutions.
+  fixtures?: LiveFixture[];
+};
+
+export type LiveFixture = {
+  id: number;
+  teamH: number;
+  teamA: number;
+  started: boolean;
+  finished: boolean;
+  // Final whistle blown; FPL marks it finished once the data is checked.
+  finishedProvisional: boolean;
+  // Bonus points system scores of everyone who played.
+  bps: { element: number; value: number }[];
 };
 // The session is renewed by the app before a script runs (see auth.ts), so a
 // script that is still refused has nothing left to try. Kept as a small stub
@@ -247,7 +273,13 @@ export function buildFetchJs() {
 
     const j = async (u) => {
       const r = await fetch(u, { credentials: "include" });
-      if (!r.ok) throw new Error(u + " -> " + r.status);
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        throw new Error(
+          u.replace("https://fantasy.premierleague.com/api/", "") + " -> " + r.status +
+            (body ? " " + body.slice(0, 80) : "")
+        );
+      }
       return r.json();
     };
     const [bs, d, fixtures, entryData] = await Promise.all([
@@ -337,6 +369,9 @@ export function buildFetchJs() {
       priceChange: players[p.element].cost_change_event,
       displayPoints: players[p.element].event_points ?? null,
       formMood: moodFor(players[p.element].form),
+      status: players[p.element].status,
+      chance: players[p.element].chance_of_playing_next_round,
+      news: players[p.element].news || "",
       fixtures: fixturesFor(players[p.element].team)
     }));
 
@@ -352,6 +387,8 @@ export function buildFetchJs() {
       ownership: p.selected_by_percent,
       priceChange: p.cost_change_event,
       status: p.status,
+      chance: p.chance_of_playing_next_round,
+      news: p.news || "",
       formMood: moodFor(p.form)
     }));
 
@@ -565,7 +602,15 @@ export type LeagueAction =
       maxEntries?: number;
     }
   | { action: "invite-code"; leagueId: number }
-  | { action: "manager-gameweek"; entry: number; event: number };
+  | {
+      action: "manager-gameweek";
+      entry: number;
+      event: number;
+      // Background refresh: errors are not shown.
+      silent?: boolean;
+      // "home": the signed-in manager's live total for the home screen.
+      target?: "home";
+    };
 
 export function buildLeagueActionJs(action: LeagueAction) {
   return `
@@ -720,12 +765,14 @@ export function buildLeagueActionJs(action: LeagueAction) {
 }
 
 if (action.action === "manager-gameweek") {
-  const [bootstrap, live, response] = await Promise.all([
+  const [bootstrap, live, gameweekFixtures, response] = await Promise.all([
     request("bootstrap-static/", "GET"),
-    request("event/" + action.event + "/live/", "GET"),
+    // Live data changes by the minute during matches: skip the cache.
+    request("event/" + action.event + "/live/", "GET", undefined, true),
+    request("fixtures/?event=" + action.event, "GET", undefined, true),
     fetch(
       api + "entry/" + action.entry + "/event/" + action.event + "/picks/",
-      { credentials: "include" }
+      { credentials: "include", cache: "no-store" }
     )
   ]);
   if (!response.ok) {
@@ -800,12 +847,34 @@ if (action.action === "manager-gameweek") {
     };
   });
 
+  const fixtures = (gameweekFixtures || []).map(fixture => {
+    const bpsStat = (fixture.stats || []).find(stat => stat.identifier === "bps");
+    const bps = bpsStat
+      ? [...(bpsStat.h || []), ...(bpsStat.a || [])].map(row => ({
+          element: row.element,
+          value: row.value
+        }))
+      : [];
+    return {
+      id: fixture.id,
+      teamH: fixture.team_h,
+      teamA: fixture.team_a,
+      started: !!fixture.started,
+      finished: !!fixture.finished,
+      finishedProvisional: !!fixture.finished_provisional,
+      bps
+    };
+  });
+
   send({
     leagueAction: "manager-gameweek",
+    silent: !!action.silent,
+    target: action.target || null,
     data: {
       entry: action.entry,
       event: action.event,
       chip: squadData.active_chip || null,
+      fixtures,
       history: {
         points: squadData.entry_history ? squadData.entry_history.points : null,
         totalPoints: squadData.entry_history ? squadData.entry_history.total_points : null,
@@ -863,6 +932,7 @@ if (action.action === "manager-gameweek") {
       event: action.event,
       leagueId: action.leagueId || (action.league && action.league.id),
       silent: !!action.silent,
+      target: action.target || null,
       error: (e && e.message) || String(e)
     });
   }

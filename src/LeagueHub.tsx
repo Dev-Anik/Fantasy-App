@@ -6,7 +6,6 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Image } from "expo-image";
 import type { ScrollViewInstance } from "react-native";
 import { leagueCategory } from "./fpl";
 import type {
@@ -144,18 +143,9 @@ export function LeagueHub({
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: DARK_GREEN }}>
-      <Image
-        source={require("../assets/images/background-texture.png")}
-        contentFit="cover"
-        style={{
-          position: "absolute",
-          top: 0,
-          right: 0,
-          bottom: 0,
-          left: 0,
-        }}
-      />
+    // Transparent: the screen's own textured background runs unbroken behind
+    // the header and this page. A second copy here showed a visible seam.
+    <View style={{ flex: 1 }}>
       <ScrollView
         ref={scrollViewRef}
         style={{ flex: 1 }}

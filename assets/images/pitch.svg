@@ -25,23 +25,6 @@
   <!-- Ground Base -->
   <rect width="600" height="800" fill="url(#grassBg)" />
 
-  <!-- Vertical Lawn Stripes (Alternating Mowed Grass) -->
-  <g opacity="0.08">
-    <rect x="0" width="50" height="800" fill="#ffffff" />
-    <rect x="100" width="50" height="800" fill="#ffffff" />
-    <rect x="200" width="50" height="800" fill="#ffffff" />
-    <rect x="300" width="50" height="800" fill="#ffffff" />
-    <rect x="400" width="50" height="800" fill="#ffffff" />
-    <rect x="500" width="50" height="800" fill="#ffffff" />
-  </g>
-  <g opacity="0.07">
-    <rect x="50" width="50" height="800" fill="#000000" />
-    <rect x="150" width="50" height="800" fill="#000000" />
-    <rect x="250" width="50" height="800" fill="#000000" />
-    <rect x="350" width="50" height="800" fill="#000000" />
-    <rect x="450" width="50" height="800" fill="#000000" />
-    <rect x="550" width="50" height="800" fill="#000000" />
-  </g>
 
   <!-- Lighting & Vignette Overlay -->
   <rect width="600" height="800" fill="url(#centerGlow)" />
