@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "profpl",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "ios": {
       "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.devanik.profpl",
@@ -18,7 +18,7 @@
     "android": {
       "package": "com.devanik.profpl",
       "adaptiveIcon": {
-        "backgroundColor": "#151c19",
+        "backgroundColor": "#0b1020",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -34,7 +34,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#0b1410",
+          "backgroundColor": "#0b1020",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
@@ -55,7 +55,9 @@
             "extraProguardRules": "# WorkManager (used by expo-background-task) creates its Room database\n# through reflection; keep the generated constructors or release builds\n# crash on launch with NoSuchMethodException WorkDatabase_Impl.<init>.\n-keep class * extends androidx.room.RoomDatabase { <init>(); }\n-keep class androidx.work.** { *; }"
           }
         }
-      ]
+      ],
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -61,6 +61,7 @@ import { FixturePlanner } from "../FixturePlanner";
 import { MatchCentre } from "../MatchCentre";
 import { GameweekHelper } from "../GameweekHelper";
 import { CardInfoSheet } from "../CardInfoSheet";
+import { SaveProgress } from "../SaveProgress";
 import { loadCardStats, saveCardStats } from "../cardStats";
 import type { CardStatKey } from "../cardStats";
 import { APP_VERSION } from "../appInfo";
@@ -332,7 +333,9 @@ export default function Index() {
   const [showChipMenu, setShowChipMenu] = useState(false);
   // The last lineup save sent, so one refused by FPL can be retried with a
   // freshly renewed sign-in.
-  const lastSave = useRef<{ script: string; retried: boolean } | null>(null);
+  // The lineup change being saved: its script (to resend once if FPL refuses
+  // the sign-in) and the lineup to show once FPL accepts it.
+  const lastSave = useRef<{ script: string; retried: boolean; draft: Row[] } | null>(null);
   const [dialog, setDialog] = useState<{
     title: string;
     message: string;
@@ -344,7 +347,16 @@ export default function Index() {
   // A problem loading the team while it is on screen (shown as a strip).
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
-  const [, setSaving] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // A moment of "Lineup saved" after FPL accepts a lineup change.
+  const [savedFlash, setSavedFlash] = useState(false);
+  const savedFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
+    },
+    [],
+  );
   const [sending, setSending] = useState(false);
   const [showLeagues, setShowLeagues] = useState(false);
   const [activeMember, setActiveMember] = useState<{
@@ -904,6 +916,10 @@ export default function Index() {
   // Leagues, other managers' teams and live numbers belong to the account
   // that was signed in: forget them, so the next account never sees them.
   const clearAccountViews = () => {
+    // A save or transfer in flight belongs to the account that is going.
+    setSaving(false);
+    setSending(false);
+    setSavedFlash(false);
     leagueView.current = null;
     managerRequest.current = null;
     setSelectedLeague(null);
@@ -1300,6 +1316,29 @@ export default function Index() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage]);
 
+  // Safety net for the save overlay: if FPL hasn't answered a save or a
+  // transfer in 45 seconds, stop waiting, reload the team as FPL has it and
+  // say so, instead of holding the screen.
+  const saveStuckRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    saveStuckRef.current = () => {
+      setSaving(false);
+      setSending(false);
+      check();
+      showDialog(
+        "Still waiting for FPL",
+        "FPL hasn't confirmed the change yet. Your team has been reloaded as FPL has it: check it before trying again.",
+        [{ text: "OK" }],
+        "warning",
+      );
+    };
+  });
+  useEffect(() => {
+    if (!saving && !sending) return;
+    const timer = setTimeout(() => saveStuckRef.current(), 45_000);
+    return () => clearTimeout(timer);
+  }, [saving, sending]);
+
   const onMessage = (e: any) => {
     let msg: any;
     try {
@@ -1311,7 +1350,12 @@ export default function Index() {
     if (signedOut.current) return;
     if (msg.saved) {
       setSaving(false);
+      // FPL accepted it: now the players move (the reload below confirms it).
+      if (lastSave.current) setDraft(lastSave.current.draft);
       setPendingChip(null);
+      setSavedFlash(true);
+      if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
+      savedFlashTimer.current = setTimeout(() => setSavedFlash(false), 1300);
       check();
       return;
     }
@@ -1706,7 +1750,8 @@ export default function Index() {
       );
     }
 
-    setDraft(nextDraft);
+    // The pitch keeps the current lineup while the user decides: players
+    // move only once FPL has accepted the change (see msg.saved).
     setSelectedPos(null);
     setPlayerSheetOpen(false);
 
@@ -1716,18 +1761,16 @@ export default function Index() {
         : "Save lineup?",
       lines.join("\n"),
       [
-        {
-          text: "Cancel",
-          style: "cancel",
-          onPress: () => {
-            setDraft(squad.picks);
-          },
-        },
+        { text: "Cancel", style: "cancel" },
         {
           text: "Save",
           onPress: () => {
             setSaving(true);
-            lastSave.current = { script: buildSaveJs(squad.entry, nextDraft, chipToPlay), retried: false };
+            lastSave.current = {
+              script: buildSaveJs(squad.entry, nextDraft, chipToPlay),
+              retried: false,
+              draft: nextDraft,
+            };
             runInWeb(lastSave.current.script);
           },
         },
@@ -3160,21 +3203,69 @@ export default function Index() {
                   left: 16,
                   right: 16,
                   bottom: insets.bottom + 116,
-                  backgroundColor: "rgba(4, 16, 10, 0.96)",
-                  borderRadius: 18,
-                  padding: 8,
                   flexDirection: "row",
                   alignItems: "center",
-                  gap: 10,
+                  gap: 8,
+                  paddingVertical: 8,
+                  paddingLeft: 16,
+                  paddingRight: 8,
+                  borderRadius: 24,
+                  backgroundColor: "rgba(27, 34, 54, 0.97)",
                   borderWidth: 1,
-                  borderColor: "rgba(0, 217, 130, 0.35)",
+                  borderColor: "rgba(255, 255, 255, 0.1)",
                   shadowColor: "#000",
-                  shadowOpacity: 0.4,
-                  shadowRadius: 16,
-                  shadowOffset: { width: 0, height: 6 },
-                  elevation: 10,
+                  shadowOpacity: 0.45,
+                  shadowRadius: 18,
+                  shadowOffset: { width: 0, height: 8 },
+                  elevation: 12,
                 }}
               >
+                {/* What is pending, and what it costs */}
+                <View
+                  accessible
+                  accessibilityLabel={`${pending.length} pending transfer${pending.length === 1 ? "" : "s"}, ${
+                    pendingChip
+                      ? `${selectedChipOption?.label ?? "chip"}, free`
+                      : hit > 0
+                        ? `costs ${hit} points`
+                        : "no points cost"
+                  }`}
+                  style={{ flex: 1 }}
+                >
+                  <Text style={{ color: THEME.muted, fontSize: 9.5, fontWeight: "600", letterSpacing: 1.6 }}>
+                    PENDING
+                  </Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 }}>
+                    <Text numberOfLines={1} style={{ color: THEME.ink, fontWeight: "700", fontSize: 15 }}>
+                      {pending.length} transfer{pending.length === 1 ? "" : "s"}
+                    </Text>
+                    <View
+                      style={{
+                        paddingHorizontal: 7,
+                        paddingVertical: 2,
+                        borderRadius: 8,
+                        backgroundColor:
+                          hit > 0 && !pendingChip ? "rgba(255, 107, 125, 0.14)" : "rgba(47, 211, 154, 0.12)",
+                      }}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          color: hit > 0 && !pendingChip ? THEME.bad : THEME.good,
+                          fontSize: 11,
+                          fontWeight: "700",
+                          fontVariant: ["tabular-nums"],
+                        }}
+                      >
+                        {pendingChip
+                          ? `${selectedChipOption?.label ?? "Chip"} · free`
+                          : hit > 0
+                            ? `−${hit} pts`
+                            : "Free"}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
                 <Pressable
                   onPress={() => {
                     setPending([]);
@@ -3183,61 +3274,57 @@ export default function Index() {
                   disabled={sending}
                   accessibilityRole="button"
                   accessibilityLabel="Reset all transfers"
+                  hitSlop={4}
                   style={({ pressed }) => ({
-                    height: 44,
-                    paddingHorizontal: 16,
-                    borderRadius: 14,
+                    height: 42,
+                    paddingHorizontal: 14,
+                    borderRadius: 21,
+                    flexDirection: "row",
                     alignItems: "center",
                     justifyContent: "center",
+                    gap: 5,
                     borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.2)",
-                    backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
+                    borderColor: "rgba(255, 255, 255, 0.14)",
+                    backgroundColor: pressed ? "rgba(255, 255, 255, 0.08)" : "transparent",
                     opacity: sending ? 0.5 : 1,
                   })}
                 >
-                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 13 }}>Reset</Text>
+                  <AppSymbol
+                    name={{ ios: "arrow.uturn.backward", android: "undo", web: "undo" }}
+                    color={THEME.soft}
+                    size={15}
+                  />
+                  <Text style={{ color: THEME.soft, fontWeight: "600", fontSize: 13.5 }}>Reset</Text>
                 </Pressable>
-                <View style={{ flex: 1, alignItems: "center" }}>
-                  <Text numberOfLines={1} style={{ color: "#ffffff", fontWeight: "900", fontSize: 14 }}>
-                    {pending.length} transfer{pending.length === 1 ? "" : "s"}
-                  </Text>
-                  <Text
-                    numberOfLines={1}
-                    style={{
-                      color: hit > 0 && !pendingChip ? "#ff526f" : THEME.good,
-                      fontSize: 11,
-                      fontWeight: "800",
-                      marginTop: 1,
-                    }}
-                  >
-                    {pendingChip
-                      ? `${selectedChipOption?.label ?? "Chip"} · free`
-                      : hit > 0
-                        ? `Costs ${hit} points`
-                        : "No points cost"}
-                  </Text>
-                </View>
                 <Pressable
                   onPress={reviewTransfers}
                   disabled={sending || pending.length === 0}
                   accessibilityRole="button"
                   accessibilityLabel="Review and confirm transfers"
                   style={({ pressed }) => ({
-                    height: 44,
-                    paddingHorizontal: 20,
-                    borderRadius: 14,
+                    height: 42,
+                    paddingLeft: 18,
+                    paddingRight: 14,
+                    borderRadius: 21,
                     flexDirection: "row",
                     alignItems: "center",
                     justifyContent: "center",
-                    gap: 6,
-                    backgroundColor: GREEN,
-                    opacity: sending || pending.length === 0 ? 0.45 : pressed ? 0.8 : 1,
+                    gap: 4,
+                    backgroundColor: THEME.accent,
+                    opacity: sending || pending.length === 0 ? 0.45 : pressed ? 0.85 : 1,
                   })}
                 >
-                  {sending && <ActivityIndicator color="#071b12" size="small" />}
-                  <Text style={{ color: "#071b12", fontWeight: "900", fontSize: 14 }}>
+                  {sending && <ActivityIndicator color={THEME.onAccent} size="small" />}
+                  <Text style={{ color: THEME.onAccent, fontWeight: "700", fontSize: 14 }}>
                     {sending ? "Sending" : "Review"}
                   </Text>
+                  {!sending && (
+                    <AppSymbol
+                      name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
+                      color={THEME.onAccent}
+                      size={16}
+                    />
+                  )}
                 </Pressable>
               </View>
             )}
@@ -3465,6 +3552,20 @@ export default function Index() {
       <AnimatedScreen visible={showTerms} zIndex={30}>
         {showTerms && <TermsAndConditions onBack={() => setShowTerms(false)} />}
       </AnimatedScreen>
+      {stage === "squad" && (
+        <SaveProgress
+          key="save-progress"
+          state={
+            saving
+              ? { kind: "lineup", phase: "working" }
+              : sending
+                ? { kind: "transfers", phase: "working" }
+                : savedFlash
+                  ? { kind: "lineup", phase: "done" }
+                  : null
+          }
+        />
+      )}
       <AppDialog
         visible={dialog !== null}
         title={dialog?.title ?? ""}

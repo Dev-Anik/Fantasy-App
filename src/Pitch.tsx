@@ -16,6 +16,7 @@ import { Row } from "./fpl";
 import type { PlayerFixture } from "./fpl";
 import { SHIELD_CARDS } from "./shieldCards";
 import { availability } from "./availability";
+import { THEME } from "./theme";
 import type { Availability } from "./availability";
 import { CARD_STAT_OPTIONS, CardStatsContext, cardStatValue } from "./cardStats";
 import type { CardStatKey } from "./cardStats";
@@ -998,23 +999,28 @@ function SwapBadge({ size }: { size: number }) {
 
 // The small menu beside a selected player: one dark capsule holding the
 // actions, in the same glassy green style as the app's cards.
+// The action menu beside a selected player: big enough to tap easily.
+const RAIL_BUTTON = 36;
+const RAIL_WIDTH = RAIL_BUTTON + 8;
+const CAPTAIN_GOLD = "#f2c14e";
+
 function ActionRail({ children }: { children: ReactNode }) {
   return (
     <View
       style={{
-        width: 32,
-        padding: 2,
-        gap: 2,
-        borderRadius: 16,
+        width: RAIL_WIDTH,
+        padding: 3,
+        gap: 4,
+        borderRadius: RAIL_WIDTH / 2,
         alignItems: "center",
-        backgroundColor: "rgba(4, 16, 10, 0.95)",
+        backgroundColor: "rgba(27, 34, 54, 0.97)",
         borderWidth: 1,
-        borderColor: "rgba(0, 217, 130, 0.5)",
-        shadowColor: "#00d982",
-        shadowOpacity: 0.3,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 8,
+        borderColor: "rgba(255, 255, 255, 0.12)",
+        shadowColor: "#000",
+        shadowOpacity: 0.45,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 10,
       }}
     >
       {children}
@@ -1043,17 +1049,19 @@ function RailButton({
         event.stopPropagation?.();
         onPress();
       }}
-      hitSlop={5}
+      hitSlop={3}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected: active }}
       style={({ pressed }) => ({
-        width: 26,
-        height: 26,
-        borderRadius: 13,
+        width: RAIL_BUTTON,
+        height: RAIL_BUTTON,
+        borderRadius: RAIL_BUTTON / 2,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: active ? tone : pressed ? `${tone}40` : "rgba(255, 255, 255, 0.07)",
+        backgroundColor: active ? tone : pressed ? `${tone}33` : "rgba(255, 255, 255, 0.06)",
+        borderWidth: active ? 0 : 1,
+        borderColor: "rgba(255, 255, 255, 0.08)",
       })}
     >
       {children}
@@ -1065,7 +1073,7 @@ function RailLetter({ letter, color }: { letter: string; color: string }) {
   return (
     <Text
       allowFontScaling={false}
-      style={{ color, fontSize: 12, fontWeight: "900", includeFontPadding: false }}
+      style={{ color, fontSize: 15, fontWeight: "800", includeFontPadding: false }}
     >
       {letter}
     </Text>
@@ -1427,6 +1435,10 @@ function PlayerCard({
   const nameFont = Math.max(9, Math.round(10 * scale * 2) / 2);
   const flag = availability(r.status, r.chance);
   const infoFont = Math.max(8.5, Math.round(9.5 * scale * 2) / 2);
+  // Captain / vice-captain armband: a short band, sized with the card.
+  const armCard = shieldSize(pitchMetrics, compact, isBenched);
+  const armband = Math.round(clamp(armCard.width * 0.26, 18, 25));
+  const armbandHeight = Math.round(armband * 0.78);
   // Shield cards: the footer's own height, so what is printed in it is sized
   // to fit inside the card on every screen.
   const footerHeight = shieldSize(pitchMetrics, compact, isBenched).footer;
@@ -1575,21 +1587,43 @@ function PlayerCard({
                 </View>
               )}
 
+              {/* Armband: on the player's left arm (the card's left shoulder),
+                  like a real captain's armband. */}
               {(r.cap || r.vice) && (
                 <View
+                  pointerEvents="none"
+                  accessible={false}
                   style={{
                     position: "absolute",
-                    bottom: 0,
-                    right: 0,
-                    width: 17,
-                    height: 17,
-                    borderRadius: 9,
-                    backgroundColor: r.cap ? "#ffd400" : "#ccc",
+                    top: Math.round(armCard.face * 0.53 - armbandHeight / 2),
+                    left: Math.round(
+                      (cardWidth - 6 - armCard.width) / 2 + armCard.width * 0.17 - armband / 2,
+                    ),
+                    width: armband,
+                    height: armbandHeight,
+                    borderRadius: 6,
                     alignItems: "center",
                     justifyContent: "center",
+                    backgroundColor: r.cap ? "#f2c14e" : "#e5e7ee",
+                    borderWidth: 2,
+                    borderColor: "#0b1020",
+                    zIndex: 12,
+                    shadowColor: r.cap ? "#f2c14e" : "#000",
+                    shadowOpacity: r.cap ? 0.6 : 0.4,
+                    shadowRadius: r.cap ? 6 : 3,
+                    shadowOffset: { width: 0, height: 1 },
+                    elevation: 6,
                   }}
                 >
-                  <Text style={{ fontSize: 11, fontWeight: "bold" }}>
+                  <Text
+                    allowFontScaling={false}
+                    style={{
+                      color: "#1a1305",
+                      fontSize: Math.round(armbandHeight * 0.66),
+                      fontWeight: "900",
+                      includeFontPadding: false,
+                    }}
+                  >
                     {r.cap ? "C" : "V"}
                   </Text>
                 </View>
@@ -1607,20 +1641,21 @@ function PlayerCard({
               <View
                 style={{
                   position: "absolute",
+                  // Beside the card, overlapping it slightly.
                   ...(isRightmost
-                    ? { left: isBenched ? -30 : -28 }
-                    : { right: isBenched ? -30 : -28 }),
+                    ? { left: -(RAIL_WIDTH - 6) }
+                    : { right: -(RAIL_WIDTH - 6) }),
                   top: isBenched ? 4 : 0,
                   zIndex: 99,
                 }}
               >
                 <ActionRail>
                   {showPrice && onTransfer && (
-                    <RailButton label={`Transfer out ${r.name}`} tone="#ff5a72" onPress={() => onTransfer(r)}>
+                    <RailButton label={`Transfer out ${r.name}`} tone={THEME.bad} onPress={() => onTransfer(r)}>
                       <AppSymbol
                         name={{ ios: "arrow.left.arrow.right", android: "swap_horiz", web: "swap_horiz" }}
-                        color="#ff5a72"
-                        size={16}
+                        color={THEME.bad}
+                        size={20}
                       />
                     </RailButton>
                   )}
@@ -1629,30 +1664,30 @@ function PlayerCard({
                   {!showPrice && !isBenched && onSetCaptain && (
                     <RailButton
                       label={r.cap ? `${r.name} is captain` : `Make ${r.name} captain`}
-                      tone="#ffd400"
+                      tone={CAPTAIN_GOLD}
                       active={r.cap}
                       onPress={() => onSetCaptain(r)}
                     >
-                      <RailLetter letter="C" color={r.cap ? "#1b1600" : "#ffd400"} />
+                      <RailLetter letter="C" color={r.cap ? "#1a1305" : CAPTAIN_GOLD} />
                     </RailButton>
                   )}
                   {!showPrice && !isBenched && onSetViceCaptain && (
                     <RailButton
                       label={r.vice ? `${r.name} is vice-captain` : `Make ${r.name} vice-captain`}
-                      tone="#e6efe9"
+                      tone={THEME.ink}
                       active={r.vice}
                       onPress={() => onSetViceCaptain(r)}
                     >
-                      <RailLetter letter="V" color={r.vice ? "#04210f" : "#e6efe9"} />
+                      <RailLetter letter="V" color={r.vice ? THEME.bg : THEME.ink} />
                     </RailButton>
                   )}
 
                   {onOpenDetails && (
-                    <RailButton label={`${r.name} stats and details`} tone={GREEN} onPress={() => onOpenDetails(r)}>
+                    <RailButton label={`${r.name} stats and details`} tone={THEME.accent} onPress={() => onOpenDetails(r)}>
                       <AppSymbol
                         name={{ ios: "chart.bar.fill", android: "bar_chart", web: "bar_chart" }}
-                        color={GREEN}
-                        size={15}
+                        color={THEME.accent}
+                        size={19}
                       />
                     </RailButton>
                   )}
