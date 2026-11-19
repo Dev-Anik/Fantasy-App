@@ -385,7 +385,7 @@ export function EmailSignIn({
 
           <View style={{ marginTop: 18, marginBottom: 28 }}>
             <Image
-              source={require("../assets/images/icon.png")}
+              source={require("../assets/images/icon-small.png")}
               accessible={false}
               style={{ width: 48, height: 48, borderRadius: 13 }}
             />

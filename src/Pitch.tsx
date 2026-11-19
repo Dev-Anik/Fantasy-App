@@ -14,8 +14,6 @@ import { GlassView } from "expo-glass-effect";
 import { AppSymbol } from "./AppSymbol";
 import { Row } from "./fpl";
 import type { PlayerFixture } from "./fpl";
-import { Jersey, JERSEY_HEM, JERSEY_LAYERS } from "./Jersey";
-import { KIT_COLORS } from "./kits";
 import { SHIELD_CARDS } from "./shieldCards";
 import { availability } from "./availability";
 import type { Availability } from "./availability";
@@ -24,42 +22,8 @@ import type { CardStatKey } from "./cardStats";
 
 const GREEN = "#00d982";
 
-// How players are drawn across the app: a club-coloured jersey, or the 3D
-// kit avatar. Change this one value to switch every screen.
-export const PLAYER_ART: "jersey" | "avatar" = "jersey";
-
-// How the name and fixture under each player are drawn.
-// "classic": boxed name plate, fixture row and three difficulty bars.
-// "capsule": test style. Rounded name pill, a fixture pill filled with the
-//            difficulty colour, and dots for the following fixtures.
-// "circle":  TEST STYLE, like the player sheet header. The 3D kit avatar in
-//            a round green-edged frame, the name in bold white and a quieter
-//            line under it with difficulty dots.
-// Set back to "classic" to return to the original look.
-// "shield":  TEST STYLE, a rating-card look. A rounded rectangle card with the
-//            avatar, its form and position in the corner (glowing at 7.0+)
-//            and the name and club across the bottom.
-export const CARD_STYLE: "classic" | "capsule" | "circle" | "shield" = "shield";
-
-// TEST: frame starters in the same rounded card as bench players.
-// Set to false to show starters without a card, as before.
-export const FRAME_STARTERS = true;
-// The shield is a card itself, so it never sits inside a frame.
-const FRAMED = FRAME_STARTERS && CARD_STYLE !== "shield";
-
-// TEST: the club-coloured circle behind each avatar. When false the avatar
-// stands on the pitch as a cut-out, head and shoulders.
-export const AVATAR_BACKDROP = true;
-// TEST: one circle colour for every player instead of the club colour.
-// The fill and ring below are the shared look (frosted glass).
-export const UNIFORM_BACKDROP = true;
-const UNIFORM_FILL = "rgba(255, 255, 255, 0.14)";
-const UNIFORM_RING = "rgba(255, 255, 255, 0.38)";
-
-// TEST: where the club code goes. "watermark": large faint letters inside the
-// circle, behind the avatar. "tag": a small label on the circle's lower edge.
-export const CLUB_CODE: "watermark" | "tag" = "watermark";
-// A framed card is this much wider than its contents (3pt padding each side).
+// A framed card is this much wider than its contents (3pt padding each side);
+// the bench slots keep this width.
 const FRAME_EXTRA = 6;
 
 export const TEAM_AVATARS: Record<string, any> = {
@@ -182,25 +146,20 @@ let avatarsPreloaded = false;
 export function preloadAvatars() {
   if (avatarsPreloaded) return;
   avatarsPreloaded = true;
-  // The circle and shield cards show the 3D avatars; the other styles use
-  // the drawn shirts.
-  const usesAvatars = CARD_STYLE === "circle" || CARD_STYLE === "shield";
   const sources: number[] = [
-    ...(usesAvatars ? [...Object.values(TEAM_AVATARS), ...Object.values(GK_AVATARS), NO_CLUB_AVATAR] : JERSEY_LAYERS),
-    ...(CARD_STYLE === "shield"
-      ? [
-          ...Object.values(SHIELD_CARDS),
-          SHIELD_CARD,
-          SHIELD_FADE,
-          CARD_PATTERN,
-          ELITE_PATTERN,
-          ELITE_FRAME,
-          ELITE_GLOW,
-          HERO_PATTERN,
-          HERO_FRAME,
-          HERO_GLOW,
-        ]
-      : []),
+    ...Object.values(TEAM_AVATARS),
+    ...Object.values(GK_AVATARS),
+    NO_CLUB_AVATAR,
+    ...Object.values(SHIELD_CARDS),
+    SHIELD_CARD,
+    SHIELD_FADE,
+    CARD_PATTERN,
+    ELITE_PATTERN,
+    ELITE_FRAME,
+    ELITE_GLOW,
+    HERO_PATTERN,
+    HERO_FRAME,
+    HERO_GLOW,
     PITCH_GRASS,
     PITCH_TOP,
     PITCH_CENTRE,
@@ -283,13 +242,12 @@ function computeMetrics(
   rowSpace: number | null = null,
   perRow = 5,
 ): PitchMetrics {
-  const slots = CARD_STYLE === "shield" ? clamp(perRow, 4, 5) : 5;
+  const slots = clamp(perRow, 4, 5);
   const cardWidth = Math.floor(
     clamp(
-      (pitchWidth - ROW_PADDING * 2 - MIN_GAP * (slots - 1)) / slots -
-        (FRAMED ? FRAME_EXTRA : 0),
+      (pitchWidth - ROW_PADDING * 2 - MIN_GAP * (slots - 1)) / slots,
       54,
-      CARD_STYLE === "shield" ? 100 : 86,
+      100,
     ),
   );
   return {
@@ -299,21 +257,6 @@ function computeMetrics(
     scale: cardWidth / DESIGN_CARD_WIDTH,
     rowSpace,
   };
-}
-
-// Circle style: the avatar as large as the card allows. Width sets the ideal
-// size; on the pitch the measured row height caps it, leaving room for the
-// name and fixture below, so rows never overlap on short screens.
-function circleDiameter(metrics: PitchMetrics, compact: boolean, benched: boolean) {
-  const boxWidth = metrics.cardWidth - 6;
-  // With the frame on, the circle may use the frame's side padding too,
-  // filling the card edge to edge.
-  const ideal = (boxWidth + (FRAMED ? 8 : 0)) * (compact ? 0.95 : 1);
-  // Name and fixture lines under the avatar, plus breathing room.
-  const infoHeight = Math.round(34 * metrics.scale) + (FRAMED ? 12 : 0);
-  const byHeight =
-    !benched && metrics.rowSpace != null ? metrics.rowSpace - infoHeight : Infinity;
-  return Math.round(clamp(Math.min(ideal, byHeight), 34, 88));
 }
 
 // Shield style: card size. As wide as the slot allows, 1.2 times as tall,
@@ -352,9 +295,7 @@ function cardFooterLayout(footer: number) {
 
 // Height reserved for the player art, so the layout makes room for it.
 function avatarBoxHeight(metrics: PitchMetrics, compact: boolean, benched: boolean) {
-  if (CARD_STYLE === "shield") return shieldSize(metrics, compact, benched).height;
-  if (CARD_STYLE === "circle") return circleDiameter(metrics, compact, benched) + 2;
-  return Math.round((compact ? 34 : 42) * metrics.scale);
+  return shieldSize(metrics, compact, benched).height;
 }
 
 const PitchMetricsContext = createContext<PitchMetrics>(computeMetrics(360));
@@ -375,43 +316,12 @@ function rowGap(count: number, slotWidth: number, rowWidth: number, maxGap: numb
   return Math.max(MIN_GAP, Math.min(evenGap, maxGap));
 }
 
-// Very dark shirts (e.g. black/white stripes) use their trim for the accent so
-// it stays visible on the dark badge.
-function badgeAccent(team: string) {
-  const kit = KIT_COLORS[team];
-  if (!kit) return GREEN;
-  const hex = kit.shirt.replace("#", "");
-  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
-  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  return luminance < 0.12 ? kit.trim : kit.shirt;
-}
-
-// A club colour mixed toward black: `amount` 0 keeps it, 1 is black.
-function darken(hex: string, amount: number) {
-  const value = hex.replace("#", "");
-  const channel = (index: number) =>
-    Math.round(parseInt(value.slice(index, index + 2), 16) * (1 - amount))
-      .toString(16)
-      .padStart(2, "0");
-  return `#${channel(0)}${channel(2)}${channel(4)}`;
-}
-
-// Circle style: the avatar's backdrop in the player's club colour, darkened
-// so the avatar's own shirt still stands out in front of it.
-function clubBackdrop(team: string) {
-  if (UNIFORM_BACKDROP) return { fill: UNIFORM_FILL, ring: UNIFORM_RING };
-  const shirt = KIT_COLORS[team]?.shirt;
-  if (!shirt) return { fill: "#262d2a", ring: "rgba(255, 255, 255, 0.22)" };
-  return { fill: darken(shirt, 0.55), ring: darken(shirt, 0.15) };
-}
-
 function PlayerAvatar({
   team,
   benched,
   goalkeeper,
   compact = false,
   swapHint = false,
-  ring,
   card,
 }: {
   team: string;
@@ -419,8 +329,6 @@ function PlayerAvatar({
   goalkeeper: boolean;
   compact?: boolean;
   swapHint?: boolean;
-  // Circle style: colour of the frame when the player is selected.
-  ring?: string;
   // Shield style: the text printed on the card.
   card?: {
     name: string;
@@ -456,407 +364,69 @@ function PlayerAvatar({
     reported.current = true;
     onSettled();
   };
-  const useJersey = PLAYER_ART === "jersey";
-  const hasAvatar = Boolean(team && (useJersey ? KIT_COLORS[team] : TEAM_AVATARS[team]));
   const avatarSource = teamAvatar(team, goalkeeper);
-
   const boxWidth = cardWidth - 6;
   const boxHeight = avatarBoxHeight(metrics, compact, benched);
-  const imageSize = Math.round((benched ? (compact ? 63 : 67) : 72) * scale);
-  // The head may rise above the box; the hem tucks under the name plate.
-  const imageTop = boxHeight / 2 - imageSize / 2 + (compact ? 3 : 4) * scale;
-  const badgeFont = Math.max(compact ? 8 : 8.5, (compact ? 8.5 : 9.5) * scale);
-  // Room for the widest three-letter code ("WWW") at this font size.
-  const badgeWidth = Math.min(boxWidth, Math.round(badgeFont * 2.9 + 8));
-  // Jersey: as large as the card allows, with its hem resting on the name
-  // plate. The club code is printed on the shirt itself.
-  const jerseySize = Math.round(Math.min(boxWidth, boxHeight * 1.5));
-  const jerseyTop = Math.round(boxHeight - jerseySize * JERSEY_HEM + 1);
-  // Swap badge: centred on the shirt body (or on the avatar box).
+  // Swap badge size.
   const swapSize = Math.round(clamp(24 * scale, 20, 30));
-  const swapCentreY = useJersey ? jerseyTop + jerseySize * 0.47 : boxHeight / 2;
 
-  if (CARD_STYLE === "shield") {
-    const { width, height, face, footer } = shieldSize(metrics, compact, benched);
-    const epic = card?.hero ? EPIC_STYLE.hero : card?.elite ? EPIC_STYLE.elite : null;
-    // Selected players keep the selection colour; epic cards letter in gold
-    // (or holo violet); the rest in white.
-    const ink = card?.highlight ?? epic?.ink ?? "#ffffff";
-    // The name plate is the same dark strip with white lettering on every
-    // card (the selection colour when selected).
-    const plate = {
-      fill: "rgba(0, 0, 0, 0.62)",
-      edge: card?.highlight ?? "rgba(255, 255, 255, 0.14)",
-      ink: card?.highlight ?? "#ffffff",
-    };
-    const footerLayout = cardFooterLayout(footer);
-    // The card's art (colours, pattern, fade, frame) stops at the middle of
-    // the footer's text line; the chip there sits across the bottom edge.
-    const art = card?.footer ? Math.round(face + footerLayout.lineMiddle) : height;
-    return (
-      <View style={{ width: boxWidth, height: boxHeight }}>
-        <View
-          style={{
-            position: "absolute",
-            top: 0,
-            left: (boxWidth - width) / 2,
-            width,
-            height,
-          }}
-        >
-          {(card?.elite || card?.hero) && <CardGlow hero={!!card.hero} width={width} height={art} />}
+  const { width, height, face, footer } = shieldSize(metrics, compact, benched);
+  const epic = card?.hero ? EPIC_STYLE.hero : card?.elite ? EPIC_STYLE.elite : null;
+  // Selected players keep the selection colour; epic cards letter in gold
+  // (or holo violet); the rest in white.
+  const ink = card?.highlight ?? epic?.ink ?? "#ffffff";
+  // The name plate is the same dark strip with white lettering on every
+  // card (the selection colour when selected).
+  const plate = {
+    fill: "rgba(0, 0, 0, 0.62)",
+    edge: card?.highlight ?? "rgba(255, 255, 255, 0.14)",
+    ink: card?.highlight ?? "#ffffff",
+  };
+  const footerLayout = cardFooterLayout(footer);
+  // The card's art (colours, pattern, fade, frame) stops at the middle of
+  // the footer's text line; the chip there sits across the bottom edge.
+  const art = card?.footer ? Math.round(face + footerLayout.lineMiddle) : height;
+  return (
+    <View style={{ width: boxWidth, height: boxHeight }}>
+      <View
+        style={{
+          position: "absolute",
+          top: 0,
+          left: (boxWidth - width) / 2,
+          width,
+          height,
+        }}
+      >
+        {(card?.elite || card?.hero) && <CardGlow hero={!!card.hero} width={width} height={art} />}
+        <Image
+          // The club colours card, or a neutral slate one for an unknown club.
+          source={(team && SHIELD_CARDS[team]) || SHIELD_CARD}
+          contentFit="fill"
+          accessible={false}
+          style={{ position: "absolute", top: 0, left: 0, width, height: art }}
+        />
+        {!!card && (
           <Image
-            // The club colours card, or a neutral slate one for an unknown club.
-            source={(team && SHIELD_CARDS[team]) || SHIELD_CARD}
-            contentFit="fill"
-            accessible={false}
-            style={{ position: "absolute", top: 0, left: 0, width, height: art }}
-          />
-          {!!card && (
-            <Image
-              source={card.hero ? HERO_PATTERN : card.elite ? ELITE_PATTERN : CARD_PATTERN}
-              cachePolicy="memory-disk"
-              contentFit="fill"
-              accessible={false}
-              style={{ position: "absolute", top: 0, left: 0, width, height: art }}
-            />
-          )}
-          {/* The avatar, clipped to the card's inner area. */}
-          <View
-            style={{
-              position: "absolute",
-              top: Math.round(face * 0.05),
-              left: Math.round(width * 0.03),
-              right: Math.round(width * 0.03),
-              // The avatar runs down to the footer.
-              height: Math.round(face * 0.93),
-              overflow: "hidden",
-              alignItems: "center",
-            }}
-          >
-            <Image
-              source={avatarSource}
-              contentFit="contain"
-              accessible={false}
-              cachePolicy="memory-disk"
-              priority="high"
-              transition={120}
-              onLoad={reportSettled}
-              onError={reportSettled}
-              style={{
-                // Larger than the card, so head and shoulders fill it;
-                // centred, with the small rating tucked in the corner.
-                ...avatarArtSize(team, width * 1.52, goalkeeper),
-                // Raised (the image has empty space above the head) so more
-                // of the shirt shows before the fade.
-                marginTop: -Math.round(face * 0.07),
-                flexShrink: 0,
-              }}
-            />
-            {(card?.elite || card?.hero) && (
-              <Shimmer
-                width={width}
-                height={Math.round(face * 0.93)}
-                tint={card.hero ? "232, 214, 255" : "255, 246, 210"}
-              />
-            )}
-          </View>
-          <Image
-            source={SHIELD_FADE}
+            source={card.hero ? HERO_PATTERN : card.elite ? ELITE_PATTERN : CARD_PATTERN}
             cachePolicy="memory-disk"
             contentFit="fill"
             accessible={false}
             style={{ position: "absolute", top: 0, left: 0, width, height: art }}
           />
-          {!!card && (
-            <>
-              <View
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  top: Math.round(face * 0.05),
-                  left: Math.round(width * 0.08),
-                  zIndex: 2,
-                }}
-              >
-                {!!card.number && (
-                <Text
-                  allowFontScaling={false}
-                  accessibilityLabel={card.hot ? `Form ${card.number}, in good form` : undefined}
-                  style={{
-                    // Good form glows gold; other numbers are a little faded so
-                    // the glowing ones stand out.
-                    color: card.highlight
-                      ? ink
-                      : card.hot
-                        ? "#fff3b0"
-                        : "rgba(255, 255, 255, 0.68)",
-                    fontSize: Math.max(8, Math.round(width * 0.15)),
-                    lineHeight: Math.max(9, Math.round(width * 0.17)),
-                    fontWeight: "900",
-                    includeFontPadding: false,
-                    // Good form: a warm gold glow around the number.
-                    textShadowColor: card.hot ? "rgba(255, 196, 0, 0.95)" : "rgba(0, 0, 0, 0.5)",
-                    textShadowOffset: card.hot ? { width: 0, height: 0 } : { width: 0, height: 1 },
-                    textShadowRadius: card.hot ? 7 : 2,
-                  }}
-                >
-                  {card.number}
-                </Text>
-                )}
-                <Text
-                  allowFontScaling={false}
-                  style={{
-                    color: ink,
-                    fontSize: Math.max(6, Math.round(width * 0.09)),
-                    lineHeight: Math.max(7, Math.round(width * 0.11)),
-                    fontWeight: "800",
-                    letterSpacing: 0.4,
-                    includeFontPadding: false,
-                    textShadowColor: "rgba(0, 0, 0, 0.5)",
-                    textShadowOffset: { width: 0, height: 1 },
-                    textShadowRadius: 2,
-                  }}
-                >
-                  {card.position}
-                </Text>
-              </View>
-              {!!card.priceChange && (
-                <View
-                  pointerEvents="none"
-                  style={{
-                    position: "absolute",
-                    left: Math.round(width * 0.05),
-                    // Above the name plate (its text plus padding and edge).
-                    bottom:
-                      footer +
-                      Math.round(face * 0.03) +
-                      Math.round(Math.max(10, width * 0.17) * 1.2) +
-                      6,
-                    paddingHorizontal: 3.5,
-                    paddingVertical: 0.5,
-                    borderRadius: 4,
-                    backgroundColor: "rgba(6, 12, 9, 0.9)",
-                    borderWidth: 0.5,
-                    borderColor: card.priceChange.color,
-                  }}
-                >
-                  <Text
-                    allowFontScaling={false}
-                    style={{
-                      color: card.priceChange.color,
-                      fontSize: Math.max(7, Math.round(width * 0.11 * 2) / 2),
-                      fontWeight: "900",
-                      includeFontPadding: false,
-                    }}
-                  >
-                    {card.priceChange.text}
-                  </Text>
-                </View>
-              )}
-              {/* Home: the user's chosen figures, in the top corners beside the
-                  head (1 under the position, 2 under the club): the number,
-                  with a tiny label under it. */}
-              {(card.stats ?? []).slice(0, 2).map((stat, index) => (
-                <View
-                  key={stat.key}
-                  pointerEvents="none"
-                  style={{
-                    position: "absolute",
-                    top: Math.round(face * 0.06 + Math.max(7, width * 0.11) + 3),
-                    ...(index === 0 ? { left: Math.round(width * 0.08) } : { right: Math.round(width * 0.08) }),
-                    alignItems: index === 0 ? "flex-start" : "flex-end",
-                    zIndex: 2,
-                  }}
-                >
-                  <Text
-                    allowFontScaling={false}
-                    style={{
-                      color: epic?.ink ?? "#ffffff",
-                      fontSize: Math.max(8, Math.round(width * 0.13 * 2) / 2),
-                      lineHeight: Math.max(9, Math.round(width * 0.15)),
-                      fontWeight: "900",
-                      includeFontPadding: false,
-                      textShadowColor: "rgba(0, 0, 0, 0.75)",
-                      textShadowOffset: { width: 0, height: 1 },
-                      textShadowRadius: 3,
-                    }}
-                  >
-                    {stat.value}
-                  </Text>
-                  {!!stat.label && (
-                    <Text
-                      allowFontScaling={false}
-                      style={{
-                        color: "rgba(255, 255, 255, 0.7)",
-                        fontSize: Math.max(5.5, Math.round(width * 0.065 * 2) / 2),
-                        fontWeight: "800",
-                        letterSpacing: 0.5,
-                        includeFontPadding: false,
-                        textShadowColor: "rgba(0, 0, 0, 0.75)",
-                        textShadowOffset: { width: 0, height: 1 },
-                        textShadowRadius: 2,
-                      }}
-                    >
-                      {stat.label}
-                    </Text>
-                  )}
-                </View>
-              ))}
-              {/* Name plate: a solid strip, so the name reads over any kit. */}
-              <View
-                style={{
-                  position: "absolute",
-                  left: Math.round(width * 0.05),
-                  right: Math.round(width * 0.05),
-                  // Just above the footer.
-                  bottom: footer + Math.round(face * 0.03),
-                  paddingVertical: 1.5,
-                  paddingHorizontal: 2,
-                  borderRadius: 4,
-                  backgroundColor: plate.fill,
-                  borderWidth: 0.5,
-                  borderColor: plate.edge,
-                }}
-              >
-                <Text
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.6}
-                  allowFontScaling={false}
-                  style={{
-                    textAlign: "center",
-                    color: plate.ink,
-                    // Readable on small phones; long names still shrink to fit.
-                    fontSize: Math.max(10, Math.round(width * (card.large ? 0.18 : 0.17) * 2) / 2),
-                    fontWeight: "900",
-                    letterSpacing: 0.2,
-                    includeFontPadding: false,
-                  }}
-                >
-                  {card.name.toUpperCase()}
-                </Text>
-              </View>
-              {!!card.club && (
-                <Text
-                  numberOfLines={1}
-                  allowFontScaling={false}
-                  style={{
-                    position: "absolute",
-                    top: Math.round(face * 0.06),
-                    right: Math.round(width * 0.08),
-                    textAlign: "right",
-                    color: epic?.ink ?? "rgba(255, 255, 255, 0.78)",
-                    fontSize: Math.max(7, Math.round(width * 0.1 * 2) / 2),
-                    fontWeight: "800",
-                    letterSpacing: 0.8,
-                    includeFontPadding: false,
-                    textShadowColor: "rgba(0, 0, 0, 0.5)",
-                    textShadowOffset: { width: 0, height: 1 },
-                    textShadowRadius: 2,
-                  }}
-                >
-                  {card.club}
-                </Text>
-              )}
-            </>
-          )}
-          {!!card?.footer && (
-            <View
-              style={{
-                position: "absolute",
-                top: face,
-                left: Math.round(width * 0.06),
-                right: Math.round(width * 0.06),
-                height: footerLayout.box,
-                justifyContent: "center",
-                overflow: "hidden",
-                // Above the elite and hero frames, which cross the chip.
-                zIndex: 3,
-              }}
-            >
-              {card.footer}
-            </View>
-          )}
-          {(card?.elite || card?.hero) && (
-            <Image
-              source={card.hero ? HERO_FRAME : ELITE_FRAME}
-              cachePolicy="memory-disk"
-              contentFit="fill"
-              accessible={false}
-              style={{ position: "absolute", top: 0, left: 0, width, height: art }}
-            />
-          )}
-          {swapHint && (
-            <View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                top: Math.round(face * 0.4 - swapSize / 2),
-                left: (width - swapSize) / 2,
-                zIndex: 20,
-              }}
-            >
-              <SwapBadge size={swapSize} />
-            </View>
-          )}
-        </View>
-      </View>
-    );
-  }
-
-  if (CARD_STYLE === "circle") {
-    // Same framing as the player sheet header: head and shoulders in a round
-    // frame, sized to the screen (see circleDiameter).
-    const diameter = circleDiameter(metrics, compact, benched);
-    const top = boxHeight - diameter - 1;
-    const backdrop = clubBackdrop(team);
-    // Club tag: scales with the avatar, sized for the widest code ("WWW").
-    const clubTagFont = Math.round(clamp(diameter * 0.15, 7.5, 10) * 2) / 2;
-    const clubTagWidth = Math.round(clubTagFont * 2.8 + 8);
-    return (
-      <View style={{ width: boxWidth, height: boxHeight }}>
+        )}
+        {/* The avatar, clipped to the card's inner area. */}
         <View
           style={{
             position: "absolute",
-            top,
-            left: (boxWidth - diameter) / 2,
-            width: diameter,
-            height: diameter,
-            // Without the circle, the clip is square: the shoulders end in a
-            // straight line, like a bust.
-            borderRadius: AVATAR_BACKDROP ? diameter / 2 : 0,
+            top: Math.round(face * 0.05),
+            left: Math.round(width * 0.03),
+            right: Math.round(width * 0.03),
+            // The avatar runs down to the footer.
+            height: Math.round(face * 0.93),
             overflow: "hidden",
             alignItems: "center",
-            backgroundColor: AVATAR_BACKDROP ? backdrop.fill : "transparent",
-            borderWidth: AVATAR_BACKDROP ? 1.5 : 0,
-            borderColor: ring ?? backdrop.ring,
           }}
         >
-          {CLUB_CODE === "watermark" && !!team && (
-            <Text
-              numberOfLines={1}
-              allowFontScaling={false}
-              accessible={false}
-              style={{
-                position: "absolute",
-                // Above the head (the avatar sits lower in watermark mode), so
-                // all three letters show, including the middle one.
-                top: Math.round(diameter * 0.07),
-                left: 0,
-                right: 0,
-                textAlign: "center",
-                color: "rgba(255, 255, 255, 0.34)",
-                fontSize: Math.round(diameter * 0.27),
-                lineHeight: Math.round(diameter * 0.3),
-                fontWeight: "900",
-                letterSpacing: Math.max(1, diameter * 0.03),
-                includeFontPadding: false,
-              }}
-            >
-              {team}
-            </Text>
-          )}
           <Image
             source={avatarSource}
             contentFit="contain"
@@ -867,59 +437,256 @@ function PlayerAvatar({
             onLoad={reportSettled}
             onError={reportSettled}
             style={{
-              ...avatarArtSize(team, diameter * 1.16, goalkeeper),
-              // Lower in watermark mode, leaving the top of the circle for
-              // the club code.
-              marginTop: Math.round(diameter * (CLUB_CODE === "watermark" ? 0.24 : 0.06)),
+              // Larger than the card, so head and shoulders fill it;
+              // centred, with the small rating tucked in the corner.
+              ...avatarArtSize(team, width * 1.52, goalkeeper),
+              // Raised (the image has empty space above the head) so more
+              // of the shirt shows before the fade.
+              marginTop: -Math.round(face * 0.07),
+              flexShrink: 0,
             }}
           />
+          {(card?.elite || card?.hero) && (
+            <Shimmer
+              width={width}
+              height={Math.round(face * 0.93)}
+              tint={card.hero ? "232, 214, 255" : "255, 246, 210"}
+            />
+          )}
         </View>
-        {/* Club code on the frame's lower edge: small and muted, so it is
-            there when needed without competing with the name below. */}
-        {CLUB_CODE === "tag" && !!team && (
-          <View
-            pointerEvents="none"
-            accessible
-            accessibilityLabel={`Club ${team}`}
-            style={{
-              position: "absolute",
-              bottom: 0,
-              // Fixed width: content-sized tags drop the last letter on Android.
-              left: (boxWidth - clubTagWidth) / 2,
-              width: clubTagWidth,
-              alignItems: "center",
-              borderRadius: 5,
-              backgroundColor: "rgba(4, 12, 8, 0.92)",
-              borderWidth: 1,
-              borderColor: "rgba(255, 255, 255, 0.12)",
-              zIndex: 5,
-            }}
-          >
-            <Text
-              numberOfLines={1}
-              allowFontScaling={false}
+        <Image
+          source={SHIELD_FADE}
+          cachePolicy="memory-disk"
+          contentFit="fill"
+          accessible={false}
+          style={{ position: "absolute", top: 0, left: 0, width, height: art }}
+        />
+        {!!card && (
+          <>
+            <View
+              pointerEvents="none"
               style={{
-                width: "100%",
-                color: "#b9cbc1",
-                fontSize: clubTagFont,
-                lineHeight: clubTagFont + 2,
-                fontWeight: "800",
-                letterSpacing: 0.3,
-                textAlign: "center",
-                includeFontPadding: false,
+                position: "absolute",
+                top: Math.round(face * 0.05),
+                left: Math.round(width * 0.08),
+                zIndex: 2,
               }}
             >
-              {team}
-            </Text>
+              {!!card.number && (
+              <Text
+                allowFontScaling={false}
+                accessibilityLabel={card.hot ? `Form ${card.number}, in good form` : undefined}
+                style={{
+                  // Good form glows gold; other numbers are a little faded so
+                  // the glowing ones stand out.
+                  color: card.highlight
+                    ? ink
+                    : card.hot
+                      ? "#fff3b0"
+                      : "rgba(255, 255, 255, 0.68)",
+                  fontSize: Math.max(8, Math.round(width * 0.15)),
+                  lineHeight: Math.max(9, Math.round(width * 0.17)),
+                  fontWeight: "900",
+                  includeFontPadding: false,
+                  // Good form: a warm gold glow around the number.
+                  textShadowColor: card.hot ? "rgba(255, 196, 0, 0.95)" : "rgba(0, 0, 0, 0.5)",
+                  textShadowOffset: card.hot ? { width: 0, height: 0 } : { width: 0, height: 1 },
+                  textShadowRadius: card.hot ? 7 : 2,
+                }}
+              >
+                {card.number}
+              </Text>
+              )}
+              <Text
+                allowFontScaling={false}
+                style={{
+                  color: ink,
+                  fontSize: Math.max(6, Math.round(width * 0.09)),
+                  lineHeight: Math.max(7, Math.round(width * 0.11)),
+                  fontWeight: "800",
+                  letterSpacing: 0.4,
+                  includeFontPadding: false,
+                  textShadowColor: "rgba(0, 0, 0, 0.5)",
+                  textShadowOffset: { width: 0, height: 1 },
+                  textShadowRadius: 2,
+                }}
+              >
+                {card.position}
+              </Text>
+            </View>
+            {!!card.priceChange && (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  left: Math.round(width * 0.05),
+                  // Above the name plate (its text plus padding and edge).
+                  bottom:
+                    footer +
+                    Math.round(face * 0.03) +
+                    Math.round(Math.max(10, width * 0.17) * 1.2) +
+                    6,
+                  paddingHorizontal: 3.5,
+                  paddingVertical: 0.5,
+                  borderRadius: 4,
+                  backgroundColor: "rgba(6, 12, 9, 0.9)",
+                  borderWidth: 0.5,
+                  borderColor: card.priceChange.color,
+                }}
+              >
+                <Text
+                  allowFontScaling={false}
+                  style={{
+                    color: card.priceChange.color,
+                    fontSize: Math.max(7, Math.round(width * 0.11 * 2) / 2),
+                    fontWeight: "900",
+                    includeFontPadding: false,
+                  }}
+                >
+                  {card.priceChange.text}
+                </Text>
+              </View>
+            )}
+            {/* Home: the user's chosen figures, in the top corners beside the
+                head (1 under the position, 2 under the club): the number,
+                with a tiny label under it. */}
+            {(card.stats ?? []).slice(0, 2).map((stat, index) => (
+              <View
+                key={stat.key}
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  top: Math.round(face * 0.06 + Math.max(7, width * 0.11) + 3),
+                  ...(index === 0 ? { left: Math.round(width * 0.08) } : { right: Math.round(width * 0.08) }),
+                  alignItems: index === 0 ? "flex-start" : "flex-end",
+                  zIndex: 2,
+                }}
+              >
+                <Text
+                  allowFontScaling={false}
+                  style={{
+                    color: epic?.ink ?? "#ffffff",
+                    fontSize: Math.max(8, Math.round(width * 0.13 * 2) / 2),
+                    lineHeight: Math.max(9, Math.round(width * 0.15)),
+                    fontWeight: "900",
+                    includeFontPadding: false,
+                    textShadowColor: "rgba(0, 0, 0, 0.75)",
+                    textShadowOffset: { width: 0, height: 1 },
+                    textShadowRadius: 3,
+                  }}
+                >
+                  {stat.value}
+                </Text>
+                {!!stat.label && (
+                  <Text
+                    allowFontScaling={false}
+                    style={{
+                      color: "rgba(255, 255, 255, 0.7)",
+                      fontSize: Math.max(5.5, Math.round(width * 0.065 * 2) / 2),
+                      fontWeight: "800",
+                      letterSpacing: 0.5,
+                      includeFontPadding: false,
+                      textShadowColor: "rgba(0, 0, 0, 0.75)",
+                      textShadowOffset: { width: 0, height: 1 },
+                      textShadowRadius: 2,
+                    }}
+                  >
+                    {stat.label}
+                  </Text>
+                )}
+              </View>
+            ))}
+            {/* Name plate: a solid strip, so the name reads over any kit. */}
+            <View
+              style={{
+                position: "absolute",
+                left: Math.round(width * 0.05),
+                right: Math.round(width * 0.05),
+                // Just above the footer.
+                bottom: footer + Math.round(face * 0.03),
+                paddingVertical: 1.5,
+                paddingHorizontal: 2,
+                borderRadius: 4,
+                backgroundColor: plate.fill,
+                borderWidth: 0.5,
+                borderColor: plate.edge,
+              }}
+            >
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+                allowFontScaling={false}
+                style={{
+                  textAlign: "center",
+                  color: plate.ink,
+                  // Readable on small phones; long names still shrink to fit.
+                  fontSize: Math.max(10, Math.round(width * (card.large ? 0.18 : 0.17) * 2) / 2),
+                  fontWeight: "900",
+                  letterSpacing: 0.2,
+                  includeFontPadding: false,
+                }}
+              >
+                {card.name.toUpperCase()}
+              </Text>
+            </View>
+            {!!card.club && (
+              <Text
+                numberOfLines={1}
+                allowFontScaling={false}
+                style={{
+                  position: "absolute",
+                  top: Math.round(face * 0.06),
+                  right: Math.round(width * 0.08),
+                  textAlign: "right",
+                  color: epic?.ink ?? "rgba(255, 255, 255, 0.78)",
+                  fontSize: Math.max(7, Math.round(width * 0.1 * 2) / 2),
+                  fontWeight: "800",
+                  letterSpacing: 0.8,
+                  includeFontPadding: false,
+                  textShadowColor: "rgba(0, 0, 0, 0.5)",
+                  textShadowOffset: { width: 0, height: 1 },
+                  textShadowRadius: 2,
+                }}
+              >
+                {card.club}
+              </Text>
+            )}
+          </>
+        )}
+        {!!card?.footer && (
+          <View
+            style={{
+              position: "absolute",
+              top: face,
+              left: Math.round(width * 0.06),
+              right: Math.round(width * 0.06),
+              height: footerLayout.box,
+              justifyContent: "center",
+              overflow: "hidden",
+              // Above the elite and hero frames, which cross the chip.
+              zIndex: 3,
+            }}
+          >
+            {card.footer}
           </View>
+        )}
+        {(card?.elite || card?.hero) && (
+          <Image
+            source={card.hero ? HERO_FRAME : ELITE_FRAME}
+            cachePolicy="memory-disk"
+            contentFit="fill"
+            accessible={false}
+            style={{ position: "absolute", top: 0, left: 0, width, height: art }}
+          />
         )}
         {swapHint && (
           <View
             pointerEvents="none"
             style={{
               position: "absolute",
-              top: Math.round(top + diameter / 2 - swapSize / 2),
-              left: (boxWidth - swapSize) / 2,
+              top: Math.round(face * 0.4 - swapSize / 2),
+              left: (width - swapSize) / 2,
               zIndex: 20,
             }}
           >
@@ -927,163 +694,6 @@ function PlayerAvatar({
           </View>
         )}
       </View>
-    );
-  }
-
-  return (
-    <View style={{ width: boxWidth, height: boxHeight }}>
-      {useJersey ? (
-        <View
-          style={{
-            position: "absolute",
-            top: jerseyTop,
-            left: (boxWidth - jerseySize) / 2,
-          }}
-        >
-          <Jersey
-            team={team}
-            goalkeeper={goalkeeper}
-            size={jerseySize}
-            showCode
-            onReady={reportSettled}
-          />
-        </View>
-      ) : (
-      <Image
-        source={avatarSource}
-        contentFit="contain"
-        accessible={false}
-        // Keep decoded avatars in memory so revisiting a pitch is instant, and
-        // soften the first appearance instead of letting it pop in.
-        cachePolicy="memory-disk"
-        priority="high"
-        transition={120}
-        onLoad={reportSettled}
-        onError={reportSettled}
-        style={{
-          position: "absolute",
-          top: imageTop,
-          left: (boxWidth - imageSize) / 2,
-          width: imageSize,
-          height: imageSize,
-        }}
-      />
-      )}
-      {hasAvatar && !useJersey && (
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            bottom: Math.round(2 * scale),
-            // Fixed width: content-sized tags drop the last letter on Android.
-            left: (boxWidth - badgeWidth) / 2,
-            width: badgeWidth,
-            alignItems: "center",
-            backgroundColor: "rgba(6, 14, 10, 0.9)",
-            paddingVertical: 1,
-            borderRadius: 4,
-            borderWidth: 0.5,
-            borderColor: "rgba(255, 255, 255, 0.25)",
-            borderBottomWidth: 2,
-            borderBottomColor: badgeAccent(team),
-            shadowColor: "#000",
-            shadowOpacity: 0.45,
-            shadowRadius: 2,
-            shadowOffset: { width: 0, height: 1 },
-            elevation: 3,
-          }}
-        >
-          <Text
-            numberOfLines={1}
-            allowFontScaling={false}
-            style={{
-              width: "100%",
-              color: "#ffffff",
-              fontSize: badgeFont,
-              lineHeight: badgeFont + 2,
-              fontWeight: "900",
-              textAlign: "center",
-              includeFontPadding: false,
-              textAlignVertical: "center",
-            }}
-          >
-            {team}
-          </Text>
-        </View>
-      )}
-      {swapHint && (
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            top: Math.round(swapCentreY - swapSize / 2),
-            left: (boxWidth - swapSize) / 2,
-            zIndex: 20,
-          }}
-        >
-          <SwapBadge size={swapSize} />
-        </View>
-      )}
-    </View>
-  );
-}
-
-// Form at a glance: a small pill with a trend arrow and the form score.
-// Mint and rising for hot form, coral and falling for poor form.
-function FormPill({ mood, form }: { mood: "good" | "bad"; form?: string }) {
-  const good = mood === "good";
-  const value = Number(form);
-  const label = form && Number.isFinite(value) ? value.toFixed(1) : "";
-  const ink = good ? "#04210f" : "#ffffff";
-  return (
-    <View
-      accessible
-      accessibilityLabel={`${good ? "In good form" : "In poor form"}${label ? `, ${label}` : ""}`}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        // Fixed width: content-sized tags drop the last letter on Android.
-        width: label ? 29 : 15,
-        height: 14,
-        borderRadius: 7,
-        paddingHorizontal: 2,
-        gap: 1,
-        backgroundColor: good ? "#00d982" : "#ff5a72",
-        borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.5)",
-        shadowColor: good ? "#00d982" : "#ff5a72",
-        shadowOpacity: 0.6,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 0 },
-        elevation: 3,
-      }}
-    >
-      <AppSymbol
-        name={
-          good
-            ? { ios: "arrow.up.right", android: "trending_up", web: "trending_up" }
-            : { ios: "arrow.down.right", android: "trending_down", web: "trending_down" }
-        }
-        color={ink}
-        size={9}
-      />
-      {!!label && (
-        <Text
-          numberOfLines={1}
-          allowFontScaling={false}
-          style={{
-            color: ink,
-            fontSize: 8.5,
-            lineHeight: 10,
-            fontWeight: "900",
-            includeFontPadding: false,
-            textAlignVertical: "center",
-          }}
-        >
-          {label}
-        </Text>
-      )}
     </View>
   );
 }
@@ -1480,7 +1090,6 @@ const DIFFICULTY_TONE: Record<PlayerFixture["difficulty"], { fill: string; ink: 
 // pill for the fixture, points or price. A fixture pill is filled with its
 // difficulty colour; dots show the difficulty of the fixtures after it.
 function CapsuleInfo({
-  plain = false,
   inCard: inCardHeight,
   hideName = false,
   bars = false,
@@ -1497,8 +1106,6 @@ function CapsuleInfo({
   nameFont,
   infoFont,
 }: {
-  // "circle" style: bold name and a quiet line on one soft panel, no pills.
-  plain?: boolean;
   // Shield style: drawn inside the card's footer (this tall), with no
   // panel of its own.
   inCard?: number;
@@ -1579,7 +1186,6 @@ function CapsuleInfo({
     tone = { fill: dark.fill, ink: "#8c9b93" };
   }
 
-  if (plain) {
     // This gameweek's difficulty must read at a glance: a fixture is written
     // on a chip in its difficulty colour, followed by dots for the next two.
     // Beside a price or points there is no fixture text, so the first dot is
@@ -1769,103 +1375,6 @@ function CapsuleInfo({
         {!inCard && barsView}
       </View>
     );
-  }
-
-  return (
-    <View
-      style={{
-        width,
-        maxWidth: "100%",
-        alignItems: "center",
-        marginTop: benched ? 2 : 0,
-      }}
-    >
-      <View
-        style={{
-          alignSelf: "stretch",
-          borderRadius: 999,
-          paddingHorizontal: 6,
-          paddingVertical: 2.5,
-          backgroundColor: highlight ? "rgba(40, 34, 4, 0.96)" : "rgba(4, 16, 10, 0.9)",
-          borderWidth: 1,
-          borderColor: highlight
-            ? highlightColor
-            : r.pendingIn
-              ? GREEN
-              : "rgba(255, 255, 255, 0.2)",
-        }}
-      >
-        <Text
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.75}
-          maxFontSizeMultiplier={MAX_FONT_MULTIPLIER}
-          style={{
-            color: highlight ? highlightColor : "#ffffff",
-            fontSize: nameFont,
-            fontWeight: "800",
-            textAlign: "center",
-          }}
-        >
-          {r.name}
-        </Text>
-      </View>
-
-      {!!text && (
-        <View
-          accessible
-          accessibilityLabel={`${text}${extra ? ` ${extra.text}` : ""}`}
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 3,
-            maxWidth: "100%",
-            marginTop: 2,
-            borderRadius: 999,
-            paddingHorizontal: 6,
-            paddingVertical: 1.5,
-            backgroundColor: tone.fill,
-            borderWidth: 1,
-            borderColor: "rgba(0, 0, 0, 0.35)",
-          }}
-        >
-          <Text
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.7}
-            maxFontSizeMultiplier={MAX_FONT_MULTIPLIER}
-            style={{ flexShrink: 1, color: tone.ink, fontSize: infoFont, fontWeight: "900" }}
-          >
-            {text}
-          </Text>
-          {!!extra && (
-            <Text
-              numberOfLines={1}
-              allowFontScaling={false}
-              style={{ color: extra.color, fontSize: 8, fontWeight: "900" }}
-            >
-              {extra.text}
-            </Text>
-          )}
-          {dots.slice(0, 3).map((fixture, index) => (
-            <View
-              key={`${fixture.event}-${fixture.opponent}-${index}`}
-              style={{
-                width: 5,
-                height: 5,
-                borderRadius: 3,
-                backgroundColor: DIFFICULTY_TONE[fixture.difficulty].fill,
-                // A thin edge keeps a dot visible on a pill of its own colour.
-                borderWidth: 0.5,
-                borderColor: "rgba(0, 0, 0, 0.55)",
-              }}
-            />
-          ))}
-        </View>
-      )}
-    </View>
-  );
 }
 
 function PlayerCard({
@@ -1946,7 +1455,7 @@ function PlayerCard({
       style={({ pressed }) => ({
         alignItems: "center",
         alignSelf: "center",
-        width: isBenched || FRAMED ? benchWidth : cardWidth,
+        width: isBenched ? benchWidth : cardWidth,
         borderRadius: 14,
         backgroundColor: "transparent",
         transform: [{ scale: pressed ? 0.90 : selected ? 1.05 : 1 }],
@@ -1957,22 +1466,6 @@ function PlayerCard({
     >
       {({ pressed }) => {
         const isHighlight = selected || pressed;
-
-        const benchedCardBg = isBenchedGK
-          ? isHighlight
-            ? "rgba(18, 44, 68, 0.95)"
-            : "rgba(12, 28, 44, 0.88)"
-          : isHighlight
-            ? "rgba(38, 34, 10, 0.95)"
-            : "rgba(8, 28, 18, 0.88)";
-
-        const benchedCardBorder = isBenchedGK
-          ? isHighlight
-            ? "#38bdf8"
-            : "rgba(56, 189, 248, 0.3)"
-          : isHighlight
-            ? "#ffd400"
-            : "rgba(255, 212, 0, 0.22)";
 
         const cardContent = (
           <>
@@ -1991,7 +1484,6 @@ function PlayerCard({
                   goalkeeper={r.type === 1}
                   compact={compact}
                   swapHint={swapHint && selected}
-                  ring={isHighlight ? (isBenchedGK ? "#38bdf8" : "#ffd400") : undefined}
                   card={{
                     name: r.name,
                     // FPL has no overall rating: the corner shows form, on the
@@ -2019,7 +1511,6 @@ function PlayerCard({
                         : undefined,
                     footer: (
                       <CapsuleInfo
-                        plain
                         inCard={footerHeight}
                         hideName
                         // Same footer on every screen: the line (fixture, price
@@ -2043,69 +1534,13 @@ function PlayerCard({
                 />
               </View>
 
-              {showPrice && !!posLabel && CARD_STYLE !== "shield" && (
-                <View
-                  style={{
-                    position: "absolute",
-                    top: 2,
-                    right: -3,
-                    backgroundColor: "rgba(10, 32, 21, 0.95)",
-                    borderColor: GREEN,
-                    borderWidth: 1,
-                    borderRadius: 4,
-                    paddingHorizontal: 3.5,
-                    paddingVertical: 1,
-                    zIndex: 10,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: "#ffffff",
-                      fontSize: 7.5,
-                      fontWeight: "900",
-                      letterSpacing: 0.2,
-                      includeFontPadding: false,
-                    }}
-                  >
-                    {posLabel}
-                  </Text>
-                </View>
-              )}
-
-              {r.pendingIn && (
-                <View
-                  style={{
-                    position: "absolute",
-                    top: isBenched ? 9 : 2,
-                    left: 0,
-                    borderRadius: 5,
-                    paddingHorizontal: 4,
-                    paddingVertical: 1,
-                    backgroundColor: GREEN,
-                    zIndex: 10,
-                  }}
-                >
-                  <Text
-                    allowFontScaling={false}
-                    style={{
-                      color: "#071b12",
-                      fontSize: 8,
-                      fontWeight: "900",
-                      includeFontPadding: false,
-                    }}
-                  >
-                    IN
-                  </Text>
-                </View>
-              )}
-
               {!!r.autoSub && (
                 <View
                   style={{
                     position: "absolute",
-                    // Shield cards: under the club code in the top-right corner.
-                    top: (r.pos > 11 ? 11 : 4) + (CARD_STYLE === "shield" ? 14 : 0),
-                    ...(CARD_STYLE === "shield" ? { right: 2 } : { left: 2 }),
+                    // Under the club code in the top-right corner.
+                    top: (r.pos > 11 ? 11 : 4) + 14,
+                    right: 2,
                     zIndex: 11,
                   }}
                 >
@@ -2117,7 +1552,7 @@ function PlayerCard({
                 <View
                   style={{
                     position: "absolute",
-                    top: (r.pos > 11 ? 11 : 4) + (CARD_STYLE === "shield" ? 32 : 0),
+                    top: (r.pos > 11 ? 11 : 4) + 32,
                     right: 0,
                     zIndex: 11,
                   }}
@@ -2130,9 +1565,9 @@ function PlayerCard({
                 <View
                   style={{
                     position: "absolute",
-                    // Shield cards: under the club code in the top-right corner.
-                    top: (r.pos > 11 ? 11 : 4) + (CARD_STYLE === "shield" ? 14 : 0),
-                    ...(CARD_STYLE === "shield" ? { right: 2 } : { left: 2 }),
+                    // Under the club code in the top-right corner.
+                    top: (r.pos > 11 ? 11 : 4) + 14,
+                    right: 2,
                     zIndex: 11,
                   }}
                 >
@@ -2140,18 +1575,6 @@ function PlayerCard({
                 </View>
               )}
 
-              {r.formMood && !r.pendingIn && !r.autoSub && !flag && CARD_STYLE !== "shield" && (
-                <View
-                  style={{
-                    position: "absolute",
-                    top: r.pos > 11 ? 11 : 4,
-                    left: 2,
-                    zIndex: 10,
-                  }}
-                >
-                  <FormPill mood={r.formMood} form={r.form} />
-                </View>
-              )}
               {(r.cap || r.vice) && (
                 <View
                   style={{
@@ -2172,280 +1595,12 @@ function PlayerCard({
                 </View>
               )}
             </View>
-            {!!r.name && CARD_STYLE === "classic" && (
-              <View style={{ width: cardWidth, maxWidth: "100%", marginTop: isBenched ? 2 : 0 }}>
-                <View
-                  style={{
-                    backgroundColor: isHighlight
-                      ? isBenchedGK
-                        ? "#0f384a"
-                        : "#3a3000"
-                      : isBenchedGK
-                        ? "#0c2030"
-                        : "#102217",
-                    borderColor: isHighlight
-                      ? isBenchedGK
-                        ? "#38bdf8"
-                        : "#ffd400"
-                      : r.pendingIn
-                        ? GREEN
-                        : "transparent",
-                    borderWidth: isHighlight || r.pendingIn ? 1 : 0,
-                    borderTopLeftRadius: 7,
-                    borderTopRightRadius: 7,
-                    paddingHorizontal: 2,
-                    paddingVertical: 3,
-                    width: "100%",
-                  }}
-                >
-                  <Text
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.75}
-                    maxFontSizeMultiplier={MAX_FONT_MULTIPLIER}
-                    style={{
-                      color: isHighlight
-                        ? isBenchedGK
-                          ? "#38bdf8"
-                          : "#ffd400"
-                        : "#fff",
-                      fontSize: nameFont,
-                      textAlign: "center",
-                      flexShrink: 1,
-                      fontWeight: "700",
-                    }}
-                  >
-                    {r.name}
-                  </Text>
-                </View>
-                {showPrice ? (
-                  <View
-                    accessibilityLabel={`Price £${((r.price ?? r.buy) / 10).toFixed(1)}m${
-                      r.priceChange
-                        ? `, ${r.priceChange > 0 ? "up" : "down"} £${(
-                            Math.abs(r.priceChange) / 10
-                          ).toFixed(1)}m`
-                        : ""
-                    }`}
-                    style={{
-                      width: "100%",
-                      overflow: "hidden",
-                      borderBottomLeftRadius: 5,
-                      borderBottomRightRadius: 5,
-                    }}
-                  >
-                    <View
-                      style={{
-                        minHeight: 20,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 2,
-                        paddingHorizontal: 1,
-                        paddingVertical: 2.5,
-                        backgroundColor: "#252329",
-                      }}
-                    >
-                      <Text
-                        numberOfLines={1}
-                        adjustsFontSizeToFit
-                        minimumFontScale={0.6}
-                        maxFontSizeMultiplier={MAX_FONT_MULTIPLIER}
-                        style={{ color: "#fff", fontSize: infoFont, fontWeight: "900" }}
-                      >
-                        £{((r.price ?? r.buy) / 10).toFixed(1)}m
-                      </Text>
-                      {!!r.priceChange && (
-                        <Text
-                          numberOfLines={1}
-                          adjustsFontSizeToFit
-                          minimumFontScale={0.55}
-                          style={{
-                            color: r.priceChange > 0 ? "#00e676" : "#ff526f",
-                            fontSize: 8,
-                            fontWeight: "900",
-                          }}
-                        >
-                          {r.priceChange > 0 ? "+" : "-"}£
-                          {(Math.abs(r.priceChange) / 10).toFixed(1)}m
-                        </Text>
-                      )}
-                    </View>
-                    <View style={{ flexDirection: "row", height: 4 }}>
-                      {displayedFixtures.map((fixture, index) => (
-                        <View
-                          key={`${r.id}-${fixture.opponent}-${fixture.venue}-${index}-price-difficulty`}
-                          style={{
-                            flex: 1,
-                            marginRight:
-                              index < displayedFixtures.length - 1 ? 2 : 0,
-                            backgroundColor:
-                              fixture.difficulty === "easy"
-                                ? "#00e676"
-                                : fixture.difficulty === "average"
-                                  ? "#f5f5f5"
-                                  : "#f02d55",
-                          }}
-                        />
-                      ))}
-                    </View>
-                  </View>
-                ) : (displayedFixtures.length > 0 || r.displayPoints !== undefined) ? (() => {
-                  const ptsVal = r.displayPoints ?? 0;
-                  const ptsColor = ptsVal < 0 ? "#ff526f" : "#ffd400";
-
-                  // Points view (minutes data present): show opponent for unstarted fixtures,
-                  // dash for benched/unused, actual points only when player has played.
-                  const hasMinutes = r.minutes !== undefined;
-                  let cellText: string;
-                  let cellColor: string;
-                  if (hasMinutes) {
-                    if ((r.minutes ?? 0) > 0) {
-                      cellText = `${ptsVal} pts`;
-                      cellColor = ptsColor;
-                    } else if (currentFx && !isStarted) {
-                      cellText = `${currentFx.opponent} (${currentFx.venue})`;
-                      cellColor = "#a3a3a3";
-                    } else {
-                      cellText = "—";
-                      cellColor = "#777";
-                    }
-                  } else {
-                    const showPointsText = Boolean(isStarted || !currentFx);
-                    cellText = showPointsText
-                      ? `${ptsVal} pts`
-                      : `${currentFx!.opponent} (${currentFx!.venue})`;
-                    cellColor = showPointsText ? ptsColor : "#a3a3a3";
-                  }
-
-                  return (
-                    <View
-                      accessibilityLabel={cellText}
-                      style={{
-                        width: "100%",
-                        overflow: "hidden",
-                        borderBottomLeftRadius: 5,
-                        borderBottomRightRadius: 5,
-                      }}
-                    >
-                      <View style={{ flexDirection: "row" }}>
-                        <View
-                          style={{
-                            flex: 1,
-                            alignItems: "center",
-                            justifyContent: "center",
-                            backgroundColor: "#252329",
-                            paddingVertical: 2,
-                          }}
-                        >
-                          <Text
-                            numberOfLines={1}
-                            adjustsFontSizeToFit
-                            minimumFontScale={0.7}
-                            maxFontSizeMultiplier={MAX_FONT_MULTIPLIER}
-                            style={{
-                              color: cellColor,
-                              fontSize: nameFont,
-                              textAlign: "center",
-                              fontWeight: "900",
-                            }}
-                          >
-                            {cellText}
-                          </Text>
-                        </View>
-                      </View>
-                      {displayedFixtures.length > 0 && (
-                        <View style={{ flexDirection: "row", height: 4 }}>
-                          {displayedFixtures.map((fixture, index) => (
-                            <View
-                              key={`${r.id}-${fixture.opponent}-${fixture.venue}-${index}-difficulty`}
-                              style={{
-                                flex: 1,
-                                marginRight:
-                                  index < displayedFixtures.length - 1 ? 2 : 0,
-                                backgroundColor:
-                                  fixture.difficulty === "easy"
-                                    ? "#00e676"
-                                    : fixture.difficulty === "average"
-                                      ? "#f5f5f5"
-                                      : "#f02d55",
-                              }}
-                            />
-                          ))}
-                        </View>
-                      )}
-                    </View>
-                  );
-                })() : fixtures.length > 0 && selectedGw !== undefined ? (
-                  <View
-                    style={{
-                      width: "100%",
-                      alignItems: "center",
-                      paddingVertical: 2,
-                      borderBottomLeftRadius: 5,
-                      borderBottomRightRadius: 5,
-                      backgroundColor: "#252329",
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: "#fff",
-                        fontSize: 8,
-                        fontWeight: "900",
-                      }}
-                    >
-                      BLANK GW
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-            )}
-            {!!r.name && CARD_STYLE !== "classic" && CARD_STYLE !== "shield" && (
-              <CapsuleInfo
-                plain={CARD_STYLE === "circle"}
-                r={r}
-                width={cardWidth}
-                benched={isBenched}
-                highlight={isHighlight}
-                highlightColor={isBenchedGK ? "#38bdf8" : "#ffd400"}
-                showPrice={showPrice}
-                fixtures={displayedFixtures}
-                hasSeasonFixtures={fixtures.length > 0 && selectedGw !== undefined}
-                started={isStarted}
-                nameFont={nameFont}
-                infoFont={infoFont}
-              />
-            )}
           </>
         );
 
         return (
           <>
-            {(isBenched && CARD_STYLE !== "shield") || FRAMED ? (
-              <View
-                style={{
-                  alignItems: "center",
-                  width: benchWidth,
-                  maxWidth: "100%",
-                  paddingTop: 5,
-                  paddingBottom: 5,
-                  paddingHorizontal: 3,
-                  borderRadius: 14,
-                  backgroundColor: benchedCardBg,
-                  borderWidth: 1,
-                  borderColor: benchedCardBorder,
-                  shadowColor: isBenchedGK ? "#ffd400" : "#00d982",
-                  shadowOpacity: isHighlight ? 0.5 : 0.12,
-                  shadowRadius: isHighlight ? 10 : 4,
-                  shadowOffset: { width: 0, height: 2 },
-                  elevation: isHighlight ? 6 : 2,
-                }}
-              >
-                {cardContent}
-              </View>
-            ) : (
-              cardContent
-            )}
+            {cardContent}
 
             {/* Action menu: C, V, details (lineup) or transfer, details (transfers) */}
             {selected && (
@@ -2627,7 +1782,7 @@ function PitchRow({
   benched?: boolean;
 }) {
   const { cardWidth, benchWidth, pitchWidth } = useContext(PitchMetricsContext);
-  const slotWidth = benched || FRAMED ? benchWidth : cardWidth;
+  const slotWidth = benched ? benchWidth : cardWidth;
   // Bench sits in an inset tray (4pt margin + 6pt padding + border each side).
   const rowWidth = pitchWidth - ROW_PADDING * 2 - (benched ? 22 : 0);
   // The bench is a fixed set of four, so it may spread wider than pitch lines.
@@ -2747,12 +1902,7 @@ export function Pitch({
       : (pitchHeight - 19 - startersPadding - 16 - 17 - ROW_GAP * 4 - 6) / 5;
   const metrics = computeMetrics(
     measuredWidth ?? windowWidth - 16,
-    CARD_STYLE === "shield"
-      ? shieldRow
-      : // Four rows, each with 2pt margins above and below.
-        startersHeight == null
-        ? null
-        : (startersHeight - startersPadding) / 4 - 4,
+    shieldRow,
     perRow,
   );
 
@@ -2764,7 +1914,7 @@ export function Pitch({
   const expectedCount = useRef(picks.length);
   const measured =
     measuredWidth != null &&
-    (CARD_STYLE === "shield" ? pitchHeight != null : startersHeight != null);
+    pitchHeight != null;
   const measuredRef = useRef(measured);
   // Kept in step after each render (effects run in order, before the one
   // below that reveals the squad once measured).

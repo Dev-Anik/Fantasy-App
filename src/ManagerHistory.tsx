@@ -5,7 +5,7 @@ import type { Gameweek, MemberSquad, PlayerFixture, Row } from "./fpl";
 import { AppSymbol } from "./AppSymbol";
 import { GameweekPicker } from "./GameweekPicker";
 import { computeLive } from "./live";
-import { CARD_STYLE, Pitch } from "./Pitch";
+import { Pitch } from "./Pitch";
 import { PointsBadge } from "./PointsBadge";
 import { PlayerMatchSheet } from "./PlayerMatchSheet";
 import type { PlayerMatchTarget } from "./PlayerMatchSheet";
@@ -268,7 +268,6 @@ export function ManagerHistory({
             picks={currentData ? picks : blankPicks}
             selectedGw={shownEvent}
             selectedPos={null}
-            compactAvatar={CARD_STYLE !== "shield"}
             layoutId="points"
             onPress={
               currentData

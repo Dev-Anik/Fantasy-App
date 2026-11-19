@@ -2274,7 +2274,7 @@ export default function Index() {
           <View>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
               <Image
-                source={require("../../assets/images/icon.png")}
+                source={require("../../assets/images/icon-small.png")}
                 accessible={false}
                 style={{ width: 52, height: 52, borderRadius: 14 }}
               />
