@@ -72,33 +72,40 @@ export function PlayerDetailsSheet({
   onStartSubstitution: () => void;
 }) {
   const fixturesRef = useRef<ScrollViewInstance>(null);
-  const [history, setHistory] = useState<GameweekRow[] | null>(null);
-  const [pastSeasons, setPastSeasons] = useState<PastSeason[] | null>(null);
+  // The last loaded player's record. Kept with that player's id, so another
+  // player's (or a closed sheet's) record is never shown, with no reset needed.
+  const [loaded, setLoaded] = useState<{
+    id: number;
+    history: GameweekRow[];
+    pastSeasons: PastSeason[];
+  } | null>(null);
+  const current = visible && !!player?.id && loaded?.id === player.id ? loaded : null;
+  const history = current?.history ?? null;
+  const pastSeasons = current?.pastSeasons ?? null;
   const playerHistory: Record<number, number> = {};
   history?.forEach((row) => {
     playerHistory[row.round] = (playerHistory[row.round] ?? 0) + row.total_points;
   });
 
   useEffect(() => {
-    if (!visible || !player?.id) {
-      setHistory(null);
-      setPastSeasons(null);
-      return;
-    }
+    const id = player?.id;
+    if (!visible || !id) return;
 
     let isMounted = true;
 
-    fetch(`https://fantasy.premierleague.com/api/element-summary/${player.id}/`)
+    fetch(`https://fantasy.premierleague.com/api/element-summary/${id}/`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!isMounted) return;
-        setHistory(Array.isArray(data?.history) ? data.history : []);
-        setPastSeasons(Array.isArray(data?.history_past) ? data.history_past : []);
+        setLoaded({
+          id,
+          history: Array.isArray(data?.history) ? data.history : [],
+          pastSeasons: Array.isArray(data?.history_past) ? data.history_past : [],
+        });
       })
       .catch(() => {
         if (!isMounted) return;
-        setHistory([]);
-        setPastSeasons([]);
+        setLoaded({ id, history: [], pastSeasons: [] });
       });
 
     return () => {
@@ -208,11 +215,12 @@ export function PlayerDetailsSheet({
                 }}
               >
                 <Image
-                  source={teamAvatar(player.team)}
+                  source={teamAvatar(player.team, player.type === 1)}
                   contentFit="contain"
                   cachePolicy="memory-disk"
                   accessible={false}
-                  style={{ width: 60, height: 66, marginTop: 4 }}
+                  // Keeper art is drawn further out: enlarge it to match (head 67 vs 78).
+                  style={player.type === 1 ? { width: 70, height: 77, marginTop: 3 } : { width: 60, height: 66, marginTop: 4 }}
                 />
               </View>
               <View style={{ flex: 1, paddingRight: 12 }}>
@@ -419,8 +427,6 @@ export function PlayerDetailsSheet({
 
                     if (historyPts !== undefined && historyPts !== null) {
                       pointsText = historyPts > 0 ? `${historyPts} pts` : "-";
-                    } else if (fixture.points !== undefined && fixture.points !== null) {
-                      pointsText = fixture.points > 0 ? `${fixture.points} pts` : "-";
                     } else if (isCurrentGw) {
                       if (player.displayPoints !== undefined && player.displayPoints !== null && player.displayPoints > 0) {
                         pointsText = `${player.displayPoints} pts`;

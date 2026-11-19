@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" preserveAspectRatio="none">
+  <!-- Elite card (very good form): gold foil pinstripes and light rays over
+       the club background, drawn behind the player. Shield outline as in
+       card-shield.svg. -->
+  <defs>
+    <clipPath id="shield">
+      <path d="M8 1.5 H92 Q98.5 1.5 98.5 8 V112 Q98.5 118.5 92 118.5 H8 Q1.5 118.5 1.5 112 V8 Q1.5 1.5 8 1.5 Z" />
+    </clipPath>
+    <pattern id="stripes" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(32)">
+      <rect width="1.4" height="5" fill="#ffd96a" fill-opacity="0.28" />
+    </pattern>
+    <radialGradient id="rays" cx="85%" cy="8%" r="95%">
+      <stop offset="0%" stop-color="#ffe9a3" stop-opacity="0.6" />
+      <stop offset="45%" stop-color="#ffcf4a" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#ffcf4a" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <g clip-path="url(#shield)">
+    <rect width="100" height="120" fill="url(#stripes)" />
+    <rect width="100" height="120" fill="url(#rays)" />
+    <!-- Light beams fanning from the top-right corner. -->
+    <g fill="#fff4c8" fill-opacity="0.14">
+      <polygon points="100,0 30,120 44,120" />
+      <polygon points="100,0 0,70 0,92" />
+      <polygon points="100,0 62,120 72,120" />
+    </g>
+  </g>
+</svg>

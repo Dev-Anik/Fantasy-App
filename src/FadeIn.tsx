@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { Animated, Easing, useAnimatedValue } from "react-native";
+import { Animated, Easing } from "react-native";
+import { useAnimatedValue } from "./useAnimatedValue";
 import type { StyleProp, ViewStyle } from "react-native";
 
 type Props = {

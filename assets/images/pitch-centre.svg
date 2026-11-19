@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 160">
+  <!-- Centre circle and spot, drawn at their true shape and centred on the
+       halfway line. -->
+  <circle cx="300" cy="80" r="75" fill="none" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <circle cx="300" cy="80" r="3.5" fill="#ffffff" fill-opacity="0.3" />
+</svg>

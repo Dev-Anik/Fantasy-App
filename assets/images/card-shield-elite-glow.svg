@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 168" preserveAspectRatio="none">
+  <!-- Elite card glow: a soft gold aura drawn behind the card, larger than it.
+       The card sits at (20, 24), 100 x 120, as in card-shield.svg. -->
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffd75a" />
+      <stop offset="100%" stop-color="#ffb300" />
+    </linearGradient>
+    <filter id="blur" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7" />
+    </filter>
+  </defs>
+  <rect x="16" y="20" width="108" height="128" rx="12" fill="url(#g)" fill-opacity="0.85" filter="url(#blur)" />
+</svg>

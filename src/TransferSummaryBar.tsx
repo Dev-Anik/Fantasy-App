@@ -1,15 +1,18 @@
+import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
+import { THEME } from "./theme";
 
-const GREEN = "#00d982";
-const MUTED = "#9db3a6";
-const RED = "#ff526f";
+const GREEN = THEME.good;
+const MUTED = THEME.muted;
+const RED = THEME.bad;
 const GOLD = "#ffd400";
 
 type Props = {
   gameweek: number;
   deadlineDate: string | null;
-  deadlineRemaining: string | null;
+  // The deadline; the time left is counted down here, once a second.
+  deadlineIso: string | null;
   // null means unlimited (wildcard / free hit / pre-season).
   freeTransfers: number | null;
   pendingCount: number;
@@ -22,6 +25,33 @@ type Props = {
 };
 
 const money = (value: number) => `£${(value / 10).toFixed(1)}m`;
+
+function formatRemainingTime(isoString: string | null, nowMs: number) {
+  if (!isoString) return null;
+  const deadlineMs = new Date(isoString).getTime();
+  if (isNaN(deadlineMs)) return null;
+  const diff = deadlineMs - nowMs;
+  if (diff <= 0) return "Deadline Passed";
+  const totalSecs = Math.floor(diff / 1000);
+  const days = Math.floor(totalSecs / (3600 * 24));
+  const hours = Math.floor((totalSecs % (3600 * 24)) / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+  if (days > 0) return `${days}d ${hours}h ${mins}m`;
+  return `${hours}h ${mins}m ${secs}s`;
+}
+
+// The time left before the deadline, re-read every second. Only this bar
+// redraws as it ticks, not the pitch or the rest of the screen.
+function useTimeLeft(deadlineIso: string | null) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!deadlineIso) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [deadlineIso]);
+  return formatRemainingTime(deadlineIso, now);
+}
 
 // Labels are single short words so four cells fit on the narrowest phones
 // without truncating; the unit sits beside the number instead.
@@ -42,14 +72,14 @@ function Cell({
     <View
       accessible
       accessibilityLabel={accessibilityLabel}
-      style={{ flex: 1, alignItems: "center", paddingVertical: 8, paddingHorizontal: 2 }}
+      style={{ flex: 1, alignItems: "center", paddingVertical: 5, paddingHorizontal: 2 }}
     >
       <Text
         numberOfLines={1}
         adjustsFontSizeToFit
         minimumFontScale={0.8}
         maxFontSizeMultiplier={1.1}
-        style={{ color: MUTED, fontSize: 9.5, fontWeight: "800", letterSpacing: 0.3 }}
+        style={{ color: MUTED, fontSize: 8, fontWeight: "800", letterSpacing: 0.3 }}
       >
         {label}
       </Text>
@@ -58,11 +88,11 @@ function Cell({
         adjustsFontSizeToFit
         minimumFontScale={0.7}
         maxFontSizeMultiplier={1.1}
-        style={{ color, fontSize: 16, lineHeight: 20, fontWeight: "900", marginTop: 2 }}
+        style={{ color, fontSize: 13, lineHeight: 16, fontWeight: "900", marginTop: 1 }}
       >
         {value}
         {!!unit && (
-          <Text style={{ color: MUTED, fontSize: 10, fontWeight: "700" }}> {unit}</Text>
+          <Text style={{ color: MUTED, fontSize: 9, fontWeight: "700" }}> {unit}</Text>
         )}
       </Text>
     </View>
@@ -70,7 +100,7 @@ function Cell({
 }
 
 const Divider = () => (
-  <View style={{ width: 1, marginVertical: 8, backgroundColor: "rgba(255, 255, 255, 0.12)" }} />
+  <View style={{ width: 1, marginVertical: 6, backgroundColor: "rgba(255, 255, 255, 0.12)" }} />
 );
 
 // Everything a manager needs to judge a transfer, above the pitch: the
@@ -78,7 +108,7 @@ const Divider = () => (
 export function TransferSummaryBar({
   gameweek,
   deadlineDate,
-  deadlineRemaining,
+  deadlineIso,
   freeTransfers,
   pendingCount,
   bank,
@@ -86,6 +116,7 @@ export function TransferSummaryBar({
   chipLabel,
   squadValue,
 }: Props) {
+  const deadlineRemaining = useTimeLeft(deadlineIso);
   const unlimited = freeTransfers == null || !!chipLabel;
   const freeLeft = unlimited ? null : Math.max((freeTransfers ?? 0) - pendingCount, 0);
 
@@ -93,9 +124,9 @@ export function TransferSummaryBar({
     <View
       style={{
         borderRadius: 12,
-        backgroundColor: "rgba(4, 16, 10, 0.85)",
+        backgroundColor: THEME.surface,
         borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.12)",
+        borderColor: THEME.line,
         overflow: "hidden",
       }}
     >
@@ -109,19 +140,19 @@ export function TransferSummaryBar({
           alignItems: "center",
           gap: 6,
           paddingHorizontal: 10,
-          paddingVertical: 7,
-          backgroundColor: "rgba(0, 217, 130, 0.1)",
+          paddingVertical: 4,
+          backgroundColor: "rgba(255, 255, 255, 0.03)",
           borderBottomWidth: 1,
-          borderBottomColor: "rgba(0, 217, 130, 0.25)",
+          borderBottomColor: THEME.line,
         }}
       >
-        <AppSymbol name={{ ios: "clock.fill", android: "schedule", web: "schedule" }} color={GREEN} size={14} />
+        <AppSymbol name={{ ios: "clock.fill", android: "schedule", web: "schedule" }} color={THEME.accent} size={12} />
         <Text
           numberOfLines={1}
           adjustsFontSizeToFit
           minimumFontScale={0.8}
           maxFontSizeMultiplier={1.1}
-          style={{ flex: 1, color: "#ffffff", fontSize: 11, fontWeight: "800" }}
+          style={{ flex: 1, color: "#ffffff", fontSize: 10, fontWeight: "800" }}
         >
           GW {gameweek}
           <Text style={{ color: MUTED, fontWeight: "700" }}>
@@ -132,7 +163,7 @@ export function TransferSummaryBar({
           <Text
             numberOfLines={1}
             maxFontSizeMultiplier={1.1}
-            style={{ color: GOLD, fontSize: 12, fontWeight: "900" }}
+            style={{ color: GOLD, fontSize: 11, fontWeight: "900" }}
           >
             {deadlineRemaining}
           </Text>

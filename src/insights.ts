@@ -1,6 +1,7 @@
-// "My season": a manager's season so far, and what it says about their
-// strengths and weak spots. Reads FPL's public endpoints directly (no sign-in
-// needed) and turns them into figures and plain-language findings.
+// "My season": a manager's season so far, what it says about their
+// strengths and weak spots, and what to do next. Reads FPL's public endpoints
+// directly (no sign-in needed) and turns them into figures, a squad review
+// and plain-language advice.
 
 const API = "https://fantasy.premierleague.com/api/";
 
@@ -33,7 +34,63 @@ export type TransferSummary = {
   gain: number;
 };
 
+export type TransferVerdict = TransferSummary & {
+  // In minus out over the move's week and the two after it.
+  gain3: number;
+  weeks: number;
+};
+
 export type Finding = { title: string; detail: string };
+
+// A fixture ahead, from the player's point of view.
+export type UpcomingFixture = {
+  event: number;
+  opponent: string;
+  home: boolean;
+  difficulty: "easy" | "average" | "hard";
+};
+
+// A player in the current squad, with a plain verdict.
+export type SquadPlayer = {
+  id: number;
+  name: string;
+  team: string;
+  position: number;
+  price: number;
+  // Price change since the season started, in tenths of a million.
+  priceChange: number;
+  // Fell in price this gameweek.
+  falling: boolean;
+  form: number;
+  totalPoints: number;
+  // Points he has scored while in your team and counted (armband included).
+  pointsForYou: number;
+  starter: boolean;
+  // Chance of playing next round (null: no doubt reported).
+  chance: number | null;
+  status: string;
+  news: string;
+  // FPL's expected points for the next gameweek.
+  expected: number;
+  fixtures: UpcomingFixture[];
+  verdict: "sell" | "watch" | "keep";
+  reason: string;
+};
+
+// One recommended step, most useful first.
+export type Action = {
+  kind: "transfer" | "captain" | "chip" | "lineup" | "money" | "habit";
+  title: string;
+  detail: string;
+};
+
+export type CaptainMiss = {
+  event: number;
+  captain: string;
+  captainPoints: number;
+  best: string;
+  bestPoints: number;
+};
 
 export type SeasonInsights = {
   gameweeks: GameweekSummary[];
@@ -58,6 +115,23 @@ export type SeasonInsights = {
   chips: { name: string; event: number; points: number | null }[];
   strengths: Finding[];
   weaknesses: Finding[];
+  // Everyone playing FPL this season, for "top X%".
+  totalPlayers: number | null;
+  // Overall rank change in the last gameweek (positive: climbed).
+  rankMove: number | null;
+  nextEvent: number | null;
+  squad: SquadPlayer[];
+  actions: Action[];
+  captainMisses: CaptainMiss[];
+  bestTransfers: TransferVerdict[];
+  worstTransfers: TransferVerdict[];
+  // All transfers, in minus out over three weeks each.
+  transferGain3: number;
+  // The weeks the most points were left on the bench.
+  benchWeeks: GameweekSummary[];
+  // Chips still to play in the current window, and the window's last week.
+  chipsLeft: string[];
+  chipDeadline: number | null;
 };
 
 // --- Raw FPL shapes (only the fields used) ---------------------------------
@@ -74,6 +148,22 @@ type HistoryRow = {
   points_on_bench: number;
 };
 
+type RawElement = {
+  id: number;
+  web_name: string;
+  team: number;
+  element_type: number;
+  now_cost: number;
+  cost_change_start: number;
+  cost_change_event: number;
+  form: string;
+  total_points: number;
+  status: string;
+  chance_of_playing_next_round: number | null;
+  news: string;
+  ep_next: string | null;
+};
+
 export type RawSeason = {
   history: { current: HistoryRow[]; chips: { name: string; event: number }[] };
   transfers: { element_in: number; element_out: number; event: number }[];
@@ -82,12 +172,30 @@ export type RawSeason = {
     number,
     {
       chip: string | null;
-      picks: { element: number; multiplier: number; element_type: number }[];
+      picks: { element: number; multiplier: number; element_type: number; position?: number }[];
       points: Record<number, number>;
     }
   >;
-  events: { id: number; average_entry_score: number; highest_score: number | null }[];
+  events: {
+    id: number;
+    average_entry_score: number;
+    highest_score: number | null;
+    is_next?: boolean;
+  }[];
   names: Record<number, string>;
+  elements: RawElement[];
+  teams: Record<number, string>;
+  totalPlayers: number | null;
+  // Every chip and the gameweeks it can be played in.
+  chipRules: { name: string; start_event: number; stop_event: number }[];
+  // Matches still to come.
+  fixtures: {
+    event: number | null;
+    team_h: number;
+    team_a: number;
+    team_h_difficulty: number;
+    team_a_difficulty: number;
+  }[];
 };
 
 // --- Loading -----------------------------------------------------------------
@@ -108,10 +216,12 @@ async function inBatches<T, R>(items: T[], size: number, task: (item: T) => Prom
 }
 
 export async function loadSeason(entry: number): Promise<RawSeason> {
-  const [history, transfers, bootstrap] = await Promise.all([
+  const [history, transfers, bootstrap, fixtures] = await Promise.all([
     getJson(`entry/${entry}/history/`),
     getJson(`entry/${entry}/transfers/`),
     getJson("bootstrap-static/"),
+    // Upcoming fixtures are a nice-to-have: the rest works without them.
+    getJson("fixtures/?future=1").catch(() => []),
   ]);
   const played: number[] = (history.current ?? []).map((row: HistoryRow) => row.event);
   const weekList = await inBatches(played, 4, async (event) => {
@@ -133,12 +243,21 @@ export async function loadSeason(entry: number): Promise<RawSeason> {
   (bootstrap.elements ?? []).forEach((element: { id: number; web_name: string }) => {
     names[element.id] = element.web_name;
   });
+  const teams: Record<number, string> = {};
+  (bootstrap.teams ?? []).forEach((team: { id: number; short_name: string }) => {
+    teams[team.id] = team.short_name;
+  });
   return {
     history: { current: history.current ?? [], chips: history.chips ?? [] },
     transfers: transfers ?? [],
     weeks,
     events: bootstrap.events ?? [],
     names,
+    elements: bootstrap.elements ?? [],
+    teams,
+    totalPlayers: bootstrap.total_players ?? null,
+    chipRules: bootstrap.chips ?? [],
+    fixtures: Array.isArray(fixtures) ? fixtures : [],
   };
 }
 
@@ -151,6 +270,7 @@ const CHIP_NAMES: Record<string, string> = {
   "3xc": "Triple Captain",
 };
 const POSITION_NAMES = ["", "Goalkeepers", "Defenders", "Midfielders", "Forwards"];
+const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
 export function analyseSeason(raw: RawSeason): SeasonInsights {
   const events = new Map(raw.events.map((event) => [event.id, event]));
@@ -206,24 +326,40 @@ export function analyseSeason(raw: RawSeason): SeasonInsights {
     };
   });
 
-  const transfers: TransferSummary[] = raw.transfers
+  // Transfers, leaving out Free Hit and Wildcard weeks (reshuffles, not
+  // single calls). Judged on the move's own week and on three weeks.
+  const verdicts: TransferVerdict[] = raw.transfers
     .filter((transfer) => raw.weeks[transfer.event])
+    .filter((transfer) => {
+      const chip = chipByEvent.get(transfer.event);
+      return chip !== "freehit" && chip !== "wildcard";
+    })
     .map((transfer) => {
+      let gain3 = 0;
+      let weeks = 0;
+      for (let event = transfer.event; event < transfer.event + 3; event += 1) {
+        const week = raw.weeks[event];
+        if (!week) continue;
+        weeks += 1;
+        gain3 += (week.points[transfer.element_in] ?? 0) - (week.points[transfer.element_out] ?? 0);
+      }
       const points = raw.weeks[transfer.event].points;
       return {
         event: transfer.event,
         inName: raw.names[transfer.element_in] ?? "?",
         outName: raw.names[transfer.element_out] ?? "?",
         gain: (points[transfer.element_in] ?? 0) - (points[transfer.element_out] ?? 0),
+        gain3,
+        weeks,
       };
-    })
-    // Free Hit and Wildcard weeks are reshuffles, not single calls.
-    .filter((transfer) => {
-      const chip = chipByEvent.get(transfer.event);
-      return chip !== "freehit" && chip !== "wildcard";
     });
+  const transfers: TransferSummary[] = verdicts.map(({ event, inName, outName, gain }) => ({
+    event,
+    inName,
+    outName,
+    gain,
+  }));
 
-  const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
   const withAverage = gameweeks.filter((gw) => gw.average != null);
   const aboveAverage = withAverage.filter((gw) => gw.points > (gw.average ?? 0)).length;
   const last = gameweeks[gameweeks.length - 1] ?? null;
@@ -258,11 +394,294 @@ export function analyseSeason(raw: RawSeason): SeasonInsights {
     })),
     strengths: [],
     weaknesses: [],
+    totalPlayers: raw.totalPlayers,
+    rankMove: null,
+    nextEvent: raw.events.find((event) => event.is_next)?.id ?? null,
+    squad: [],
+    actions: [],
+    captainMisses: [],
+    bestTransfers: verdicts.filter((v) => v.gain3 > 0).sort((a, b) => b.gain3 - a.gain3).slice(0, 3),
+    worstTransfers: verdicts.filter((v) => v.gain3 < 0).sort((a, b) => a.gain3 - b.gain3).slice(0, 3),
+    transferGain3: sum(verdicts.map((verdict) => verdict.gain3)),
+    // Bench Boost weeks count the bench on purpose, so they are left out.
+    benchWeeks: gameweeks
+      .filter((gw) => gw.chip !== "bboost" && gw.benchPoints >= 6)
+      .sort((a, b) => b.benchPoints - a.benchPoints)
+      .slice(0, 3),
+    chipsLeft: [],
+    chipDeadline: null,
   };
+
+  // Rank movement in the last gameweek.
+  const ranked = gameweeks.filter((gw) => gw.overallRank);
+  if (ranked.length >= 2) {
+    result.rankMove =
+      (ranked[ranked.length - 2].overallRank ?? 0) - (ranked[ranked.length - 1].overallRank ?? 0);
+  }
+
+  // Captaincy: the weeks the armband cost the most.
+  result.captainMisses = gameweeks
+    .filter((gw) => gw.captainName && gw.bestCaptainName && gw.bestCaptainBonus > gw.captainBonus)
+    .sort((a, b) => b.bestCaptainBonus - b.captainBonus - (a.bestCaptainBonus - a.captainBonus))
+    .slice(0, 3)
+    .map((gw) => ({
+      event: gw.event,
+      captain: gw.captainName ?? "?",
+      captainPoints: gw.captainBonus,
+      best: gw.bestCaptainName ?? "?",
+      bestPoints: gw.bestCaptainBonus,
+    }));
+
+  // Chips still available in the current window (FPL lists each chip with
+  // the gameweeks it can be played in).
+  const nextEvent = result.nextEvent ?? (last ? last.event + 1 : 1);
+  const window = raw.chipRules.filter(
+    (rule) => rule.start_event <= nextEvent && nextEvent <= rule.stop_event,
+  );
+  result.chipsLeft = window
+    .filter(
+      (rule) =>
+        !raw.history.chips.some(
+          (used) =>
+            used.name === rule.name &&
+            used.event >= rule.start_event &&
+            used.event <= rule.stop_event,
+        ),
+    )
+    .map((rule) => CHIP_NAMES[rule.name] ?? rule.name);
+  result.chipDeadline = window.length ? Math.max(...window.map((rule) => rule.stop_event)) : null;
+
+  result.squad = currentSquad(raw, nextEvent);
   const { strengths, weaknesses } = findings(result);
   result.strengths = strengths;
   result.weaknesses = weaknesses;
+  result.actions = nextSteps(result, last?.bank ?? null);
   return result;
+}
+
+const difficultyOf = (fdr: number): UpcomingFixture["difficulty"] =>
+  fdr <= 2 ? "easy" : fdr >= 4 ? "hard" : "average";
+
+// The squad as it stands for the next gameweek: the last gameweek's picks
+// (the week before a Free Hit, which does not last), plus transfers made
+// since.
+function currentSquad(raw: RawSeason, nextEvent: number): SquadPlayer[] {
+  const played = Object.keys(raw.weeks)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const lastPlayed = played[played.length - 1];
+  let base = lastPlayed;
+  if (base != null && raw.weeks[base]?.chip === "freehit" && played.length > 1) {
+    base = played[played.length - 2];
+  }
+  const week = base != null ? raw.weeks[base] : null;
+  if (!week) return [];
+  const slots = week.picks.map((pick, index) => ({
+    element: pick.element,
+    starter: (pick.position ?? index + 1) <= 11,
+  }));
+  [...raw.transfers]
+    .filter((transfer) => transfer.event > (lastPlayed ?? 0))
+    .sort((a, b) => a.event - b.event)
+    .forEach((transfer) => {
+      const slot = slots.find((entry) => entry.element === transfer.element_out);
+      if (slot) slot.element = transfer.element_in;
+    });
+
+  // Points each player scored while in the team and counted.
+  const forYou: Record<number, number> = {};
+  Object.values(raw.weeks).forEach((w) => {
+    w.picks.forEach((pick) => {
+      if (pick.multiplier > 0) {
+        forYou[pick.element] =
+          (forYou[pick.element] ?? 0) + (w.points[pick.element] ?? 0) * pick.multiplier;
+      }
+    });
+  });
+
+  const elements = new Map(raw.elements.map((element) => [element.id, element]));
+  const squad: SquadPlayer[] = [];
+  slots.forEach(({ element: id, starter }) => {
+    const element = elements.get(id);
+    if (!element) return;
+    const fixtures = raw.fixtures
+      .filter(
+        (fixture) =>
+          fixture.event != null &&
+          fixture.event >= nextEvent &&
+          (fixture.team_h === element.team || fixture.team_a === element.team),
+      )
+      .sort((a, b) => (a.event ?? 0) - (b.event ?? 0))
+      .slice(0, 3)
+      .map((fixture) => {
+        const home = fixture.team_h === element.team;
+        return {
+          event: fixture.event ?? 0,
+          opponent: raw.teams[home ? fixture.team_a : fixture.team_h] ?? "?",
+          home,
+          difficulty: difficultyOf(home ? fixture.team_h_difficulty : fixture.team_a_difficulty),
+        };
+      });
+    const player: SquadPlayer = {
+      id,
+      name: element.web_name,
+      team: raw.teams[element.team] ?? "",
+      position: element.element_type,
+      price: element.now_cost,
+      priceChange: element.cost_change_start,
+      falling: element.cost_change_event < 0,
+      form: Number(element.form) || 0,
+      totalPoints: element.total_points,
+      pointsForYou: forYou[id] ?? 0,
+      starter,
+      chance: element.chance_of_playing_next_round,
+      status: element.status,
+      news: element.news,
+      expected: Number(element.ep_next) || 0,
+      fixtures,
+      verdict: "keep",
+      reason: "",
+    };
+    squad.push({ ...player, ...verdictFor(player) });
+  });
+  return squad;
+}
+
+// Keep, watch or sell, with the main reason in a few words.
+function verdictFor(player: SquadPlayer): Pick<SquadPlayer, "verdict" | "reason"> {
+  const hard = player.fixtures.filter((fixture) => fixture.difficulty === "hard").length;
+  const easy = player.fixtures.filter((fixture) => fixture.difficulty === "easy").length;
+  const unavailable =
+    ["i", "s", "u", "n"].includes(player.status) || (player.chance ?? 100) <= 25;
+  if (unavailable) {
+    return {
+      verdict: "sell",
+      reason: player.news || (player.status === "s" ? "Suspended" : "Unavailable"),
+    };
+  }
+  if (player.form < 2 && (hard >= 2 || player.price >= 55)) {
+    return {
+      verdict: "sell",
+      reason: `Poor form (${player.form.toFixed(1)})${hard >= 2 ? " and tough fixtures" : ""}`,
+    };
+  }
+  if ((player.chance ?? 100) < 100) {
+    return { verdict: "watch", reason: player.news || `${player.chance}% chance of playing` };
+  }
+  // A player in great form is kept even through tough fixtures.
+  if (player.form >= 6) {
+    return {
+      verdict: "keep",
+      reason: `In great form (${player.form.toFixed(1)})${
+        easy >= 2 ? ", good fixtures" : hard >= 2 ? ", though tough fixtures ahead" : ""
+      }`,
+    };
+  }
+  if (hard >= 2) return { verdict: "watch", reason: "Tough fixtures ahead" };
+  if (player.form < 3 && player.starter) {
+    return { verdict: "watch", reason: `Low form (${player.form.toFixed(1)})` };
+  }
+  if (player.falling) return { verdict: "watch", reason: "Price falling" };
+  if (easy >= 2) return { verdict: "keep", reason: "Good fixtures ahead" };
+  return { verdict: "keep", reason: "Steady" };
+}
+
+// Observations worth knowing before the next deadline, most pressing first.
+// Worded as facts from the data, not instructions: the manager decides.
+function nextSteps(s: SeasonInsights, bank: number | null): Action[] {
+  const actions: Action[] = [];
+  const starters = s.squad.filter((player) => player.starter);
+
+  // 1. Flagged players: doubts and poor form, starters first.
+  [...s.squad]
+    .filter((player) => player.verdict === "sell")
+    .sort((a, b) => Number(b.starter) - Number(a.starter))
+    .slice(0, 2)
+    .forEach((player) => {
+      const doubt = ["i", "s", "u", "n"].includes(player.status) || (player.chance ?? 100) <= 25;
+      actions.push({
+        kind: "transfer",
+        title: doubt ? `${player.name} is a doubt` : `${player.name} is out of form`,
+        detail: `${player.reason}.${player.starter ? " Currently in your starting XI." : ""}`,
+      });
+    });
+
+  // 2. The starter with the highest expected points next gameweek.
+  const captain = [...starters]
+    .filter((player) => player.verdict !== "sell")
+    .sort((a, b) => b.expected - a.expected || b.form - a.form)[0];
+  if (captain) {
+    const next = captain.fixtures[0];
+    actions.push({
+      kind: "captain",
+      title: `${captain.name} has your highest expected points${s.nextEvent ? ` for GW ${s.nextEvent}` : ""}`,
+      detail: `${captain.expected.toFixed(1)} expected${
+        next ? `, ${next.opponent} ${next.home ? "at home" : "away"}` : ""
+      }, form ${captain.form.toFixed(1)}.`,
+    });
+  }
+
+  // 3. A benched outfield player expected to outscore a starter.
+  const weakestStarter = [...starters]
+    .filter((player) => player.position !== 1)
+    .sort((a, b) => a.expected - b.expected)[0];
+  const bestBench = s.squad
+    .filter((player) => !player.starter && player.position !== 1 && player.verdict !== "sell")
+    .sort((a, b) => b.expected - a.expected)[0];
+  if (bestBench && weakestStarter && bestBench.expected >= weakestStarter.expected + 1.5) {
+    actions.push({
+      kind: "lineup",
+      title: `${bestBench.name} (bench) is expected to outscore ${weakestStarter.name}`,
+      detail: `${bestBench.expected.toFixed(1)} expected against ${weakestStarter.expected.toFixed(1)}.`,
+    });
+  }
+
+  // 4. Chips about to expire.
+  if (s.chipsLeft.length && s.chipDeadline && s.nextEvent) {
+    const left = s.chipDeadline - s.nextEvent + 1;
+    if (left <= 6) {
+      actions.push({
+        kind: "chip",
+        title: `${s.chipsLeft.join(" and ")} ${s.chipsLeft.length === 1 ? "expires" : "expire"} after GW ${s.chipDeadline}`,
+        detail: `${left} gameweek${left === 1 ? "" : "s"} left in which to play ${
+          s.chipsLeft.length === 1 ? "it" : "them"
+        }.`,
+      });
+    }
+  }
+
+  // 5. Money not in the team.
+  if (bank != null && bank >= 20) {
+    actions.push({
+      kind: "money",
+      title: `£${(bank / 10).toFixed(1)}m is unspent`,
+      detail: "Money in the bank earns no points until it is used.",
+    });
+  }
+
+  // 6. Patterns from the season so far.
+  if (s.bestCaptainTotal > 0 && s.captainTotal / s.bestCaptainTotal < 0.55) {
+    actions.push({
+      kind: "habit",
+      title: `Captains have earned ${Math.round((s.captainTotal / s.bestCaptainTotal) * 100)}% of the best possible`,
+      detail: `${s.bestCaptainTotal - s.captainTotal} points below captaining your top scorer each week.`,
+    });
+  }
+  if (s.hitsTotal >= 8 && s.transferGain3 < s.hitsTotal) {
+    actions.push({
+      kind: "habit",
+      title: `Hits have cost more than transfers gained`,
+      detail: `${s.hitsTotal} points paid in hits; transfers gained ${s.transferGain3} over three weeks.`,
+    });
+  }
+  if (s.gameweeks.length >= 3 && s.benchTotal / s.gameweeks.length >= 7) {
+    actions.push({
+      kind: "habit",
+      title: `${(s.benchTotal / s.gameweeks.length).toFixed(1)} points a week left on the bench`,
+      detail: `${s.benchTotal} bench points this season, above the usual 3 to 5 a week.`,
+    });
+  }
+  return actions.slice(0, 6);
 }
 
 // Plain-language strengths and weak spots. Thresholds are rules of thumb.
@@ -284,7 +703,7 @@ function findings(s: SeasonInsights) {
     } else if (share <= 0.4) {
       weaknesses.push({
         title: "Below-average weeks",
-        detail: `You beat the average in only ${s.aboveAverage} of ${withAverage} gameweeks. Look at which positions score least for you below.`,
+        detail: `You beat the average in only ${s.aboveAverage} of ${withAverage} gameweeks.`,
       });
     }
   }
@@ -301,7 +720,7 @@ function findings(s: SeasonInsights) {
     } else if (efficiency < 0.55) {
       weaknesses.push({
         title: "Captain choices",
-        detail: `Picking your best scorer each week would have added ${missed} more points. Favour in-form players with easy fixtures.`,
+        detail: `Picking your best scorer each week would have added ${missed} more points.`,
       });
     }
   }
@@ -311,7 +730,7 @@ function findings(s: SeasonInsights) {
   if (benchPerWeek >= 7) {
     weaknesses.push({
       title: "Points left on the bench",
-      detail: `${s.benchTotal} points sat on your bench (${benchPerWeek.toFixed(1)} a week). Check your starting eleven against fixtures each week.`,
+      detail: `${s.benchTotal} points sat on your bench (${benchPerWeek.toFixed(1)} a week).`,
     });
   } else if (benchPerWeek <= 3 && weeks >= 3) {
     strengths.push({
@@ -320,23 +739,25 @@ function findings(s: SeasonInsights) {
     });
   }
 
-  // Transfers and hits.
-  if (s.hitsTotal >= 8 && s.transferGain < s.hitsTotal) {
+  // Transfers and hits, judged over three weeks.
+  if (s.hitsTotal >= 8 && s.transferGain3 < s.hitsTotal) {
     weaknesses.push({
       title: "Costly hits",
-      detail: `You paid ${s.hitsTotal} points in hits but your transfers gained ${s.transferGain} in the week they were made. Save transfers instead of taking hits.`,
+      detail: `You paid ${s.hitsTotal} points in hits, but your transfers gained ${s.transferGain3} over three weeks.`,
     });
   }
   if (s.transfers.length >= 3) {
-    if (s.transferGain - s.hitsTotal > 0) {
+    if (s.transferGain3 - s.hitsTotal > 0) {
       strengths.push({
         title: "Good transfers",
-        detail: `Players you brought in outscored those you sold by ${s.transferGain} points in their first week${s.hitsTotal ? `, ${s.transferGain - s.hitsTotal} after hits` : ""}.`,
+        detail: `Players you brought in outscored those you sold by ${s.transferGain3} points over three weeks each${
+          s.hitsTotal ? `, ${s.transferGain3 - s.hitsTotal} after hits` : ""
+        }.`,
       });
-    } else if (s.transferGain < 0) {
+    } else if (s.transferGain3 < 0) {
       weaknesses.push({
         title: "Transfers backfiring",
-        detail: `Players you sold outscored those you bought by ${-s.transferGain} points in the week of the move. Avoid chasing last week's points.`,
+        detail: `Players you sold outscored those you bought by ${-s.transferGain3} points over three weeks.`,
       });
     }
   }
@@ -352,7 +773,7 @@ function findings(s: SeasonInsights) {
     } else if (growth <= -5) {
       weaknesses.push({
         title: "Falling team value",
-        detail: `Your squad has lost £${(-growth / 10).toFixed(1)}m in value. Sell falling players before their price drops.`,
+        detail: `Your squad has lost £${(-growth / 10).toFixed(1)}m in value.`,
       });
     }
   }
@@ -370,7 +791,7 @@ function findings(s: SeasonInsights) {
     } else if (now > before * 1.25) {
       weaknesses.push({
         title: "Slipping",
-        detail: "Your overall rank has fallen over the last three gameweeks. Compare your team with the managers above you.",
+        detail: "Your overall rank has fallen over the last three gameweeks.",
       });
     }
   }
@@ -393,7 +814,7 @@ function findings(s: SeasonInsights) {
     if (weakest.ratio <= 0.7) {
       weaknesses.push({
         title: `${POSITION_NAMES[weakest.type]} underperforming`,
-        detail: `Only ${Math.round((totals[weakest.type] / all) * 100)}% of your points come from your ${POSITION_NAMES[weakest.type].toLowerCase()}. Consider upgrading there.`,
+        detail: `Only ${Math.round((totals[weakest.type] / all) * 100)}% of your points come from your ${POSITION_NAMES[weakest.type].toLowerCase()}.`,
       });
     }
   }

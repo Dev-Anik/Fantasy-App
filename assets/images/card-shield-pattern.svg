@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" preserveAspectRatio="none">
+  <!-- Normal card texture: the elite card's pinstripes and light beams in a
+       soft white, so gold stays exclusive to elite cards. Drawn behind the
+       player. Card outline as in card-shield.svg. -->
+  <defs>
+    <clipPath id="shield">
+      <path d="M8 1.5 H92 Q98.5 1.5 98.5 8 V112 Q98.5 118.5 92 118.5 H8 Q1.5 118.5 1.5 112 V8 Q1.5 1.5 8 1.5 Z" />
+    </clipPath>
+    <pattern id="stripes" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(32)">
+      <rect width="1.4" height="5" fill="#ffffff" fill-opacity="0.14" />
+    </pattern>
+  </defs>
+  <g clip-path="url(#shield)">
+    <rect width="100" height="120" fill="url(#stripes)" />
+    <g fill="#ffffff" fill-opacity="0.09">
+      <polygon points="100,0 30,120 44,120" />
+      <polygon points="100,0 0,70 0,92" />
+      <polygon points="100,0 62,120 72,120" />
+    </g>
+  </g>
+</svg>

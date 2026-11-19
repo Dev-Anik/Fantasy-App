@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" preserveAspectRatio="none">
+  <!-- Drawn over the avatar: fades the shoulders into the card's dark base
+       inside the shield, so the name sits on a clean band. Same outline as
+       card-shield.svg, kept inside its border. -->
+  <defs>
+    <linearGradient id="fade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <!-- Face (top 84.5%): clear over the player, darkening through the name
+           plate. Footer (bottom 15.5%): solid, behind the opponent and bars. -->
+      <stop offset="0%" stop-color="#000000" stop-opacity="0" />
+      <stop offset="57%" stop-color="#000000" stop-opacity="0" />
+      <stop offset="71%" stop-color="#000000" stop-opacity="0.78" />
+      <stop offset="84%" stop-color="#000000" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.94" />
+    </linearGradient>
+  </defs>
+  <path d="M8 2.7 H92 Q97.3 2.7 97.3 8 V112 Q97.3 117.3 92 117.3 H8 Q2.7 117.3 2.7 112 V8 Q2.7 2.7 8 2.7 Z"
+        fill="url(#fade)" />
+</svg>

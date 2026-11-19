@@ -292,10 +292,18 @@ export async function completeSignIn(redirectUrl: string, pending: PendingSignIn
 // A valid access token, renewed if needed. Returns null when nobody is signed
 // in, throws SessionExpiredError when the session can no longer be renewed,
 // and any other error when the renewal failed for network reasons.
-export async function getAccessToken(): Promise<string | null> {
+// `force` renews even a token that still looks valid: used when FPL has
+// just refused it, which happens if FPL ends a token early.
+export async function getAccessToken(
+  options: { force?: boolean } = {},
+): Promise<string | null> {
   const current = await load();
   if (!current) return null;
-  if (current.accessToken && current.expiresAt - Date.now() > RENEW_MARGIN_MS) {
+  if (
+    !options.force &&
+    current.accessToken &&
+    current.expiresAt - Date.now() > RENEW_MARGIN_MS
+  ) {
     return current.accessToken;
   }
   // One renewal at a time: refresh tokens may be single-use.
@@ -326,8 +334,11 @@ export async function getAccessToken(): Promise<string | null> {
     return await refreshing;
   } catch (error) {
     if (error instanceof SessionExpiredError) throw error;
-    // Offline or FPL is down: the current token may still have time left.
-    if (current.accessToken && current.expiresAt > Date.now()) return current.accessToken;
+    // Offline or FPL is down: the current token may still have time left
+    // (not when forced: FPL has just refused that token).
+    if (!options.force && current.accessToken && current.expiresAt > Date.now()) {
+      return current.accessToken;
+    }
     throw error;
   }
 }
