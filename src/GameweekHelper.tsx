@@ -136,7 +136,7 @@ export function GameweekHelper({
       </View>
 
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: insets.bottom + FOOTER_HEIGHT + 28 }}>
-        <Heading first hint="Ranked by ProFPL's own estimate, not an FPL figure (how it works is below)">
+        <Heading first hint="Ranked by Skippr's own estimate, not an FPL figure (how it works is below)">
           Captain
         </Heading>
         <Group>
@@ -210,7 +210,7 @@ export function GameweekHelper({
         >
           <AppSymbol name={{ ios: "info.circle", android: "info", web: "info" }} color={MUTED} size={15} />
           <Text style={{ flex: 1, color: MUTED, fontSize: 12, lineHeight: 17 }}>
-            {`Estimated points are ProFPL's own calculation, not a figure from FPL: the average of a player's form and his points per match this season, adjusted for fixture difficulty and home or away. Defenders and keepers count 85%, doubtful players are scaled by their chance of playing${advice.formOnly ? " (season averages load with your next refresh; form alone is used until then)" : ""}. It is a rule of thumb, not a forecast.
+            {`Estimated points are Skippr's own calculation, not a figure from FPL: the average of a player's form and his points per match this season, adjusted for fixture difficulty and home or away. Defenders and keepers count 85%, doubtful players are scaled by their chance of playing${advice.formOnly ? " (season averages load with your next refresh; form alone is used until then)" : ""}. It is a rule of thumb, not a forecast.
 
 ${DISCLAIMER}`}
           </Text>

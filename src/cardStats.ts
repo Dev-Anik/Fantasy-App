@@ -14,7 +14,7 @@ export const CARD_STAT_OPTIONS: { key: CardStatKey; title: string; detail: strin
   {
     key: "est",
     title: "Estimated points",
-    detail: "ProFPL's own estimate for the next gameweek, not an FPL figure",
+    detail: "Skippr's own estimate for the next gameweek, not an FPL figure",
     short: "EST",
   },
   { key: "form", title: "Form", detail: "Average points per match over the last 30 days", short: "FORM" },

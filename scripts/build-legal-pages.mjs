@@ -32,7 +32,7 @@ function page({ title, updated, intro, sections, contactLabel }) {
   const contact = email
     ? `    <h2>Contact</h2>\n    <p>${escape(contactLabel)}: <a href="mailto:${escape(email)}">${escape(email)}</a></p>`
     : `    <h2>Contact</h2>\n    <p>Contact details will be added here.</p>`;
-  const heading = `ProFPL ${title.toLowerCase()}`;
+  const heading = `Skippr ${title.toLowerCase()}`;
   return `<!doctype html>
 <html lang="en">
 <head>

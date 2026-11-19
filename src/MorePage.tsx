@@ -143,7 +143,7 @@ export function MorePage({
     ].join("\n");
     const body = `\n\n\n---\n${details}`;
     Linking.openURL(
-      `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("ProFPL feedback")}&body=${encodeURIComponent(body)}`,
+      `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("Skippr feedback")}&body=${encodeURIComponent(body)}`,
     ).catch(() => {});
   };
 
@@ -220,7 +220,7 @@ export function MorePage({
           <>
             <Item
               title="Notifications are blocked"
-              detail="Allow them for ProFPL in your phone's settings."
+              detail="Allow them for Skippr in your phone's settings."
               color="#f2c14e"
               right={<Chevron />}
               onPress={onOpenSettings}
@@ -275,7 +275,7 @@ export function MorePage({
         <Item title="Version" right={<Text style={{ color: MUTED, fontSize: 14 }}>{version}</Text>} />
       </Group>
       <Text style={{ color: MUTED, fontSize: 11.5, lineHeight: 16, marginTop: 8, marginLeft: 2 }}>
-        ProFPL is not affiliated with the Premier League.
+        Skippr is not affiliated with the Premier League.
       </Text>
 
       <View style={{ marginTop: 28 }}>

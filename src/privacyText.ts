@@ -1,4 +1,4 @@
-// ProFPL's privacy policy text. Shown in the app (LegalPage.tsx) and published
+// Skippr's privacy policy text. Shown in the app (LegalPage.tsx) and published
 // as a web page for the app stores: docs/privacy.html carries the same text
 // (node scripts/build-legal-pages.mjs). When this changes, rebuild that page
 // and update the date below.
@@ -6,14 +6,14 @@
 export const PRIVACY_UPDATED = "19 November 2026";
 
 export const PRIVACY_INTRO =
-  "ProFPL is an independent app for managing your Fantasy Premier League (FPL) team. It is not affiliated with or endorsed by the Premier League. This policy explains what information the app handles and where it goes. In short: ProFPL has no servers of its own, shows no ads, uses no analytics or tracking, and does not sell or share your data.";
+  "Skippr is an independent app for managing your Fantasy Premier League (FPL) team. It is not affiliated with or endorsed by the Premier League. This policy explains what information the app handles and where it goes. In short: Skippr has no servers of its own, shows no ads, uses no analytics or tracking, and does not sell or share your data.";
 
 export const PRIVACY_SECTIONS: { title: string; body: string[] }[] = [
   {
     title: "Signing in",
     body: [
-      "You sign in with your Premier League account. If you type your email and password into ProFPL, the app passes them to the Premier League's official sign-in page on your behalf, over a secure connection. You can also sign in on that page directly, including with Google, Apple, Facebook or X.",
-      "ProFPL never sends your password anywhere except the Premier League's sign-in page. If you leave \"Remember me\" on (it is on by default), your email and password are saved on your device only, in its encrypted secure storage (the iOS Keychain or Android Keystore), so the app can sign you in again by itself. Untick \"Remember me\" when signing in and they are not saved, and any saved before are removed. After you sign in, the Premier League gives the app a sign-in token, which is kept in your device's secure storage (the iOS Keychain or Android Keystore) so you stay signed in until you log out.",
+      "You sign in with your Premier League account. If you type your email and password into Skippr, the app passes them to the Premier League's official sign-in page on your behalf, over a secure connection. You can also sign in on that page directly, including with Google, Apple, Facebook or X.",
+      "Skippr never sends your password anywhere except the Premier League's sign-in page. If you leave \"Remember me\" on (it is on by default), your email and password are saved on your device only, in its encrypted secure storage (the iOS Keychain or Android Keystore), so the app can sign you in again by itself. Untick \"Remember me\" when signing in and they are not saved, and any saved before are removed. After you sign in, the Premier League gives the app a sign-in token, which is kept in your device's secure storage (the iOS Keychain or Android Keystore) so you stay signed in until you log out.",
       "To save you typing, the app remembers the last email address used to sign in, on your device only.",
     ],
   },
@@ -31,7 +31,7 @@ export const PRIVACY_SECTIONS: { title: string; body: string[] }[] = [
     ],
   },
   {
-    title: "What ProFPL does not do",
+    title: "What Skippr does not do",
     body: [
       "No advertising, analytics, crash reporting or tracking of any kind.",
       "No accounts or servers of our own: nothing about you is sent to us.",
@@ -53,7 +53,7 @@ export const PRIVACY_SECTIONS: { title: string; body: string[] }[] = [
   {
     title: "Children",
     body: [
-      "ProFPL is not directed at children under 13, and FPL requires players to meet its own minimum age.",
+      "Skippr is not directed at children under 13, and FPL requires players to meet its own minimum age.",
     ],
   },
   {

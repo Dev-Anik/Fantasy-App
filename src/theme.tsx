@@ -45,6 +45,32 @@ export function ScreenBackground() {
   );
 }
 
+// The Skippr wordmark: the name in white, then the logo's green dot, raised
+// as on the icon. The story, shared with the logo: the S is the skipper's path
+// through the season, and the green dot is the ball, the moment of decision
+// (the weekly captain call). Green is also the app's colour for good
+// outcomes. Use this everywhere the name is shown as a logo.
+export function Wordmark({ size, weight = "800" }: { size: number; weight?: "700" | "800" | "900" }) {
+  const dot = Math.max(4, Math.round(size * 0.2));
+  return (
+    <View accessible accessibilityRole="header" accessibilityLabel="Skippr" style={{ flexDirection: "row", alignItems: "flex-start" }}>
+      <Text style={{ color: THEME.ink, fontSize: size, fontWeight: weight, letterSpacing: size >= 30 ? -0.5 : 0.2 }}>
+        Skippr
+      </Text>
+      <View
+        style={{
+          width: dot,
+          height: dot,
+          borderRadius: dot / 2,
+          backgroundColor: THEME.accent,
+          marginLeft: Math.max(2, Math.round(size * 0.06)),
+          marginTop: Math.round(size * 0.24),
+        }}
+      />
+    </View>
+  );
+}
+
 // A section label: green capitals, widely spaced.
 export function SectionLabel({ children, style }: { children: string; style?: object }) {
   return (

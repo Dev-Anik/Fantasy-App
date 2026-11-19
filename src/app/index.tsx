@@ -65,7 +65,7 @@ import { SaveProgress } from "../SaveProgress";
 import { loadCardStats, saveCardStats } from "../cardStats";
 import type { CardStatKey } from "../cardStats";
 import { APP_VERSION } from "../appInfo";
-import { FOOTER_HEIGHT, ScreenBackground, THEME } from "../theme";
+import { FOOTER_HEIGHT, ScreenBackground, THEME, Wordmark } from "../theme";
 import { isTemporary, MESSAGES, userMessage } from "../errors";
 import { EmailSignIn } from "../EmailSignIn";
 import { loadRememberedLogin, pauseAutoSignIn } from "../rememberedLogin";
@@ -414,7 +414,7 @@ export default function Index() {
       if (permission !== "granted") {
         showDialog(
           "Notifications are off",
-          "Allow notifications for ProFPL in your phone's settings to get deadline reminders and squad news.",
+          "Allow notifications for Skippr in your phone's settings to get deadline reminders and squad news.",
           [
             { text: "Not now", style: "cancel" },
             { text: "Open settings", onPress: () => Linking.openSettings() },
@@ -833,7 +833,7 @@ export default function Index() {
   const handleLogout = () => {
     showDialog(
       "Log Out",
-      "Are you sure you want to log out of ProFPL?",
+      "Are you sure you want to log out of Skippr?",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -2297,9 +2297,7 @@ export default function Index() {
         <View
           style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
         >
-          <Text style={{ color: "#fff", fontSize: 32, fontWeight: "800" }}>
-            Pro<Text style={{ color: GREEN }}>FPL</Text>
-          </Text>
+          <Wordmark size={32} />
           <ActivityIndicator color={GREEN} style={{ marginTop: 24 }} />
         </View>
       )}
@@ -2321,9 +2319,7 @@ export default function Index() {
                 accessible={false}
                 style={{ width: 52, height: 52, borderRadius: 14 }}
               />
-              <Text style={{ color: "#fff", fontSize: 40, fontWeight: "900", letterSpacing: -0.5 }}>
-                Pro<Text style={{ color: GREEN }}>FPL</Text>
-              </Text>
+              <Wordmark size={40} weight="900" />
             </View>
             <Text style={{ color: "#c9d6cf", fontSize: 17, marginTop: 14, lineHeight: 24 }}>
               Manage your Fantasy Premier League team with live points, smart
@@ -2541,7 +2537,7 @@ export default function Index() {
                 overflow: "hidden",
               }}
             >
-              {/* Row 1: ProFPL + Refresh (left) and GW Button (right) */}
+              {/* Row 1: Skippr + Refresh (left) and GW Button (right) */}
               <View
                 style={{
                   flexDirection: "row",
@@ -2551,11 +2547,7 @@ export default function Index() {
                 }}
               >
                 <View style={{ flexDirection: "row", alignItems: "center" }}>
-                  <Text
-                    style={{ color: "#fff", fontSize: 16, fontWeight: "900", letterSpacing: 0.4 }}
-                  >
-                    Pro<Text style={{ color: GREEN }}>FPL</Text>
-                  </Text>
+                  <Wordmark size={16} weight="900" />
                   {!showLeagues && (
                     <Pressable
                       onPress={refresh}

@@ -1,22 +1,22 @@
 {
   "expo": {
-    "name": "profpl",
+    "name": "Skippr",
     "slug": "profpl",
     "version": "1.1.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "profpl",
+    "scheme": "skippr",
     "userInterfaceStyle": "dark",
     "ios": {
       "icon": "./assets/images/icon.png",
-      "bundleIdentifier": "com.devanik.profpl",
+      "bundleIdentifier": "com.devanik.skippr",
       "supportsTablet": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.devanik.profpl",
+      "package": "com.devanik.skippr",
       "adaptiveIcon": {
         "backgroundColor": "#0b1020",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
