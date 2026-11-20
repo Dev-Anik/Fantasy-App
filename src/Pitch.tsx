@@ -349,6 +349,9 @@ function PlayerAvatar({
     // Transfers: this gameweek's price change ("+0.1"), shown on the card's
     // face so the price in the footer keeps its full size.
     priceChange?: { text: string; color: string };
+    // Injury, suspension or doubt: shown just above the name plate, on the
+    // right (the price change sits on the left), clear of the top corners.
+    flag?: ReactNode;
     // Home: up to two extra figures the user chose (form, price...), shown
     // in the top corners under the position and the club.
     stats?: { key: string; label: string; value: string }[];
@@ -376,6 +379,11 @@ function PlayerAvatar({
   // Selected players keep the selection colour; epic cards letter in gold
   // (or holo violet); the rest in white.
   const ink = card?.highlight ?? epic?.ink ?? "#ffffff";
+  // The club in the top-right corner, level with the position on the left
+  // (a chosen card stat sits just under it).
+  const clubFont = Math.max(8, Math.round(width * 0.115 * 2) / 2);
+  const clubLine = Math.round(clubFont * 1.2);
+  const clubTop = Math.round(face * 0.05);
   // The name plate is the same dark strip with white lettering on every
   // card (the selection colour when selected).
   const plate = {
@@ -468,9 +476,11 @@ function PlayerAvatar({
               pointerEvents="none"
               style={{
                 position: "absolute",
-                top: Math.round(face * 0.05),
+                top: clubTop,
                 left: Math.round(width * 0.08),
                 zIndex: 2,
+                // Secondary text: a little quieter than the club and name.
+                opacity: SECONDARY_OPACITY,
               }}
             >
               {!!card.number && (
@@ -502,14 +512,16 @@ function PlayerAvatar({
                 allowFontScaling={false}
                 style={{
                   color: ink,
-                  fontSize: Math.max(6, Math.round(width * 0.09)),
-                  lineHeight: Math.max(7, Math.round(width * 0.11)),
-                  fontWeight: "800",
+                  // A little smaller than the club in the other corner, but
+                  // the same line height, so the two still sit level.
+                  fontSize: Math.max(7, clubFont - 1.5),
+                  lineHeight: clubLine,
+                  fontWeight: "900",
                   letterSpacing: 0.4,
                   includeFontPadding: false,
-                  textShadowColor: "rgba(0, 0, 0, 0.5)",
+                  textShadowColor: "rgba(0, 0, 0, 0.85)",
                   textShadowOffset: { width: 0, height: 1 },
-                  textShadowRadius: 2,
+                  textShadowRadius: 3,
                 }}
               >
                 {card.position}
@@ -533,6 +545,7 @@ function PlayerAvatar({
                   backgroundColor: "rgba(6, 12, 9, 0.9)",
                   borderWidth: 0.5,
                   borderColor: card.priceChange.color,
+                  opacity: SECONDARY_OPACITY,
                 }}
               >
                 <Text
@@ -557,7 +570,10 @@ function PlayerAvatar({
                 pointerEvents="none"
                 style={{
                   position: "absolute",
-                  top: Math.round(face * 0.06 + Math.max(7, width * 0.11) + 3),
+                  // Just under the position (left) or the club (right), which
+                  // share a size and top edge.
+                  top: clubTop + clubLine + 3,
+                  opacity: SECONDARY_OPACITY,
                   ...(index === 0 ? { left: Math.round(width * 0.08) } : { right: Math.round(width * 0.08) }),
                   alignItems: index === 0 ? "flex-start" : "flex-end",
                   zIndex: 2,
@@ -615,43 +631,65 @@ function PlayerAvatar({
             >
               <Text
                 numberOfLines={1}
+                // Every name on the pitch is the same size: a long one may
+                // shrink only a little, then ends in "…", so no name is tiny
+                // and none towers over the others. Normal case, not capitals,
+                // so most names fit at full size.
                 adjustsFontSizeToFit
-                minimumFontScale={0.6}
+                minimumFontScale={0.85}
+                ellipsizeMode="tail"
                 allowFontScaling={false}
                 style={{
                   textAlign: "center",
                   color: plate.ink,
-                  // Readable on small phones; long names still shrink to fit.
-                  fontSize: Math.max(10, Math.round(width * (card.large ? 0.18 : 0.17) * 2) / 2),
-                  fontWeight: "900",
-                  letterSpacing: 0.2,
+                  fontSize: Math.max(10, Math.round(width * (card.large ? 0.165 : 0.16) * 2) / 2),
+                  fontWeight: "800",
+                  letterSpacing: 0,
                   includeFontPadding: false,
                 }}
               >
-                {card.name.toUpperCase()}
+                {card.name}
               </Text>
             </View>
+            {/* The club, mirroring the position on the left: the same size
+                and weight, solid white with a firm shadow so it reads on
+                any kit. */}
             {!!card.club && (
               <Text
                 numberOfLines={1}
                 allowFontScaling={false}
                 style={{
                   position: "absolute",
-                  top: Math.round(face * 0.06),
+                  top: clubTop,
                   right: Math.round(width * 0.08),
                   textAlign: "right",
-                  color: epic?.ink ?? "rgba(255, 255, 255, 0.78)",
-                  fontSize: Math.max(7, Math.round(width * 0.1 * 2) / 2),
-                  fontWeight: "800",
-                  letterSpacing: 0.8,
+                  color: epic?.ink ?? "#ffffff",
+                  fontSize: clubFont,
+                  lineHeight: clubLine,
+                  fontWeight: "900",
+                  letterSpacing: 0.4,
                   includeFontPadding: false,
-                  textShadowColor: "rgba(0, 0, 0, 0.5)",
+                  textShadowColor: "rgba(0, 0, 0, 0.85)",
                   textShadowOffset: { width: 0, height: 1 },
-                  textShadowRadius: 2,
+                  textShadowRadius: 3,
                 }}
               >
                 {card.club}
               </Text>
+            )}
+            {/* Injury or doubt: just above the name plate, on the right. */}
+            {!!card.flag && (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  right: Math.round(width * 0.04),
+                  bottom: footer + Math.round(face * 0.03) + Math.round(Math.max(10, width * 0.17) * 1.2) + 6,
+                  zIndex: 3,
+                }}
+              >
+                {card.flag}
+              </View>
             )}
           </>
         )}
@@ -1137,7 +1175,7 @@ function CapsuleInfo({
   infoFont: number;
 }) {
   const current = fixtures[0];
-  const dark = { fill: "rgba(4, 16, 10, 0.92)", ink: "#ffffff" };
+  const dark = { fill: "rgba(11, 16, 32, 0.92)", ink: "#ffffff" };
   const inCard = inCardHeight != null;
   // Inside a card: bars, a small gap, then one line of text, all within the
   // footer (less its top and bottom inset).
@@ -1249,7 +1287,7 @@ function CapsuleInfo({
             ? "transparent"
             : highlight
               ? "rgba(40, 34, 4, 0.92)"
-              : "rgba(4, 16, 10, 0.72)",
+              : "rgba(11, 16, 32, 0.72)",
           borderWidth: !inCard && edge ? 1 : 0,
           borderColor: edge ?? "transparent",
         }}
@@ -1442,10 +1480,10 @@ function PlayerCard({
   // Shield cards: the footer's own height, so what is printed in it is sized
   // to fit inside the card on every screen.
   const footerHeight = shieldSize(pitchMetrics, compact, isBenched).footer;
-  // Home only: the extra figures the user chose for the cards.
+  // Home and Transfers: the extra figures the user chose for the cards.
   const statKeys = useContext(CardStatsContext);
   const stats =
-    showPrice || pointsView
+    pointsView
       ? undefined
       : statKeys.flatMap((key) => {
           const value = cardStatValue(key, r, selectedGw);
@@ -1498,15 +1536,13 @@ function PlayerCard({
                   swapHint={swapHint && selected}
                   card={{
                     name: r.name,
-                    // FPL has no overall rating: the corner shows form, on the
-                    // Transfers screen only (where it helps choose players).
-                    // The home screen and the points page show no number.
-                    number: pointsView || !showPrice
-                      ? ""
-                      : r.form && Number.isFinite(Number(r.form))
-                        ? Number(r.form).toFixed(1)
-                        : "",
-                    position: posLabel,
+                    // No fixed number in the corner: by default a card shows
+                    // only the position and club, and any other figures (form,
+                    // price change...) are the ones the user chose.
+                    number: "",
+                    // Starters' positions are clear from their row on the
+                    // pitch; only the bench, in one line, needs the label.
+                    position: isBenched ? posLabel : "",
                     highlight: isHighlight ? (isBenchedGK ? "#38bdf8" : "#ffd400") : undefined,
                     club: r.team,
                     hot: !pointsView && Number(r.form) >= HOT_FORM,
@@ -1514,13 +1550,11 @@ function PlayerCard({
                     hero: pointsView && ownPoints >= ELITE_POINTS,
                     large: pointsView,
                     stats,
-                    priceChange:
-                      showPrice && r.priceChange
-                        ? {
-                            text: `${r.priceChange > 0 ? "+" : "−"}${(Math.abs(r.priceChange) / 10).toFixed(1)}`,
-                            color: r.priceChange > 0 ? "#00e676" : "#ff7a90",
-                          }
-                        : undefined,
+                    // The price change is now a figure the user can choose
+                    // ("Price change" in Card info), not shown by default.
+                    priceChange: undefined,
+                    flag:
+                      flag && !r.pendingIn && !r.autoSub ? <AvailabilityFlag flag={flag} /> : undefined,
                     footer: (
                       <CapsuleInfo
                         inCard={footerHeight}
@@ -1570,20 +1604,6 @@ function PlayerCard({
                   }}
                 >
                   <BonusChip points={r.provisionalBonus ?? 0} />
-                </View>
-              )}
-
-              {!!flag && !r.pendingIn && !r.autoSub && (
-                <View
-                  style={{
-                    position: "absolute",
-                    // Under the club code in the top-right corner.
-                    top: (r.pos > 11 ? 11 : 4) + 14,
-                    right: 2,
-                    zIndex: 11,
-                  }}
-                >
-                  <AvailabilityFlag flag={flag} />
                 </View>
               )}
 
@@ -1645,7 +1665,10 @@ function PlayerCard({
                   ...(isRightmost
                     ? { left: -(RAIL_WIDTH - 6) }
                     : { right: -(RAIL_WIDTH - 6) }),
-                  top: isBenched ? 4 : 0,
+                  // Strikers are the bottom row of the pitch: their rail
+                  // (taller than the card) grows upwards from the card's
+                  // bottom, so the bench below never covers it.
+                  ...(r.type === 4 && !isBenched ? { bottom: 0 } : { top: isBenched ? 4 : 0 }),
                   zIndex: 99,
                 }}
               >
@@ -1859,6 +1882,11 @@ function PitchRow({
 }
 
 const NO_STATS: CardStatKey[] = [];
+
+// On the cards, the club, the player's name and the opponent are at full
+// strength; the rest (position, form, chosen figures, price change) a little
+// quieter, so the important three stand out.
+const SECONDARY_OPACITY = 0.72;
 
 export function Pitch({
   picks,

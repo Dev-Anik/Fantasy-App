@@ -201,12 +201,14 @@ export function LeagueDetails({
 
       {/* Your position in this league */}
       <Stats
+        compact={isH2h}
         items={
           isH2h
             ? [
                 { label: "Your rank", value: ownRank ? formatNumber(ownRank) : "—" },
                 {
-                  label: "Won · Drawn · Lost",
+                  label: "W · D · L",
+                  spoken: "Won, drawn, lost",
                   value: ownRow ? `${ownRow.matches_won ?? 0} · ${ownRow.matches_drawn ?? 0} · ${ownRow.matches_lost ?? 0}` : "—",
                 },
                 { label: "League pts", value: ownRow ? formatNumber(ownRow.total) : "—" },
@@ -285,9 +287,10 @@ export function LeagueDetails({
                     <>
                       <HeaderCell width={42}>#</HeaderCell>
                       <HeaderCell flex={1}>Team</HeaderCell>
-                      <HeaderCell width={22} align="center">W</HeaderCell>
-                      <HeaderCell width={22} align="center">D</HeaderCell>
-                      <HeaderCell width={22} align="center">L</HeaderCell>
+                      <HeaderCell width={20} align="center">W</HeaderCell>
+                      <HeaderCell width={20} align="center">D</HeaderCell>
+                      <HeaderCell width={20} align="center">L</HeaderCell>
+                      <HeaderCell width={44} align="right">PF</HeaderCell>
                       <HeaderCell width={34} align="right">Pts</HeaderCell>
                     </>
                   ) : (
@@ -309,7 +312,9 @@ export function LeagueDetails({
                       <Pressable
                         onPress={() => viewMember(row)}
                         accessibilityRole="button"
-                        accessibilityLabel={`${row.entry_name || row.player_name}, rank ${row.rank}, ${row.total} points${isUser ? ", your team" : ""}. View team`}
+                        accessibilityLabel={`${row.entry_name || row.player_name}, rank ${row.rank}, ${row.total} points${
+                          isH2h && row.points_for != null ? `, ${row.points_for} scored in this league` : ""
+                        }${isUser ? ", your team" : ""}. View team`}
                         style={({ pressed }) => ({
                           flexDirection: "row",
                           alignItems: "center",
@@ -336,9 +341,12 @@ export function LeagueDetails({
                         </View>
                         {isH2h ? (
                           <>
-                            <Text style={cell(22, "center")}>{row.matches_won ?? 0}</Text>
-                            <Text style={cell(22, "center")}>{row.matches_drawn ?? 0}</Text>
-                            <Text style={cell(22, "center")}>{row.matches_lost ?? 0}</Text>
+                            <Text style={cell(20, "center")}>{row.matches_won ?? 0}</Text>
+                            <Text style={cell(20, "center")}>{row.matches_drawn ?? 0}</Text>
+                            <Text style={cell(20, "center")}>{row.matches_lost ?? 0}</Text>
+                            {/* Points scored in this league's matches (since it
+                                started): separates teams level on Pts. */}
+                            <Text style={cell(44)}>{row.points_for == null ? "—" : formatNumber(row.points_for)}</Text>
                             <Text style={cell(34, "right", UI.ink, "700")}>{row.total}</Text>
                           </>
                         ) : (
@@ -352,8 +360,10 @@ export function LeagueDetails({
                   );
                 })}
               </Group>
-              <Text style={{ color: UI.muted, fontSize: 11.5, marginTop: 6, marginLeft: 2 }}>
-                Tap a team to see its squad.
+              <Text style={{ color: UI.muted, fontSize: 11.5, lineHeight: 16, marginTop: 6, marginLeft: 2 }}>
+                {isH2h
+                  ? "PF: points scored in this league's matches since it started. Teams level on Pts are ranked by PF. Tap a team to see its squad."
+                  : "Tap a team to see its squad."}
               </Text>
             </>
           )}

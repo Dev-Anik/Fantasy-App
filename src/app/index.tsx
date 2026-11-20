@@ -54,7 +54,8 @@ import {
 import { computeLive } from "../live";
 import { LeagueHub } from "../LeagueHub";
 import { ManagerHistory } from "../ManagerHistory";
-import { loadEntryName } from "../fplPublic";
+import { loadEntryName, loadOverallRanks } from "../fplPublic";
+import type { RankPoint } from "../fplPublic";
 import { MorePage } from "../MorePage";
 import { PrivacyPolicy, TermsAndConditions } from "../LegalPage";
 import { FixturePlanner } from "../FixturePlanner";
@@ -62,6 +63,8 @@ import { MatchCentre } from "../MatchCentre";
 import { GameweekHelper } from "../GameweekHelper";
 import { CardInfoSheet } from "../CardInfoSheet";
 import { SaveProgress } from "../SaveProgress";
+import { CameraIcon, SquadSnapshot } from "../SquadSnapshot";
+import { loadSquadDirect } from "../squadDirect";
 import { loadCardStats, saveCardStats } from "../cardStats";
 import type { CardStatKey } from "../cardStats";
 import { APP_VERSION } from "../appInfo";
@@ -371,12 +374,37 @@ export default function Index() {
   // Extra figures on the home pitch's cards, chosen in "Card info" and saved.
   const [cardStats, setCardStats] = useState<CardStatKey[]>([]);
   const [showCardInfo, setShowCardInfo] = useState(false);
+  // The manager's overall rank after each gameweek (public history), for the
+  // movement beside the rank on the home screen. Read again when the rank
+  // changes (a new gameweek, or FPL updating the live rank).
+  const [rankHistory, setRankHistory] = useState<{ entry: number; points: RankPoint[] } | null>(null);
+  const rankEntry = squad?.entry;
+  const rankNow = squad?.overallRank;
   useEffect(() => {
-    loadCardStats().then(setCardStats);
+    if (!rankEntry) return;
+    let active = true;
+    loadOverallRanks(rankEntry).then((points) => {
+      if (active && points.length) setRankHistory({ entry: rankEntry, points });
+    });
+    return () => {
+      active = false;
+    };
+  }, [rankEntry, rankNow]);
+  // The squad picture being made (camera button on Home and Transfers).
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
+  // Transfers keeps its own choice (none by default: position and club only).
+  const [transferCardStats, setTransferCardStats] = useState<CardStatKey[]>([]);
+  useEffect(() => {
+    loadCardStats("lineup").then(setCardStats);
+    loadCardStats("transfers").then(setTransferCardStats);
   }, []);
+  // The choice for the page on screen.
+  const cardStatsPage = mode === "transfers" ? "transfers" : "lineup";
+  const shownCardStats = cardStatsPage === "transfers" ? transferCardStats : cardStats;
   const changeCardStats = (keys: CardStatKey[]) => {
-    setCardStats(keys);
-    saveCardStats(keys);
+    if (cardStatsPage === "transfers") setTransferCardStats(keys);
+    else setCardStats(keys);
+    saveCardStats(keys, cardStatsPage);
   };
   const [notifPermission, setNotifPermission] = useState<PermissionState>("undetermined");
   useEffect(() => {
@@ -639,16 +667,24 @@ export default function Index() {
     startLoginTimer();
     check();
   };
+  // Signed in, but the team couldn't be loaded after the automatic retries:
+  // offer Try again (on the sign-in screen). At start-up, leave the loading
+  // screen for it, so a signed-in user is never left waiting or shown as
+  // signed out.
+  const squadLoadGaveUp = (text: string) => {
+    setSquadLoadFailed(true);
+    finishLogin(text);
+    if (stageRef.current === "checking") setStage("login");
+  };
   const startLoginTimer = () => {
     stopLoginTimer();
+    // Generous: the team load tries FPL directly, then the web page route
+    // with its retries, and on a slow connection that all takes time. This
+    // only catches a load that never answers at all.
     loginTimer.current = setTimeout(() => {
       loginTimer.current = null;
-      awaitingSquad.current = false;
-      setLoginLoading(false);
-      setLoginError(
-        "Sign in is taking too long. Please check your connection and try again.",
-      );
-    }, 45000);
+      squadLoadGaveUp("Loading your team is taking too long. Check your connection and tap Try again.");
+    }, 90000);
   };
   useEffect(() => stopLoginTimer, []);
 
@@ -708,13 +744,15 @@ export default function Index() {
         }
         queuedScripts.current.push(wrapped);
         // Safety net: never hold a request for long if the page does not
-        // report that it finished loading.
+        // report that it finished loading. (The FPL site is heavy: on a slow
+        // connection it can take a while, and a request sent before it has
+        // loaded is blocked, so wait a fair time first.)
         setTimeout(() => {
           const index = queuedScripts.current.indexOf(wrapped);
           if (index < 0) return;
           queuedScripts.current.splice(index, 1);
           webRef.current?.injectJavaScript(wrapped);
-        }, 6000);
+        }, 12000);
       });
   };
 
@@ -738,10 +776,21 @@ export default function Index() {
           if (cachedSquad && cachedSquad.entry) {
             setSquad(cachedSquad);
             setStage("squad");
+            return;
           }
+        }
+        // Signed in, but no saved team to show yet: wait for it on the
+        // loading screen, with the same retries and time limit as a sign-in
+        // (if it can't be loaded, Try again is offered).
+        if (stageRef.current === "checking") {
+          awaitingSquad.current = true;
+          squadRetries.current = 0;
+          startLoginTimer();
         }
       } catch {}
     })();
+    // Runs once, at launch; startLoginTimer only uses refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Coming back to the app: renew the session if it is close to expiring, so
@@ -958,12 +1007,12 @@ export default function Index() {
   // Couldn't renew the sign-in for a network reason: keep it, say so, and try
   // again shortly.
   const offlineRetry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleWebMessage = useRef<((e: { nativeEvent: { data: string } }) => void) | null>(null);
   const squadOffline = () => {
     setRefreshing(false);
     if (awaitingSquad.current) {
       setSquadLoadDetail("could not reach FPL to renew the sign-in");
-      setSquadLoadFailed(true);
-      finishLogin("Couldn't reach FPL. Check your connection and tap Try again.");
+      squadLoadGaveUp("Couldn't reach FPL. Check your connection and tap Try again.");
       return;
     }
     if (stageRef.current === "squad") {
@@ -975,8 +1024,31 @@ export default function Index() {
       if (!signedOut.current) check();
     }, 15_000);
   };
-  const check = (options: { force?: boolean } = {}) =>
-    runInWeb(buildFetchJs(), { force: options.force, onOffline: squadOffline });
+  // Loading the team: straight from FPL first (squadDirect.ts), which doesn't
+  // depend on the hidden web page having loaded. Only if that doesn't fully
+  // work does the web page route run, with all its sign-in and outage
+  // handling, so the direct route can never sign anyone out by mistake.
+  const check = (options: { force?: boolean } = {}) => {
+    const viaWeb = () => runInWeb(buildFetchJs(), { force: options.force, onOffline: squadOffline });
+    getAccessToken({ force: options.force }).then(
+      (token) => {
+        if (!token) {
+          viaWeb();
+          return;
+        }
+        loadSquadDirect(token).then((result) => {
+          if (signedOut.current) return;
+          if (!result.ok) {
+            viaWeb();
+            return;
+          }
+          handleWebMessage.current?.({ nativeEvent: { data: JSON.stringify(result) } });
+        });
+      },
+      // Couldn't get a token: the web page route reports why, as before.
+      () => viaWeb(),
+    );
+  };
   // FPL refused the sign-in once already this round; a second refusal after
   // a fresh renewal is final.
   const authRetried = useRef(false);
@@ -1307,10 +1379,17 @@ export default function Index() {
   useEffect(() => {
     if (stage !== "checking") return;
     check();
-    const t = setTimeout(
-      () => setStage((s) => (s === "checking" ? "welcome" : s)),
-      8000,
-    );
+    // Safety net for someone who isn't signed in: never sit on the loading
+    // screen. A signed-in user waits for their team instead (see above), so
+    // they are never shown the welcome screen as if signed out.
+    const t = setTimeout(() => {
+      hasSession().then(
+        (signedIn) => {
+          if (!signedIn) setStage((s) => (s === "checking" ? "welcome" : s));
+        },
+        () => setStage((s) => (s === "checking" ? "welcome" : s)),
+      );
+    }, 8000);
     return () => clearTimeout(t);
     // Runs when the stage becomes "checking"; check is remade each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1664,21 +1743,28 @@ export default function Index() {
     } else if (awaitingSquad.current) {
       // FPL often fails briefly right after a sign-in (or while the game is
       // updating): try twice more on our own before asking the user.
-      if (squadRetries.current < 2) {
+      if (squadRetries.current < 3) {
         squadRetries.current += 1;
+        // Before the last try, start a fresh hidden FPL page in case this one
+        // is stuck (it reloads, then the try below runs once it's ready).
+        if (squadRetries.current === 3) restartWeb();
         setTimeout(() => {
           if (awaitingSquad.current) check();
-        }, 2000 * squadRetries.current);
+        }, [2000, 5000, 10000][squadRetries.current - 1]);
         return;
       }
-      setSquadLoadFailed(true);
-      finishLogin(
+      squadLoadGaveUp(
         isTemporary(msg.error)
           ? `${userMessage(msg.error)} You're signed in; tap Try again shortly.`
           : "You're signed in, but we couldn't load your team from FPL. Tap Try again.",
       );
     }
   };
+  // The message handler, for results that don't come from the web page (the
+  // direct team load, in check() above).
+  useEffect(() => {
+    handleWebMessage.current = onMessage;
+  });
 
   const refresh = () => {
     setError("");
@@ -1925,6 +2011,12 @@ export default function Index() {
     });
   }, [squad, draft, tdraft]);
 
+  // Squad value at today's prices: the 15 players' current prices added up
+  // (the bank not included), with any pending transfers made. The same
+  // figure the season review shows, so the two always agree.
+  const squadValueAfter = tdraft.reduce((total, p) => total + (p.price ?? p.buy), 0);
+  const squadValueNow = squad ? squad.picks.reduce((total, p) => total + (p.price ?? p.buy), 0) : 0;
+
   const bankAfter = squad
     ? squad.bank +
       pending.reduce((sum, t) => {
@@ -1933,8 +2025,11 @@ export default function Index() {
       }, 0)
     : 0;
 
+  // Something to review or reset on the transfer page (shown in the header).
+  const transfersPending = pending.length > 0 || pendingChip === "wildcard" || pendingChip === "freehit";
+
   const freeLeft = squad?.freeTransfers ?? null;
-  const extra = freeLeft == null ? 0 : Math.max(pending.length - freeLeft, 0);
+  const extra =freeLeft == null ? 0 : Math.max(pending.length - freeLeft, 0);
   const hit = extra * (squad?.hitCost ?? 4);
 
   // Budget and club-limit info for the spot being replaced
@@ -2299,6 +2394,7 @@ export default function Index() {
         >
           <Wordmark size={32} />
           <ActivityIndicator color={GREEN} style={{ marginTop: 24 }} />
+          <Text style={{ color: THEME.muted, fontSize: 12.5, marginTop: 12 }}>Loading your team…</Text>
         </View>
       )}
 
@@ -2321,7 +2417,7 @@ export default function Index() {
               />
               <Wordmark size={40} weight="900" />
             </View>
-            <Text style={{ color: "#c9d6cf", fontSize: 17, marginTop: 14, lineHeight: 24 }}>
+            <Text style={{ color: THEME.soft, fontSize: 17, marginTop: 14, lineHeight: 24 }}>
               Manage your Fantasy Premier League team with live points, smart
               alerts and season insights.
             </Text>
@@ -2386,7 +2482,7 @@ export default function Index() {
             </Text>
             <Text
               style={{
-                color: "#5f7068",
+                color: THEME.muted,
                 fontSize: 11,
                 textAlign: "center",
                 marginTop: 8,
@@ -2461,9 +2557,9 @@ export default function Index() {
               flexDirection: "row",
               alignItems: "center",
               paddingHorizontal: 16,
-              backgroundColor: "rgba(14, 38, 26, 0.95)",
+              backgroundColor: THEME.bg,
               borderBottomWidth: 1.5,
-              borderBottomColor: "rgba(0, 217, 130, 0.25)",
+              borderBottomColor: "rgba(255, 255, 255, 0.08)",
             }}
           >
             <Pressable onPress={closeGoogleModal} hitSlop={12}>
@@ -2544,9 +2640,12 @@ export default function Index() {
                   alignItems: "center",
                   paddingHorizontal: 2,
                   marginBottom: showLeagues ? 0 : 2,
+                  // Same height on every tab, so the logo never shifts.
+                  height: 28,
                 }}
               >
-                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                {/* The logo never shrinks: whatever sits on the right gives way. */}
+                <View style={{ flexDirection: "row", alignItems: "center", flexShrink: 0 }}>
                   <Wordmark size={16} weight="900" />
                   {!showLeagues && (
                     <Pressable
@@ -2587,8 +2686,72 @@ export default function Index() {
                 <View style={{ flex: 1 }} />
 
                 {!showLeagues && (
-                  mode === "transfers" || mode === "more" ? (
-                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  mode === "transfers" && transfersPending ? (
+                    // Pending transfers: Reset and Review live here, in the
+                    // header (the cost and bank are in the bar below it).
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginLeft: 10 }}>
+                      <Pressable
+                        onPress={() => {
+                          setPending([]);
+                          setPendingChip(null);
+                        }}
+                        disabled={sending}
+                        accessibilityRole="button"
+                        accessibilityLabel="Reset all transfers"
+                        hitSlop={8}
+                        style={({ pressed }) => ({
+                          height: 28,
+                          paddingHorizontal: 10,
+                          borderRadius: 14,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 4,
+                          borderWidth: 1,
+                          borderColor: "rgba(255, 255, 255, 0.16)",
+                          backgroundColor: pressed ? "rgba(255, 255, 255, 0.1)" : "rgba(255, 255, 255, 0.04)",
+                          opacity: sending ? 0.5 : 1,
+                        })}
+                      >
+                        <AppSymbol
+                          name={{ ios: "arrow.uturn.backward", android: "undo", web: "undo" }}
+                          color={THEME.soft}
+                          size={13}
+                        />
+                        <Text style={{ color: THEME.soft, fontWeight: "600", fontSize: 12 }}>Reset</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={reviewTransfers}
+                        disabled={sending || pending.length === 0}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Review and confirm ${pending.length} transfer${pending.length === 1 ? "" : "s"}`}
+                        hitSlop={8}
+                        style={({ pressed }) => ({
+                          height: 28,
+                          paddingLeft: 12,
+                          paddingRight: 8,
+                          borderRadius: 14,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 4,
+                          backgroundColor: THEME.accent,
+                          opacity: sending || pending.length === 0 ? 0.45 : pressed ? 0.85 : 1,
+                        })}
+                      >
+                        {sending && <ActivityIndicator color={THEME.onAccent} size="small" />}
+                        <Text style={{ color: THEME.onAccent, fontWeight: "700", fontSize: 12.5 }}>
+                          {sending ? "Sending" : `Review ${pending.length}`}
+                        </Text>
+                        {!sending && (
+                          <AppSymbol
+                            name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
+                            color={THEME.onAccent}
+                            size={14}
+                          />
+                        )}
+                      </Pressable>
+                    </View>
+                  ) : mode === "transfers" || mode === "more" ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", flexShrink: 1, minWidth: 0, marginLeft: 10 }}>
                       <View
                         style={{
                           width: 3,
@@ -2601,6 +2764,7 @@ export default function Index() {
                       <Text
                         numberOfLines={1}
                         style={{
+                          flexShrink: 1,
                           color: "#fff",
                           fontSize: 12,
                           fontWeight: "500",
@@ -2621,10 +2785,10 @@ export default function Index() {
                         paddingVertical: 5,
                         borderWidth: 1,
                         borderColor: "rgba(255,255,255,0.12)",
-                        backgroundColor: "rgba(14, 38, 26, 0.6)",
+                        backgroundColor: "rgba(21, 27, 44, 0.85)",
                       }}
                     >
-                      <Text style={{ color: "#c5d8ce", fontSize: 11, fontWeight: "800" }}>
+                      <Text style={{ color: THEME.soft, fontSize: 11, fontWeight: "800" }}>
                         GW {squad.gw}
                         {squad.chip ? ` · ${squad.chip}` : ""}
                       </Text>
@@ -2684,6 +2848,14 @@ export default function Index() {
                 return (
                   <View style={{ marginTop: 4, marginHorizontal: 2 }}>
                     <SquadSummaryBar
+                      rankChange={(() => {
+                        // This gameweek's rank against the one before it (the
+                        // last gameweek played before this one).
+                        const shown = liveNow?.overallRank ?? squad.overallRank ?? null;
+                        if (!shown || rankHistory?.entry !== squad.entry || eventId == null) return null;
+                        const before = rankHistory.points.filter((point) => point.event < eventId).pop();
+                        return before ? before.rank - shown : null;
+                      })()}
                       gameweek={eventId ?? null}
                       gameweekPoints={liveNow ? liveNow.total : (squad.eventPoints ?? null)}
                       live={Boolean(eventGw?.isCurrent && !eventGw.finished)}
@@ -2752,7 +2924,7 @@ export default function Index() {
                 bank={bankAfter}
                 pointsCost={pendingChip ? 0 : hit}
                 chipLabel={pendingChip ? selectedChipOption?.label ?? "Chip active" : null}
-                squadValue={squad.value}
+                squadValue={squadValueAfter}
               />
             </Animated.View>
           )}
@@ -2864,7 +3036,7 @@ export default function Index() {
                       setPlayerSheetOpen(true);
                     }}
                     onBackgroundPress={() => setSelectedPos(null)}
-                    cardStats={mode === "lineup" ? cardStats : undefined}
+                    cardStats={shownCardStats}
                     overlay={
                       <View
                         pointerEvents="box-none"
@@ -2877,8 +3049,9 @@ export default function Index() {
                           zIndex: 10,
                         }}
                       >
-                        {/* Top right: choose extra info for the cards */}
-                        {mode === "lineup" && (
+                        {/* Top right: choose extra info for the cards (Home
+                            and Transfers each keep their own choice) */}
+                        {(mode === "lineup" || mode === "transfers") && (
                           <Pressable
                             onPress={() => setShowCardInfo(true)}
                             accessibilityRole="button"
@@ -2894,7 +3067,7 @@ export default function Index() {
                               alignItems: "center",
                               justifyContent: "center",
                               borderWidth: 1,
-                              borderColor: cardStats.length ? THEME.accentLine : "rgba(255, 255, 255, 0.14)",
+                              borderColor: shownCardStats.length ? THEME.accentLine : "rgba(255, 255, 255, 0.14)",
                               backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
                               elevation: 5,
                               shadowColor: "#000",
@@ -2905,11 +3078,45 @@ export default function Index() {
                           >
                             <AppSymbol
                               name={{ ios: "slider.horizontal.3", android: "tune", web: "tune" }}
-                              color={cardStats.length ? THEME.accent : THEME.ink}
+                              color={shownCardStats.length ? THEME.accent : THEME.ink}
                               size={18}
                             />
                           </Pressable>
                         )}
+                        {/* Top right (under card info on Home): a picture of
+                            the squad to share */}
+                        <Pressable
+                          onPress={() => {
+                            setSelectedPos(null);
+                            setPlayerSheetOpen(false);
+                            setShowChipMenu(false);
+                            setSnapshotOpen(true);
+                          }}
+                          disabled={snapshotOpen}
+                          accessibilityRole="button"
+                          accessibilityLabel="Share a picture of your squad"
+                          style={({ pressed }) => ({
+                            position: "absolute",
+                            top: 54,
+                            right: 8,
+                            zIndex: 10,
+                            width: 38,
+                            height: 38,
+                            borderRadius: 19,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            borderWidth: 1,
+                            borderColor: "rgba(255, 255, 255, 0.14)",
+                            backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
+                            elevation: 5,
+                            shadowColor: "#000",
+                            shadowOpacity: 0.3,
+                            shadowRadius: 6,
+                            shadowOffset: { width: 0, height: 2 },
+                          })}
+                        >
+                          <CameraIcon color={THEME.ink} size={18} />
+                        </Pressable>
                         {/* Top Left Chip Button */}
                         <View
                           pointerEvents="box-none"
@@ -2937,7 +3144,7 @@ export default function Index() {
                               borderColor: showChipMenu
                                 ? "rgba(255, 255, 255, 0.35)"
                                 : "rgba(255, 255, 255, 0.14)",
-                              backgroundColor: pressed ? "#2c3431" : "#212826",
+                              backgroundColor: pressed ? "#252d45" : THEME.surfaceRaised,
                               elevation: 5,
                               shadowColor: "#000",
                               shadowOpacity: 0.3,
@@ -2951,7 +3158,7 @@ export default function Index() {
                                 android: "layers",
                                 web: "layers",
                               }}
-                              color="#e6efe9"
+                              color={THEME.ink}
                               size={18}
                             />
                             {(pendingChip || squad.chip) && (
@@ -2965,7 +3172,7 @@ export default function Index() {
                                   borderRadius: 5,
                                   backgroundColor: GREEN,
                                   borderWidth: 1.5,
-                                  borderColor: "#212826",
+                                  borderColor: THEME.surfaceRaised,
                                 }}
                               />
                             )}
@@ -2981,7 +3188,7 @@ export default function Index() {
                                 borderRadius: 16,
                                 borderWidth: 1,
                                 borderColor: "rgba(255, 255, 255, 0.08)",
-                                backgroundColor: "#212826",
+                                backgroundColor: THEME.surfaceRaised,
                                 elevation: 14,
                                 shadowColor: "#000",
                                 shadowOpacity: 0.4,
@@ -3000,7 +3207,7 @@ export default function Index() {
                                 <Text
                                   accessibilityRole="header"
                                   style={{
-                                    color: "#9db3a6",
+                                    color: THEME.muted,
                                     fontSize: 11,
                                     fontWeight: "800",
                                     letterSpacing: 0.6,
@@ -3020,7 +3227,7 @@ export default function Index() {
                                       android: "close",
                                       web: "close",
                                     }}
-                                    color="#9db3a6"
+                                    color={THEME.muted}
                                     size={16}
                                   />
                                 </Pressable>
@@ -3082,7 +3289,7 @@ export default function Index() {
                                     >
                                       <AppSymbol
                                         name={CHIP_SYMBOLS[chip.id]}
-                                        color={highlighted ? GREEN : usable ? "#e6efe9" : "#9db3a6"}
+                                        color={highlighted ? GREEN : usable ? THEME.ink : THEME.muted}
                                         size={17}
                                       />
                                       <View style={{ flex: 1 }}>
@@ -3100,7 +3307,7 @@ export default function Index() {
                                         </Text>
                                         <Text
                                           style={{
-                                            color: highlighted ? GREEN : "#9db3a6",
+                                            color: highlighted ? GREEN : THEME.muted,
                                             fontSize: 9.5,
                                             fontWeight: highlighted ? "800" : "600",
                                             marginTop: 1,
@@ -3180,146 +3387,6 @@ export default function Index() {
             onRetryElement={() => readFplData.current(true)}
             teamNames={teamNames}
           />
-
-
-
-          {/* Summary bar: transfers mode */}
-          {mode === "transfers" &&
-            (pending.length > 0 ||
-              pendingChip === "wildcard" ||
-              pendingChip === "freehit") &&
-            selectedPos === null && (
-              <View
-                style={{
-                  position: "absolute",
-                  left: 16,
-                  right: 16,
-                  bottom: insets.bottom + 116,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 8,
-                  paddingVertical: 8,
-                  paddingLeft: 16,
-                  paddingRight: 8,
-                  borderRadius: 24,
-                  backgroundColor: "rgba(27, 34, 54, 0.97)",
-                  borderWidth: 1,
-                  borderColor: "rgba(255, 255, 255, 0.1)",
-                  shadowColor: "#000",
-                  shadowOpacity: 0.45,
-                  shadowRadius: 18,
-                  shadowOffset: { width: 0, height: 8 },
-                  elevation: 12,
-                }}
-              >
-                {/* What is pending, and what it costs */}
-                <View
-                  accessible
-                  accessibilityLabel={`${pending.length} pending transfer${pending.length === 1 ? "" : "s"}, ${
-                    pendingChip
-                      ? `${selectedChipOption?.label ?? "chip"}, free`
-                      : hit > 0
-                        ? `costs ${hit} points`
-                        : "no points cost"
-                  }`}
-                  style={{ flex: 1 }}
-                >
-                  <Text style={{ color: THEME.muted, fontSize: 9.5, fontWeight: "600", letterSpacing: 1.6 }}>
-                    PENDING
-                  </Text>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 }}>
-                    <Text numberOfLines={1} style={{ color: THEME.ink, fontWeight: "700", fontSize: 15 }}>
-                      {pending.length} transfer{pending.length === 1 ? "" : "s"}
-                    </Text>
-                    <View
-                      style={{
-                        paddingHorizontal: 7,
-                        paddingVertical: 2,
-                        borderRadius: 8,
-                        backgroundColor:
-                          hit > 0 && !pendingChip ? "rgba(255, 107, 125, 0.14)" : "rgba(47, 211, 154, 0.12)",
-                      }}
-                    >
-                      <Text
-                        numberOfLines={1}
-                        style={{
-                          color: hit > 0 && !pendingChip ? THEME.bad : THEME.good,
-                          fontSize: 11,
-                          fontWeight: "700",
-                          fontVariant: ["tabular-nums"],
-                        }}
-                      >
-                        {pendingChip
-                          ? `${selectedChipOption?.label ?? "Chip"} · free`
-                          : hit > 0
-                            ? `−${hit} pts`
-                            : "Free"}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-                <Pressable
-                  onPress={() => {
-                    setPending([]);
-                    setPendingChip(null);
-                  }}
-                  disabled={sending}
-                  accessibilityRole="button"
-                  accessibilityLabel="Reset all transfers"
-                  hitSlop={4}
-                  style={({ pressed }) => ({
-                    height: 42,
-                    paddingHorizontal: 14,
-                    borderRadius: 21,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 5,
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.14)",
-                    backgroundColor: pressed ? "rgba(255, 255, 255, 0.08)" : "transparent",
-                    opacity: sending ? 0.5 : 1,
-                  })}
-                >
-                  <AppSymbol
-                    name={{ ios: "arrow.uturn.backward", android: "undo", web: "undo" }}
-                    color={THEME.soft}
-                    size={15}
-                  />
-                  <Text style={{ color: THEME.soft, fontWeight: "600", fontSize: 13.5 }}>Reset</Text>
-                </Pressable>
-                <Pressable
-                  onPress={reviewTransfers}
-                  disabled={sending || pending.length === 0}
-                  accessibilityRole="button"
-                  accessibilityLabel="Review and confirm transfers"
-                  style={({ pressed }) => ({
-                    height: 42,
-                    paddingLeft: 18,
-                    paddingRight: 14,
-                    borderRadius: 21,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 4,
-                    backgroundColor: THEME.accent,
-                    opacity: sending || pending.length === 0 ? 0.45 : pressed ? 0.85 : 1,
-                  })}
-                >
-                  {sending && <ActivityIndicator color={THEME.onAccent} size="small" />}
-                  <Text style={{ color: THEME.onAccent, fontWeight: "700", fontSize: 14 }}>
-                    {sending ? "Sending" : "Review"}
-                  </Text>
-                  {!sending && (
-                    <AppSymbol
-                      name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
-                      color={THEME.onAccent}
-                      size={16}
-                    />
-                  )}
-                </Pressable>
-              </View>
-            )}
 
           <PlayerPicker
             visible={pickPos !== null}
@@ -3473,6 +3540,7 @@ export default function Index() {
           <SeasonInsights
             entry={squad.entry}
             teamName={squad.teamName || "Your team"}
+            live={{ squadValue: squadValueNow, bank: squad.bank }}
             onBack={() => setShowSeason(false)}
           />
         )}
@@ -3534,7 +3602,8 @@ export default function Index() {
       </AnimatedScreen>
       <CardInfoSheet
         visible={showCardInfo && stage === "squad"}
-        selected={cardStats}
+        selected={shownCardStats}
+        page={cardStatsPage}
         onChange={changeCardStats}
         onClose={() => setShowCardInfo(false)}
       />
@@ -3544,6 +3613,26 @@ export default function Index() {
       <AnimatedScreen visible={showTerms} zIndex={30}>
         {showTerms && <TermsAndConditions onBack={() => setShowTerms(false)} />}
       </AnimatedScreen>
+      {stage === "squad" && snapshotOpen && squad && (
+        <SquadSnapshot
+          picks={shownPicks}
+          selectedGw={currentSelectedGw}
+          showPrice={mode === "transfers"}
+          gameweekName={squad.gameweeks.find((gw) => gw.id === squad.gw)?.name ?? `Gameweek ${squad.gw}`}
+          chip={pendingChip ?? squad.chip}
+          bank={mode === "transfers" ? bankAfter : null}
+          // Same rule as the transfer bar: unlimited with a chip or before
+          // the season, otherwise what's left after the pending transfers.
+          freeTransfers={
+            mode !== "transfers"
+              ? undefined
+              : freeLeft == null || pendingChip
+                ? null
+                : Math.max(freeLeft - pending.length, 0)
+          }
+          onDone={() => setSnapshotOpen(false)}
+        />
+      )}
       {stage === "squad" && (
         <SaveProgress
           key="save-progress"

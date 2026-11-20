@@ -8,8 +8,9 @@ import { computeLive } from "./live";
 import { Pitch } from "./Pitch";
 import { PointsBadge } from "./PointsBadge";
 import { PlayerMatchSheet } from "./PlayerMatchSheet";
+import { CameraIcon, SquadSnapshot } from "./SquadSnapshot";
 import type { PlayerMatchTarget } from "./PlayerMatchSheet";
-import { ScreenBackground, THEME } from "./theme";
+import { PITCH_PANEL, ScreenBackground, THEME } from "./theme";
 
 type Props = {
   title: string;
@@ -33,14 +34,22 @@ const DARK_GREEN = THEME.bg;
 
 // Small status lines under the points badge.
 const STATUS_TEXT = {
-  color: "#d7e6dd",
+  color: THEME.soft,
   fontSize: 10,
   fontWeight: "800" as const,
-  backgroundColor: "rgba(4, 16, 10, 0.88)",
+  backgroundColor: "rgba(11, 16, 32, 0.88)",
   borderRadius: 8,
   paddingHorizontal: 7,
   paddingVertical: 2,
   overflow: "hidden" as const,
+};
+
+type Size = { width: number; height: number };
+// A measured size, kept as the same object when it hasn't really changed (so
+// measuring doesn't re-render forever).
+const sameSize = (current: Size | null, next: Size): Size => {
+  const rounded = { width: Math.ceil(next.width), height: Math.ceil(next.height) };
+  return current && current.width === rounded.width && current.height === rounded.height ? current : rounded;
 };
 
 const CHIP_LABELS: Record<string, string> = {
@@ -67,6 +76,15 @@ export function ManagerHistory({
 }: Props) {
   const insets = useSafeAreaInsets();
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The points card and the average/highest card measure themselves; both
+  // then take the larger width and height, so they match and neither clips.
+  const [badgeSize, setBadgeSize] = useState<Size | null>(null);
+  const [statsSize, setStatsSize] = useState<Size | null>(null);
+  const sharedSize =
+    badgeSize && statsSize
+      ? { width: Math.max(badgeSize.width, statsSize.width), height: Math.max(badgeSize.height, statsSize.height) }
+      : null;
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
   // The player whose match is open (tapped on the pitch).
   const [openPlayer, setOpenPlayer] = useState<PlayerMatchTarget | null>(null);
   const ownData = data?.entry === entry ? data : null;
@@ -185,6 +203,33 @@ export function ManagerHistory({
             <Text style={{ color: THEME.soft, fontSize: 14, fontWeight: "500" }}>Back</Text>
           </Pressable>
 
+          <View style={{ flex: 1 }} />
+          {/* A picture of this gameweek's squad to share */}
+          {!!currentData && !stale && (
+            <Pressable
+              onPress={() => {
+                setOpenPlayer(null);
+                setSnapshotOpen(true);
+              }}
+              disabled={snapshotOpen}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Share a picture of this squad"
+              style={({ pressed }) => ({
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                marginRight: 8,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: "rgba(255, 255, 255, 0.1)",
+                backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
+              })}
+            >
+              <CameraIcon color={THEME.ink} size={16} />
+            </Pressable>
+          )}
           <Pressable
             onPress={() => setPickerOpen(true)}
             disabled={gameweeks.length === 0}
@@ -234,6 +279,31 @@ export function ManagerHistory({
               </Text>
             )}
           </View>
+          {/* The chip played this gameweek: here in the header, clear of the
+              players on the pitch. */}
+          {!!currentData?.chip && (
+            <View
+              accessible
+              accessibilityLabel={`Chip played: ${CHIP_LABELS[currentData.chip] ?? currentData.chip}`}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                marginLeft: 10,
+                paddingHorizontal: 10,
+                height: 26,
+                borderRadius: 13,
+                backgroundColor: THEME.accentSoft,
+                borderWidth: 1,
+                borderColor: THEME.accentLine,
+              }}
+            >
+              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: THEME.accent }} />
+              <Text style={{ color: THEME.accent, fontWeight: "700", fontSize: 11, letterSpacing: 0.4 }}>
+                {CHIP_LABELS[currentData.chip] ?? currentData.chip}
+              </Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -286,11 +356,20 @@ export function ManagerHistory({
             overlay={
               <>
                 <View pointerEvents="none" style={{ position: "absolute", top: 8, right: 8, zIndex: 10 }}>
+                  {/* Measured, so the average/highest card can match its size. */}
+                  <View
+                    onLayout={(event) => {
+                      const layout = event.nativeEvent.layout;
+                      setBadgeSize((size) => sameSize(size, layout));
+                    }}
+                  >
                   <PointsBadge
+                    minSize={sharedSize}
                     gameweek={shownEvent}
                     points={currentData ? totalPts : null}
                     live={isLive}
                   />
+                  </View>
                   {currentData && (isLive || (currentData.history.transferCost ?? 0) > 0) && (
                     <View
                       style={{
@@ -321,6 +400,8 @@ export function ManagerHistory({
                 >
                   {selectedGwData && (
                     <GameweekStats
+                      size={sharedSize}
+                      onMeasure={(layout) => setStatsSize((size) => sameSize(size, layout))}
                       average={selectedGwData.averageScore ?? null}
                       highest={selectedGwData.highestScore ?? null}
                       onOpenHighest={
@@ -330,24 +411,6 @@ export function ManagerHistory({
                       }
                     />
                   )}
-                {currentData?.chip && (
-                  <View pointerEvents="none">
-                    <View
-                      style={{
-                        backgroundColor: "rgba(4, 16, 10, 0.92)",
-                        borderRadius: 12,
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                        borderWidth: 1,
-                        borderColor: GREEN,
-                      }}
-                    >
-                      <Text style={{ color: GREEN, fontWeight: "900", fontSize: 11, letterSpacing: 0.3 }}>
-                        {CHIP_LABELS[currentData.chip] ?? currentData.chip}
-                      </Text>
-                    </View>
-                  </View>
-                )}
                 </View>
               </>
             }
@@ -378,7 +441,7 @@ export function ManagerHistory({
           <View style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: 24 }}>
             <Text
               style={{
-                color: "#9db3a6",
+                color: THEME.muted,
                 fontSize: 14,
                 fontWeight: "600",
                 textAlign: "center",
@@ -390,6 +453,18 @@ export function ManagerHistory({
           </View>
         ) : null}
       </View>
+
+      {snapshotOpen && currentData && (
+        <SquadSnapshot
+          picks={picks}
+          selectedGw={shownEvent}
+          showPrice={false}
+          gameweekName={selectedGwData?.name ?? `Gameweek ${shownEvent}`}
+          chip={currentData.chip}
+          points={totalPts}
+          onDone={() => setSnapshotOpen(false)}
+        />
+      )}
     </View>
   );
 }
@@ -398,10 +473,15 @@ export function ManagerHistory({
 // The gameweek's average and highest score across all FPL teams, in the
 // pitch's top-left corner. Tapping the highest opens that team.
 function GameweekStats({
+  size,
+  onMeasure,
   average,
   highest,
   onOpenHighest,
 }: {
+  // The size both cards share (the larger of the two), once measured.
+  size: { width: number; height: number } | null;
+  onMeasure: (layout: { width: number; height: number }) => void;
   average: number | null;
   highest: number | null;
   onOpenHighest?: () => void;
@@ -412,28 +492,39 @@ function GameweekStats({
   const canOpen = !!onOpenHighest && top !== "—";
   const label = {
     color: THEME.muted,
-    fontSize: 8.5,
+    fontSize: 7.5,
+    lineHeight: 9,
     fontWeight: "500" as const,
     letterSpacing: 1.4,
     includeFontPadding: false,
   };
   const value = {
     color: THEME.ink,
-    fontSize: 17,
-    lineHeight: 20,
+    fontSize: 14,
+    lineHeight: 16,
     fontWeight: "700" as const,
     fontVariant: ["tabular-nums" as const],
     includeFontPadding: false,
   };
+  // Each half shares out any extra height, its text centred like the
+  // points card's; never less than its own padding, so nothing is clipped.
+  const half = {
+    flexGrow: 1,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  };
   return (
     <View
+      onLayout={(event) => onMeasure(event.nativeEvent.layout)}
       style={{
-        minWidth: 76,
+        // At least the points card's size: both cards grow to the larger.
+        minWidth: Math.max(64, size?.width ?? 0),
+        minHeight: size?.height,
         borderRadius: 14,
         overflow: "hidden",
-        backgroundColor: "rgba(11, 16, 32, 0.88)",
-        borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.1)",
+        ...PITCH_PANEL,
         shadowColor: "#000",
         shadowOpacity: 0.4,
         shadowRadius: 10,
@@ -444,10 +535,10 @@ function GameweekStats({
       <View
         accessible
         accessibilityLabel={`Average score: ${avg === "—" ? "not available yet" : `${avg} points`}`}
-        style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 7 }}
+        style={half}
       >
         <Text maxFontSizeMultiplier={1.2} style={label}>AVERAGE</Text>
-        <Text maxFontSizeMultiplier={1.2} style={[value, { marginTop: 3 }]}>{avg}</Text>
+        <Text maxFontSizeMultiplier={1.2} style={[value, { marginTop: 2 }]}>{avg}</Text>
       </View>
       <View style={{ height: 1, marginHorizontal: 10, backgroundColor: "rgba(255, 255, 255, 0.08)" }} />
       <Pressable
@@ -457,14 +548,12 @@ function GameweekStats({
         accessibilityLabel={`Highest score: ${top === "—" ? "not available yet" : `${top} points`}`}
         accessibilityHint={canOpen ? "Shows the team that scored it" : undefined}
         style={({ pressed }) => ({
-          paddingHorizontal: 12,
-          paddingTop: 7,
-          paddingBottom: 8,
+          ...half,
           backgroundColor: pressed ? THEME.accentSoft : "transparent",
         })}
       >
         <Text maxFontSizeMultiplier={1.2} style={label}>HIGHEST</Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 }}>
           <Text maxFontSizeMultiplier={1.2} style={[value, { color: canOpen ? THEME.accent : THEME.ink }]}>{top}</Text>
           {canOpen && (
             <AppSymbol name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }} color={THEME.accent} size={13} />

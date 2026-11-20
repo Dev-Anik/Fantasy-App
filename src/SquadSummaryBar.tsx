@@ -13,11 +13,24 @@ type Props = {
   season: string;
   totalPoints: number | null;
   overallRank: number | null;
+  // Places gained (positive) or lost (negative) since the last gameweek;
+  // null when there's nothing to compare with.
+  rankChange?: number | null;
   onOpenPoints: () => void;
 };
 
 const formatNumber = (value: number) =>
   String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+// Short form for the movement beside the rank: 950, 12.3K, 1.2M.
+const shortNumber = (value: number) =>
+  value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+    : value >= 10_000
+      ? `${Math.round(value / 1000)}K`
+      : value >= 1000
+        ? `${(value / 1000).toFixed(1).replace(/\.0$/, "")}K`
+        : String(value);
 
 function Label({ children, color = MUTED }: { children: string; color?: string }) {
   return (
@@ -70,8 +83,11 @@ export function SquadSummaryBar({
   season,
   totalPoints,
   overallRank,
+  rankChange = null,
   onOpenPoints,
 }: Props) {
+  const moved = rankChange != null && rankChange !== 0 && !!overallRank;
+  const up = moved && rankChange > 0;
   const gwLabel = gameweek ? `GW ${gameweek} POINTS` : "GW POINTS";
 
   return (
@@ -137,12 +153,36 @@ export function SquadSummaryBar({
       <View
         accessible
         accessibilityLabel={
-          overallRank ? `Overall rank ${formatNumber(overallRank)}` : "Overall rank not available yet"
+          overallRank
+            ? `Overall rank ${formatNumber(overallRank)}${
+                moved ? `, ${up ? "up" : "down"} ${formatNumber(Math.abs(rankChange))} places since last gameweek` : ""
+              }`
+            : "Overall rank not available yet"
         }
         style={{ flex: 1.1, justifyContent: "center", paddingHorizontal: 10, paddingVertical: 5 }}
       >
         <Label>OVERALL RANK</Label>
-        <Value>{overallRank ? formatNumber(overallRank) : "—"}</Value>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <View style={{ flexShrink: 1 }}>
+            <Value>{overallRank ? formatNumber(overallRank) : "—"}</Value>
+          </View>
+          {/* Up or down since the last gameweek, as in the league tables. */}
+          {moved && (
+            <Text
+              numberOfLines={1}
+              maxFontSizeMultiplier={1.15}
+              style={{
+                color: up ? THEME.good : RED,
+                fontSize: 9.5,
+                fontWeight: "800",
+                fontVariant: ["tabular-nums"],
+                includeFontPadding: false,
+              }}
+            >
+              {`${up ? "▲" : "▼"} ${shortNumber(Math.abs(rankChange))}`}
+            </Text>
+          )}
+        </View>
       </View>
     </View>
   );

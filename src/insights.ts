@@ -110,8 +110,14 @@ export type SeasonInsights = {
   bestCaptainTotal: number;
   // Points by position (1 GK .. 4 FWD), from players who counted.
   positionPoints: Record<number, number>;
+  // FPL's team value includes the bank. The starting budget (£100.0m), the
+  // total now, and the bank, all after the last gameweek played.
   valueStart: number | null;
   valueNow: number | null;
+  bankNow: number | null;
+  // Everyone who scored for you this season (counted, armband included),
+  // sold players too, most points first.
+  topScorers: { id: number; name: string; points: number; inSquad: boolean }[];
   chips: { name: string; event: number; points: number | null }[];
   strengths: Finding[];
   weaknesses: Finding[];
@@ -269,7 +275,9 @@ const CHIP_NAMES: Record<string, string> = {
   bboost: "Bench Boost",
   "3xc": "Triple Captain",
 };
-const POSITION_NAMES = ["", "Goalkeepers", "Defenders", "Midfielders", "Forwards"];
+// Every FPL team starts the season with £100.0m (in tenths of a million).
+const STARTING_BUDGET = 1000;
+const POSITION_NAMES =["", "Goalkeepers", "Defenders", "Midfielders", "Forwards"];
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
 export function analyseSeason(raw: RawSeason): SeasonInsights {
@@ -385,8 +393,12 @@ export function analyseSeason(raw: RawSeason): SeasonInsights {
     captainTotal: sum(gameweeks.map((gw) => gw.captainBonus)),
     bestCaptainTotal: sum(gameweeks.map((gw) => gw.bestCaptainBonus)),
     positionPoints,
-    valueStart: first?.value ?? null,
+    // Every manager starts with £100.0m; the first week's value already
+    // includes that week's price changes.
+    valueStart: first ? STARTING_BUDGET : null,
     valueNow: last?.value ?? null,
+    bankNow: last?.bank ?? null,
+    topScorers: [],
     chips: raw.history.chips.map((chip) => ({
       name: CHIP_NAMES[chip.name] ?? chip.name,
       event: chip.event,
@@ -452,11 +464,37 @@ export function analyseSeason(raw: RawSeason): SeasonInsights {
   result.chipDeadline = window.length ? Math.max(...window.map((rule) => rule.stop_event)) : null;
 
   result.squad = currentSquad(raw, nextEvent);
+  const inSquad = new Set(result.squad.map((player) => player.id));
+  result.topScorers = Object.entries(pointsForYou(raw))
+    .map(([id, points]) => ({
+      id: Number(id),
+      name: raw.names[Number(id)] ?? "?",
+      points,
+      inSquad: inSquad.has(Number(id)),
+    }))
+    .filter((player) => player.points > 0)
+    .sort((a, b) => b.points - a.points)
+    .slice(0, 8);
   const { strengths, weaknesses } = findings(result);
   result.strengths = strengths;
   result.weaknesses = weaknesses;
   result.actions = nextSteps(result, last?.bank ?? null);
   return result;
+}
+
+// Points each player scored while in the team and counted (armband
+// included), over every gameweek played: sold players too.
+function pointsForYou(raw: RawSeason): Record<number, number> {
+  const forYou: Record<number, number> = {};
+  Object.values(raw.weeks).forEach((w) => {
+    w.picks.forEach((pick) => {
+      if (pick.multiplier > 0) {
+        forYou[pick.element] =
+          (forYou[pick.element] ?? 0) + (w.points[pick.element] ?? 0) * pick.multiplier;
+      }
+    });
+  });
+  return forYou;
 }
 
 const difficultyOf = (fdr: number): UpcomingFixture["difficulty"] =>
@@ -488,16 +526,7 @@ function currentSquad(raw: RawSeason, nextEvent: number): SquadPlayer[] {
       if (slot) slot.element = transfer.element_in;
     });
 
-  // Points each player scored while in the team and counted.
-  const forYou: Record<number, number> = {};
-  Object.values(raw.weeks).forEach((w) => {
-    w.picks.forEach((pick) => {
-      if (pick.multiplier > 0) {
-        forYou[pick.element] =
-          (forYou[pick.element] ?? 0) + (w.points[pick.element] ?? 0) * pick.multiplier;
-      }
-    });
-  });
+  const forYou = pointsForYou(raw);
 
   const elements = new Map(raw.elements.map((element) => [element.id, element]));
   const squad: SquadPlayer[] = [];

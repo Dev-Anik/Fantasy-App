@@ -446,7 +446,6 @@ function Squad({ data }: { data: Insights }) {
         .sort((a, b) => Number(b.starter) - Number(a.starter) || b.form - a.form),
     }))
     .filter((group) => group.players.length > 0);
-  const top = [...data.squad].sort((a, b) => b.pointsForYou - a.pointsForYou).slice(0, 5);
 
   return (
     <>
@@ -478,11 +477,18 @@ function Squad({ data }: { data: Insights }) {
       ))}
 
       <Heading>Top scorers for you</Heading>
-      <Note>Points earned while in your team, armband included.</Note>
+      <Note>Points earned while in your team this season, armband included, players you have sold too.</Note>
       <Panel>
-        {top.map((player, index) => (
-          <Row key={player.id} first={index === 0} title={player.name} value={`${player.pointsForYou}`} />
+        {data.topScorers.map((player, index) => (
+          <Row
+            key={player.id}
+            first={index === 0}
+            title={player.name}
+            sub={player.inSquad ? undefined : "No longer in your squad"}
+            value={`${player.points}`}
+          />
         ))}
+        {data.topScorers.length === 0 && <Row first title="No points scored yet." />}
       </Panel>
 
       <Heading>Points by position</Heading>
@@ -494,11 +500,23 @@ function Squad({ data }: { data: Insights }) {
 
 // --- Decisions -------------------------------------------------------------------
 
-function Decisions({ data }: { data: Insights }) {
+type LiveMoney = { squadValue: number; bank: number };
+
+function Decisions({ data, live }: { data: Insights; live?: LiveMoney }) {
   const captainShare =
     data.bestCaptainTotal > 0 ? Math.round((data.captainTotal / data.bestCaptainTotal) * 100) : null;
   const benchPerWeek = data.gameweeks.length ? data.benchTotal / data.gameweeks.length : 0;
-  const valueChange = data.valueStart != null && data.valueNow != null ? data.valueNow - data.valueStart : null;
+  // Today's figures when the app has the squad (the same as the transfer
+  // page); otherwise FPL's figures after the last gameweek played, where the
+  // team value already includes the bank.
+  const bank = live ? live.bank : data.bankNow;
+  const squadValue = live
+    ? live.squadValue
+    : data.valueNow != null && data.bankNow != null
+      ? data.valueNow - data.bankNow
+      : null;
+  const teamValue = live ? live.squadValue + live.bank : data.valueNow;
+  const valueChange = data.valueStart != null && teamValue != null ? teamValue - data.valueStart : null;
   const last = data.gameweeks[data.gameweeks.length - 1];
   const net = data.transferGain3 - data.hitsTotal;
 
@@ -607,14 +625,22 @@ function Decisions({ data }: { data: Insights }) {
       </Panel>
 
       <Heading>Budget</Heading>
+      <Note>
+        {`${live ? "At today's prices, as on the transfer page." : `After GW ${last?.event ?? "—"}.`} Squad value is your 15 players; team value adds the bank. Every team starts with £100.0m.`}
+      </Note>
       <Stats
         items={[
           {
-            label: "Team value",
-            value: data.valueNow != null ? money(data.valueNow) : "—",
-            note: valueChange != null ? `${valueChange >= 0 ? "+" : "−"}${money(Math.abs(valueChange))} this season` : undefined,
+            label: "Squad value",
+            value: squadValue != null ? money(squadValue) : "—",
           },
-          { label: "In the bank", value: last ? money(last.bank) : "—" },
+          { label: "In the bank", value: bank != null ? money(bank) : "—" },
+          {
+            label: "Team value",
+            value: teamValue != null ? money(teamValue) : "—",
+            note: valueChange != null ? `${valueChange >= 0 ? "+" : "−"}${money(Math.abs(valueChange))} this season` : undefined,
+            color: valueChange == null || valueChange === 0 ? INK : valueChange > 0 ? GOOD : BAD,
+          },
         ]}
       />
     </>
@@ -786,10 +812,14 @@ function History({ data }: { data: Insights }) {
 export function SeasonInsights({
   entry,
   teamName,
+  live,
   onBack,
 }: {
   entry: number;
   teamName: string;
+  // The squad's value at today's prices and the bank, from the app's own
+  // squad (the transfer page shows the same figures).
+  live?: LiveMoney;
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -912,7 +942,7 @@ export function SeasonInsights({
         >
           {tab === "overview" && <Overview data={data} />}
           {tab === "squad" && <Squad data={data} />}
-          {tab === "decisions" && <Decisions data={data} />}
+          {tab === "decisions" && <Decisions data={data} live={live} />}
           {tab === "history" && <History data={data} />}
         </ScrollView>
       )}

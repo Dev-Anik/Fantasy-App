@@ -142,12 +142,15 @@ export function GameweekHelper({
         <Group>
           {advice.captains.map((option, index) => (
             <View key={option.row.id}>
-              {index > 0 && <Divider inset={66} />}
+              {index > 0 && <Divider />}
               <View
                 accessible
                 accessibilityLabel={`${index + 1}. ${option.row.name}, ${option.row.team}. ${option.reasons.join(". ")}`}
-                style={{ flexDirection: "row", paddingHorizontal: 14, paddingVertical: 13, gap: 12 }}
+                style={{ paddingHorizontal: 14, paddingVertical: 13 }}
               >
+              {/* Top: avatar, name and estimate. Below: the reasons, across
+                  the card's full width. */}
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                 <PlayerArt team={option.row.team} size={40} goalkeeper={option.row.type === 1} />
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -165,7 +168,9 @@ export function GameweekHelper({
                       </View>
                     )}
                   </View>
-                  <Reasons items={option.reasons} />
+                  <Text numberOfLines={1} style={{ color: MUTED, fontSize: 12, marginTop: 2 }}>
+                    {option.row.team}
+                  </Text>
                 </View>
                 <View style={{ alignItems: "flex-end" }}>
                   <Text style={{ color: index === 0 ? THEME.accent : INK, fontSize: 20, fontWeight: "700", fontVariant: ["tabular-nums"] }}>
@@ -173,6 +178,8 @@ export function GameweekHelper({
                   </Text>
                   <Text style={{ color: MUTED, fontSize: 10, letterSpacing: 1 }}>EST PTS</Text>
                 </View>
+              </View>
+              <Reasons items={option.reasons} />
               </View>
             </View>
           ))}

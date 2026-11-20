@@ -38,9 +38,23 @@ function loadPicks(entry: number, event: number) {
   const key = `${entry}-${event}`;
   let cached = picksCache.get(key);
   if (!cached) {
-    // A manager who joined after this deadline has no picks: null, not an error.
-    cached = getJson(`entry/${entry}/event/${event}/picks/`).catch(() => null);
-    picksCache.set(key, cached);
+    cached = fetch(`${API}entry/${entry}/event/${event}/picks/`).then(
+      (response) => {
+        // A manager who joined after this deadline has no picks: FPL says
+        // so (404), and that answer is kept.
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error(`FPL returned ${response.status}`);
+        return response.json() as Promise<RawPicks>;
+      },
+    );
+    // Anything else (no signal, FPL busy) is not kept: this refresh leaves
+    // the manager out, and the next one asks again.
+    const attempt = cached.catch(() => {
+      picksCache.delete(key);
+      return null;
+    });
+    picksCache.set(key, attempt);
+    return attempt;
   }
   return cached;
 }
@@ -179,7 +193,7 @@ export async function loadLiveLeague(
     entry.liveRank = previous && previous.liveTotal === entry.liveTotal ? previous.liveRank : index + 1;
   });
   // A page further down the table starts at its first official rank.
-  const offset = Math.max(0, Math.min(...rows.map((row) => row.rank)) - 1);
+  const offset = rows.length ? Math.max(0, Math.min(...rows.map((row) => row.rank)) - 1) : 0;
   ranked.forEach((entry) => {
     entry.liveRank += offset;
   });

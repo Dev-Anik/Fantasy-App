@@ -112,8 +112,10 @@ function signInScript(attempt: string, email: string, password: string) {
     }
     var waited = Date.now() - since;
     // Signed in pages redirect away, which the app catches. Anything else
-    // left on screen after the form has gone needs the user.
-    if (submitted && !formShown && waited > 6000) {
+    // left on screen after the form has gone needs the user: but only a page
+    // that has finished loading and stayed a while, so a slow redirect isn't
+    // mistaken for one.
+    if (submitted && !formShown && waited > 10000 && document.readyState === "complete") {
       clearInterval(timer);
       post("needsUser");
     } else if (submitted && formShown && waited > 20000) {
@@ -155,27 +157,27 @@ function Field({
 }) {
   const [focused, setFocused] = useState(false);
   return (
-    <View style={{ marginBottom: 14 }}>
-      <Text style={{ color: MUTED, fontSize: 12, fontWeight: "800", marginBottom: 6, marginLeft: 2 }}>
+    <View style={{ marginBottom: 12 }}>
+      <Text style={{ color: MUTED, fontSize: 11, fontWeight: "700", marginBottom: 5, marginLeft: 2 }}>
         {label}
       </Text>
       <View
         style={{
           flexDirection: "row",
           alignItems: "center",
-          height: 52,
-          paddingHorizontal: 14,
-          borderRadius: 14,
+          height: 46,
+          paddingHorizontal: 12,
+          borderRadius: 12,
           backgroundColor: FIELD,
           borderWidth: 1.5,
           borderColor: focused ? GREEN : EDGE,
           opacity: input.editable === false ? 0.6 : 1,
         }}
       >
-        <AppSymbol name={icon} color={focused ? GREEN : MUTED} size={18} />
+        <AppSymbol name={icon} color={focused ? GREEN : MUTED} size={16} />
         <TextInput
           ref={inputRef}
-          placeholderTextColor="#5f7068"
+          placeholderTextColor={THEME.muted}
           selectionColor={GREEN}
           cursorColor={GREEN}
           maxFontSizeMultiplier={1.3}
@@ -188,7 +190,7 @@ function Field({
             setFocused(false);
             input.onBlur?.(event);
           }}
-          style={{ flex: 1, color: "#ffffff", fontSize: 16, fontWeight: "600", marginLeft: 10, paddingVertical: 0 }}
+          style={{ flex: 1, color: "#ffffff", fontSize: 14.5, fontWeight: "600", marginLeft: 10, paddingVertical: 0 }}
         />
         {right}
       </View>
@@ -255,14 +257,16 @@ export function EmailSignIn({
   };
   useEffect(() => stopTimer, []);
 
-  const endAttempt = (message?: string) => {
+  // `rejected`: the Premier League page itself refused the details.
+  const endAttempt = (message?: string, rejected = false) => {
     stopTimer();
     setAttempt(null);
     setPhase("idle");
     if (message !== undefined) setLocalError(message);
-    // An automatic sign-in that failed (a changed password, say): don't try
-    // again by itself, let the user check the details.
-    if (message && attemptLogin.current?.auto) pauseAutoSignIn();
+    // An automatic sign-in the page refused (a changed password, say): don't
+    // try again by itself, let the user check the details. A slow or dropped
+    // connection is not a reason: Remember me keeps working next time.
+    if (rejected && attemptLogin.current?.auto) pauseAutoSignIn();
   };
 
   const busy = phase !== "idle" || loading;
@@ -344,7 +348,9 @@ export function EmailSignIn({
     }
     if (!message || !attempt || message.profplSignIn !== attempt.id) return;
     if (message.type === "error") {
-      endAttempt(friendlyError(message.message ?? ""));
+      // With text, the page showed an error (wrong details); without, it
+      // just never answered.
+      endAttempt(friendlyError(message.message ?? ""), !!message.message);
     } else if (message.type === "needsUser") {
       // Show the page so the user can finish there.
       stopTimer();
@@ -361,9 +367,9 @@ export function EmailSignIn({
         <ScrollView
           contentContainerStyle={{
             flexGrow: 1,
-            paddingHorizontal: 24,
-            paddingTop: topInset + 12,
-            paddingBottom: bottomInset + 24,
+            paddingHorizontal: 22,
+            paddingTop: topInset + 10,
+            paddingBottom: bottomInset + 18,
           }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
@@ -378,21 +384,21 @@ export function EmailSignIn({
           >
             <AppSymbol
               name={{ ios: "chevron.left", android: "arrow_back", web: "arrow_back" }}
-              color="#c9d6cf"
+              color={THEME.soft}
               size={22}
             />
           </Pressable>
 
-          <View style={{ marginTop: 18, marginBottom: 28 }}>
+          <View style={{ marginTop: 10, marginBottom: 20 }}>
             <Image
               source={require("../assets/images/icon-small.png")}
               accessible={false}
-              style={{ width: 48, height: 48, borderRadius: 13 }}
+              style={{ width: 40, height: 40, borderRadius: 11 }}
             />
-            <Text style={{ color: "#ffffff", fontSize: 28, fontWeight: "900", marginTop: 18 }}>
+            <Text style={{ color: "#ffffff", fontSize: 23, fontWeight: "800", marginTop: 14 }}>
               Sign in
             </Text>
-            <Text style={{ color: MUTED, fontSize: 15, marginTop: 6, lineHeight: 21 }}>
+            <Text style={{ color: MUTED, fontSize: 13.5, marginTop: 4, lineHeight: 19 }}>
               Use the email and password of your Fantasy Premier League account.
             </Text>
           </View>
@@ -432,15 +438,15 @@ export function EmailSignIn({
                 onPress={onRetrySquad}
                 accessibilityRole="button"
                 style={({ pressed }) => ({
-                  height: 54,
-                  borderRadius: 27,
+                  height: 48,
+                  borderRadius: 24,
                   alignItems: "center",
                   justifyContent: "center",
                   backgroundColor: GREEN,
                   opacity: pressed ? 0.85 : 1,
                 })}
               >
-                <Text style={{ color: INK, fontSize: 16, fontWeight: "900" }}>Try again</Text>
+                <Text style={{ color: INK, fontSize: 15, fontWeight: "800" }}>Try again</Text>
               </Pressable>
               <Pressable
                 onPress={onDismissSquadFailure}
@@ -523,7 +529,7 @@ export function EmailSignIn({
                   alignItems: "center",
                   justifyContent: "space-between",
                   marginTop: -2,
-                  marginBottom: 22,
+                  marginBottom: 18,
                 }}
               >
                 <Pressable
@@ -543,9 +549,9 @@ export function EmailSignIn({
                 >
                   <View
                     style={{
-                      width: 20,
-                      height: 20,
-                      borderRadius: 6,
+                      width: 18,
+                      height: 18,
+                      borderRadius: 5,
                       alignItems: "center",
                       justifyContent: "center",
                       backgroundColor: remember ? GREEN : "transparent",
@@ -554,14 +560,14 @@ export function EmailSignIn({
                     }}
                   >
                     {remember && (
-                      <AppSymbol name={{ ios: "checkmark", android: "check", web: "check" }} color={INK} size={14} />
+                      <AppSymbol name={{ ios: "checkmark", android: "check", web: "check" }} color={INK} size={12} />
                     )}
                   </View>
-                  <Text style={{ color: THEME.soft, fontSize: 13.5, fontWeight: "600" }}>Remember me</Text>
+                  <Text style={{ color: THEME.soft, fontSize: 12.5, fontWeight: "600" }}>Remember me</Text>
                 </Pressable>
 
                 <Pressable onPress={onOtherMethods} disabled={busy} accessibilityRole="link" hitSlop={8}>
-                  <Text style={{ color: GREEN, fontSize: 13, fontWeight: "800" }}>Forgot password?</Text>
+                  <Text style={{ color: GREEN, fontSize: 12.5, fontWeight: "700" }}>Forgot password?</Text>
                 </Pressable>
               </View>
 
@@ -572,8 +578,8 @@ export function EmailSignIn({
                 accessibilityLabel="Sign in"
                 accessibilityState={{ busy }}
                 style={({ pressed }) => ({
-                  height: 54,
-                  borderRadius: 27,
+                  height: 48,
+                  borderRadius: 24,
                   flexDirection: "row",
                   alignItems: "center",
                   justifyContent: "center",
@@ -583,14 +589,14 @@ export function EmailSignIn({
                 })}
               >
                 {busy && <ActivityIndicator color={INK} size="small" />}
-                <Text style={{ color: INK, fontSize: 16, fontWeight: "900" }}>
+                <Text style={{ color: INK, fontSize: 15, fontWeight: "800" }}>
                   {loading ? "Loading your team…" : busy ? "Signing in…" : "Sign in"}
                 </Text>
               </Pressable>
 
-              <View style={{ flexDirection: "row", alignItems: "center", marginVertical: 22 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", marginVertical: 18 }}>
                 <View style={{ flex: 1, height: 1, backgroundColor: EDGE }} />
-                <Text style={{ color: "#5f7068", fontSize: 12, fontWeight: "700", marginHorizontal: 12 }}>
+                <Text style={{ color: THEME.muted, fontSize: 11, fontWeight: "700", marginHorizontal: 12 }}>
                   OR
                 </Text>
                 <View style={{ flex: 1, height: 1, backgroundColor: EDGE }} />
@@ -605,11 +611,11 @@ export function EmailSignIn({
                 style={({ pressed }) => ({
                   flexDirection: "row",
                   alignItems: "center",
-                  gap: 12,
-                  minHeight: 60,
-                  paddingHorizontal: 14,
-                  paddingVertical: 10,
-                  borderRadius: 16,
+                  gap: 10,
+                  minHeight: 52,
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 14,
                   backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
                   borderWidth: 1,
                   borderColor: "rgba(255, 255, 255, 0.08)",
@@ -618,9 +624,9 @@ export function EmailSignIn({
               >
                 <View
                   style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 18,
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
                     alignItems: "center",
                     justifyContent: "center",
                     backgroundColor: "rgba(255, 255, 255, 0.07)",
@@ -629,17 +635,17 @@ export function EmailSignIn({
                   <AppSymbol
                     name={{ ios: "person.crop.circle.badge.checkmark", android: "account_circle", web: "account_circle" }}
                     color={THEME.soft}
-                    size={19}
+                    size={17}
                   />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ color: THEME.ink, fontSize: 14.5, fontWeight: "600" }}>Other ways to sign in</Text>
-                  <Text style={{ color: MUTED, fontSize: 12.5, marginTop: 2 }}>Google, Apple, Facebook or X</Text>
+                  <Text style={{ color: THEME.ink, fontSize: 13.5, fontWeight: "600" }}>Other ways to sign in</Text>
+                  <Text style={{ color: MUTED, fontSize: 11.5, marginTop: 1 }}>Google, Apple, Facebook or X</Text>
                 </View>
                 <AppSymbol
                   name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
                   color={MUTED}
-                  size={18}
+                  size={16}
                 />
               </Pressable>
             </>
@@ -649,10 +655,10 @@ export function EmailSignIn({
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 }}>
             <AppSymbol
               name={{ ios: "lock.fill", android: "lock", web: "lock" }}
-              color="#5f7068"
-              size={13}
+              color={THEME.muted}
+              size={12}
             />
-            <Text style={{ color: "#6f8078", fontSize: 12, textAlign: "center", lineHeight: 16, flexShrink: 1 }}>
+            <Text style={{ color: THEME.muted, fontSize: 11, textAlign: "center", lineHeight: 15, flexShrink: 1 }}>
               {remember
                 ? "Sent securely to the Premier League. Saved encrypted on this device only."
                 : "Sent securely to the Premier League. Not saved on this device."}
@@ -660,14 +666,14 @@ export function EmailSignIn({
           </View>
           <View style={{ flexDirection: "row", alignSelf: "center", alignItems: "center", gap: 10, marginTop: 8 }}>
             <Pressable onPress={onOpenPrivacy} accessibilityRole="link" hitSlop={8}>
-              <Text style={{ color: MUTED, fontSize: 12, textDecorationLine: "underline" }}>Privacy policy</Text>
+              <Text style={{ color: MUTED, fontSize: 11, textDecorationLine: "underline" }}>Privacy policy</Text>
             </Pressable>
-            <Text style={{ color: MUTED, fontSize: 12 }}>·</Text>
+            <Text style={{ color: MUTED, fontSize: 11 }}>·</Text>
             <Pressable onPress={onOpenTerms} accessibilityRole="link" hitSlop={8}>
-              <Text style={{ color: MUTED, fontSize: 12, textDecorationLine: "underline" }}>Terms and conditions</Text>
+              <Text style={{ color: MUTED, fontSize: 11, textDecorationLine: "underline" }}>Terms and conditions</Text>
             </Pressable>
           </View>
-          <Text style={{ color: "#4d5c55", fontSize: 11, textAlign: "center", marginTop: 6 }}>
+          <Text style={{ color: "rgba(255, 255, 255, 0.32)", fontSize: 10.5, textAlign: "center", marginTop: 5 }}>
             Not affiliated with the Premier League. Version {version}
           </Text>
         </ScrollView>
@@ -685,7 +691,7 @@ export function EmailSignIn({
             bottom: 0,
             left: 0,
             opacity: phase === "finish" ? 1 : 0,
-            backgroundColor: "#0b1410",
+            backgroundColor: THEME.bg,
             paddingTop: topInset,
           }}
         >

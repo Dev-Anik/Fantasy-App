@@ -107,21 +107,46 @@ export function Field({ label, hint, ...input }: TextInputProps & { label: strin
 }
 
 // Figures side by side: a label above each number.
-export function Stats({ items }: { items: { label: string; value: string; note?: string; color?: string; noteColor?: string }[] }) {
+export function Stats({
+  items,
+  compact = false,
+}: {
+  // `spoken` is read by screen readers instead of a shortened label.
+  items: { label: string; spoken?: string; value: string; note?: string; color?: string; noteColor?: string }[];
+  compact?: boolean;
+}) {
   return (
-    <View style={{ flexDirection: "row", backgroundColor: UI.surface, borderRadius: 12, paddingVertical: 12 }}>
+    <View
+      style={{
+        flexDirection: "row",
+        backgroundColor: UI.surface,
+        borderRadius: compact ? 10 : 12,
+        paddingVertical: compact ? 8 : 12,
+      }}
+    >
       {items.map((item, index) => (
         <View
           key={item.label}
           accessible
-          accessibilityLabel={`${item.label}: ${item.value}${item.note ? `, ${item.note}` : ""}`}
-          style={{ flex: 1, paddingHorizontal: 14, borderLeftWidth: index === 0 ? 0 : 1, borderLeftColor: UI.line }}
+          accessibilityLabel={`${item.spoken ?? item.label}: ${item.value}${item.note ? `, ${item.note}` : ""}`}
+          style={{
+            flex: 1,
+            paddingHorizontal: compact ? 12 : 14,
+            borderLeftWidth: index === 0 ? 0 : 1,
+            borderLeftColor: UI.line,
+          }}
         >
-          <Text style={{ color: UI.muted, fontSize: 11, fontWeight: "600" }}>{item.label}</Text>
+          <Text style={{ color: UI.muted, fontSize: compact ? 10.5 : 11, fontWeight: "600" }}>{item.label}</Text>
           <Text
             numberOfLines={1}
             adjustsFontSizeToFit
-            style={{ color: item.color ?? UI.ink, fontSize: 19, fontWeight: "700", marginTop: 3, fontVariant: ["tabular-nums"] }}
+            style={{
+              color: item.color ?? UI.ink,
+              fontSize: compact ? 15.5 : 19,
+              fontWeight: "700",
+              marginTop: compact ? 2 : 3,
+              fontVariant: ["tabular-nums"],
+            }}
           >
             {item.value}
           </Text>

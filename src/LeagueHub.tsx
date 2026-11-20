@@ -15,7 +15,8 @@ import { AppSymbol } from "./AppSymbol";
 import { LeagueCard } from "./LeagueCard";
 import { LeagueDetails } from "./LeagueDetails";
 import { FadeIn } from "./FadeIn";
-import { Button, Divider, Field, Group, Heading, LEAGUE_UI as UI } from "./leagueUi";
+import { THEME } from "./theme";
+import { Button, Divider, Field, Group, LEAGUE_UI as UI } from "./leagueUi";
 
 const LEAGUE_SECTIONS: { category: LeagueCategory; title: string; hint: string }[] = [
   { category: "classic", title: "Classic", hint: "Ranked by total points" },
@@ -117,7 +118,7 @@ function Picker<T extends string | number>({
             borderRadius: 10,
             borderWidth: 1,
             borderColor: "rgba(255, 255, 255, 0.12)",
-            backgroundColor: "#111816",
+            backgroundColor: THEME.surfaceRaised,
             maxHeight: 220,
             overflow: "hidden",
           }}
@@ -238,6 +239,16 @@ export function LeagueHub({
     setShowLeagueDetails(true);
     onSelectLeague(league);
   };
+  // The league type shown. Until the user picks one, the first type they
+  // have leagues in.
+  const [category, setCategory] = useState<LeagueCategory | null>(null);
+  const counts: Record<LeagueCategory, number> = { classic: 0, h2h: 0, general: 0 };
+  for (const league of leagues) counts[leagueCategory(league)] += 1;
+  const shownCategory =
+    category ?? LEAGUE_SECTIONS.find((section) => counts[section.category] > 0)?.category ?? "classic";
+  const activeSection = LEAGUE_SECTIONS.find((section) => section.category === shownCategory) ?? LEAGUE_SECTIONS[0];
+  const shownLeagues = leagues.filter((league) => leagueCategory(league) === shownCategory);
+
   const knockout = KNOCKOUT_OPTIONS.find((option) => option.rounds === knockoutRounds) ?? KNOCKOUT_OPTIONS[1];
 
   return (
@@ -365,14 +376,79 @@ export function LeagueHub({
                 {"You aren't in any leagues yet."}
               </Text>
             ) : (
-              LEAGUE_SECTIONS.map((section) => {
-                const sectionLeagues = leagues.filter((league) => leagueCategory(league) === section.category);
-                if (sectionLeagues.length === 0) return null;
-                return (
-                  <View key={section.category}>
-                    <Heading hint={section.hint}>{section.title}</Heading>
+              <>
+                {/* One type of league at a time; the tabs switch between them. */}
+                <View
+                  accessibilityRole="tablist"
+                  style={{ flexDirection: "row", marginTop: 22, borderBottomWidth: 1, borderBottomColor: UI.line }}
+                >
+                  {LEAGUE_SECTIONS.map((section) => {
+                    const active = section.category === shownCategory;
+                    const count = counts[section.category];
+                    return (
+                      <Pressable
+                        key={section.category}
+                        onPress={() => setCategory(section.category)}
+                        accessibilityRole="tab"
+                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`${section.title}, ${count} ${count === 1 ? "league" : "leagues"}`}
+                        hitSlop={{ top: 8, bottom: 4 }}
+                        style={{ marginRight: 20, paddingBottom: 10 }}
+                      >
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                          <Text style={{ color: active ? UI.ink : UI.muted, fontSize: 14, fontWeight: active ? "700" : "500" }}>
+                            {section.title}
+                          </Text>
+                          <View
+                            style={{
+                              minWidth: 18,
+                              height: 18,
+                              paddingHorizontal: 5,
+                              borderRadius: 9,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              backgroundColor: active ? THEME.accentSoft : "rgba(255, 255, 255, 0.06)",
+                              borderWidth: 1,
+                              borderColor: active ? THEME.accentLine : "rgba(255, 255, 255, 0.08)",
+                            }}
+                          >
+                            <Text
+                              style={{
+                                color: active ? THEME.accent : UI.muted,
+                                fontSize: 10.5,
+                                fontWeight: "700",
+                                fontVariant: ["tabular-nums"],
+                              }}
+                            >
+                              {count}
+                            </Text>
+                          </View>
+                        </View>
+                        <View
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            bottom: -1,
+                            height: 2,
+                            backgroundColor: active ? UI.ink : "transparent",
+                          }}
+                        />
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={{ color: UI.muted, fontSize: 12, lineHeight: 17, marginTop: 10, marginBottom: 10 }}>
+                  {activeSection.hint}
+                </Text>
+                {shownLeagues.length === 0 ? (
+                  <Text style={{ color: UI.muted, marginTop: 14, fontSize: 13, textAlign: "center" }}>
+                    {`You aren't in any ${activeSection.title.toLowerCase()} leagues yet.`}
+                  </Text>
+                ) : (
+                  <FadeIn key={shownCategory} offsetX={0} offsetY={6}>
                     <Group>
-                      {sectionLeagues.map((league, index) => (
+                      {shownLeagues.map((league, index) => (
                         <LeagueCard
                           key={`${league.kind}-${league.id}`}
                           league={league}
@@ -382,9 +458,9 @@ export function LeagueHub({
                         />
                       ))}
                     </Group>
-                  </View>
-                );
-              })
+                  </FadeIn>
+                )}
+              </>
             )}
           </>
         )}

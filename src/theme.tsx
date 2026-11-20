@@ -54,7 +54,7 @@ export function Wordmark({ size, weight = "800" }: { size: number; weight?: "700
   const dot = Math.max(4, Math.round(size * 0.2));
   return (
     <View accessible accessibilityRole="header" accessibilityLabel="Skippr" style={{ flexDirection: "row", alignItems: "flex-start" }}>
-      <Text style={{ color: THEME.ink, fontSize: size, fontWeight: weight, letterSpacing: size >= 30 ? -0.5 : 0.2 }}>
+      <Text numberOfLines={1} maxFontSizeMultiplier={1.2} style={{ flexShrink: 0, color: THEME.ink, fontSize: size, fontWeight: weight, letterSpacing: size >= 30 ? -0.5 : 0.2 }}>
         Skippr
       </Text>
       <View
@@ -70,6 +70,16 @@ export function Wordmark({ size, weight = "800" }: { size: number; weight?: "700
     </View>
   );
 }
+
+// The panels that float on the pitch (points, average and highest): the app's
+// navy, lit from the top like a raised glass panel, with a brighter top edge.
+export const PITCH_PANEL = {
+  backgroundColor: "rgba(16, 22, 40, 0.94)",
+  backgroundImage: "linear-gradient(180deg, rgba(38, 48, 80, 0.96) 0%, rgba(18, 24, 44, 0.96) 55%, rgba(10, 14, 28, 0.97) 100%)",
+  borderWidth: 1,
+  borderColor: "rgba(255, 255, 255, 0.09)",
+  borderTopColor: "rgba(255, 255, 255, 0.2)",
+} as const;
 
 // A section label: green capitals, widely spaced.
 export function SectionLabel({ children, style }: { children: string; style?: object }) {

@@ -13,9 +13,31 @@ import { teamAvatar } from "./Pitch";
 import { AppSymbol } from "./AppSymbol";
 import { availability } from "./availability";
 import { PlayerProfile } from "./PlayerProfile";
+import { THEME } from "./theme";
 import type { FplElement, GameweekRow, PastSeason } from "./PlayerProfile";
 
-const GREEN = "#00d982";
+const MUTED = THEME.muted;
+// Captain gold, as on the pitch armband.
+const GOLD = "#f2c14e";
+
+// Section titles: quiet spaced capitals, as across the app.
+export const SECTION_TITLE = {
+  color: THEME.soft,
+  fontSize: 11,
+  fontWeight: "700" as const,
+  letterSpacing: 1.4,
+  marginBottom: 8,
+};
+
+// The Captain / Vice / Substitute buttons: rounded pills, like the app's.
+const ACTION_PILL = {
+  flex: 1,
+  height: 44,
+  alignItems: "center" as const,
+  justifyContent: "center" as const,
+  borderRadius: 22,
+  borderWidth: 1,
+};
 
 function price(value: number) {
   return `£${(value / 10).toFixed(1)}m`;
@@ -30,7 +52,7 @@ function fixtureCardStyle(difficulty: PlayerFixture["difficulty"]) {
   if (difficulty === "hard") {
     return { bg: "#d92b4f", border: "#ef4766", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.78)" };
   }
-  return { bg: "#5d6863", border: "#738079", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.72)" };
+  return { bg: "#3a4258", border: "#4b5470", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.72)" };
 }
 
 export function PlayerDetailsSheet({
@@ -162,7 +184,7 @@ export function PlayerDetailsSheet({
             right: 0,
             bottom: 0,
             left: 0,
-            backgroundColor: "rgba(5, 15, 10, 0.65)",
+            backgroundColor: "rgba(4, 7, 16, 0.7)",
           }}
         />
         {player && (
@@ -175,8 +197,8 @@ export function PlayerDetailsSheet({
               borderTopLeftRadius: 26,
               borderTopRightRadius: 26,
               borderTopWidth: 1.5,
-              borderColor: "rgba(0, 217, 130, 0.3)",
-              backgroundColor: "rgba(14, 38, 26, 0.98)",
+              borderColor: "rgba(255, 255, 255, 0.1)",
+              backgroundColor: THEME.bg,
               elevation: 10,
             }}
           >
@@ -208,9 +230,9 @@ export function PlayerDetailsSheet({
                   marginRight: 12,
                   borderRadius: 32,
                   overflow: "hidden",
-                  backgroundColor: "rgba(0, 217, 130, 0.12)",
+                  backgroundColor: THEME.surfaceRaised,
                   borderWidth: 1.5,
-                  borderColor: "rgba(0, 217, 130, 0.45)",
+                  borderColor: "rgba(255, 255, 255, 0.12)",
                   alignItems: "center",
                 }}
               >
@@ -232,7 +254,7 @@ export function PlayerDetailsSheet({
                 </Text>
                 <Text
                   style={{
-                    color: "#9db3a6",
+                    color: MUTED,
                     fontSize: 12,
                     fontWeight: "600",
                     marginTop: 2,
@@ -249,20 +271,18 @@ export function PlayerDetailsSheet({
                 accessibilityLabel="Close player details"
                 onPress={onClose}
                 hitSlop={10}
-                style={{
-                  width: 32,
-                  height: 32,
+                style={({ pressed }) => ({
+                  width: 34,
+                  height: 34,
                   alignItems: "center",
                   justifyContent: "center",
-                  borderRadius: 16,
-                  backgroundColor: "rgba(255, 255, 255, 0.1)",
+                  borderRadius: 17,
+                  backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
                   borderWidth: 1,
-                  borderColor: "rgba(255, 255, 255, 0.2)",
-                }}
+                  borderColor: "rgba(255, 255, 255, 0.12)",
+                })}
               >
-                <Text style={{ color: GREEN, fontSize: 16, fontWeight: "800" }}>
-                  ✕
-                </Text>
+                <AppSymbol name={{ ios: "xmark", android: "close", web: "close" }} color={THEME.soft} size={16} />
               </Pressable>
             </View>
 
@@ -276,7 +296,7 @@ export function PlayerDetailsSheet({
               const flag = availability(player.status, player.chance);
               const news = player.news?.trim();
               if (!flag && !news) return null;
-              const color = flag?.color ?? "#9db3a6";
+              const color = flag?.color ?? MUTED;
               return (
                 <View
                   accessible
@@ -310,7 +330,7 @@ export function PlayerDetailsSheet({
                       <Text style={{ color, fontSize: 12, fontWeight: "900" }}>{flag.label}</Text>
                     )}
                     {!!news && (
-                      <Text style={{ color: "#e6efe9", fontSize: 12, marginTop: flag ? 2 : 0, lineHeight: 16 }}>
+                      <Text style={{ color: THEME.soft, fontSize: 12, marginTop: flag ? 2 : 0, lineHeight: 16 }}>
                         {news}
                       </Text>
                     )}
@@ -331,14 +351,14 @@ export function PlayerDetailsSheet({
                 {
                   label: "PRICE",
                   value: price(player.price ?? player.buy),
-                  color: "#ffd400",
+                  color: GOLD,
                   detail: priceChangeText,
                   detailColor:
                     player.priceChange == null || player.priceChange === 0
-                      ? "#9db3a6"
+                      ? MUTED
                       : player.priceChange > 0
-                        ? "#00e676"
-                        : "#ff526f",
+                        ? THEME.good
+                        : THEME.bad,
                 },
               ].map((stat) => (
                 <View
@@ -349,15 +369,15 @@ export function PlayerDetailsSheet({
                     paddingVertical: 9,
                     paddingHorizontal: 8,
                     borderRadius: 14,
-                    backgroundColor: "rgba(5, 20, 16, 0.85)",
+                    backgroundColor: THEME.surface,
                     borderWidth: 1,
-                    borderColor: "rgba(0, 217, 130, 0.25)",
+                    borderColor: "rgba(255, 255, 255, 0.06)",
                   }}
                 >
                   <Text
                     numberOfLines={1}
                     style={{
-                      color: "#9db3a6",
+                      color: MUTED,
                       fontSize: 8.5,
                       fontWeight: "800",
                       letterSpacing: 0.3,
@@ -399,15 +419,7 @@ export function PlayerDetailsSheet({
 
             {/* Fixtures Section with Small Cards & Previous GW Points */}
             <View style={{ marginTop: 16 }}>
-              <Text
-                style={{
-                  color: "#ffffff",
-                  fontSize: 12,
-                  fontWeight: "900",
-                  letterSpacing: 0.4,
-                  marginBottom: 8,
-                }}
-              >
+              <Text accessibilityRole="header" style={SECTION_TITLE}>
                 FIXTURES
               </Text>
               {player.fixtures?.length ? (
@@ -490,7 +502,7 @@ export function PlayerDetailsSheet({
                   })}
                 </ScrollView>
               ) : (
-                <Text style={{ color: "#9db3a6", fontSize: 12 }}>
+                <Text style={{ color: MUTED, fontSize: 12 }}>
                   No upcoming fixtures available.
                 </Text>
               )}
@@ -511,21 +523,29 @@ export function PlayerDetailsSheet({
               <View style={{ flexDirection: "row", gap: 8, marginTop: 16 }}>
                 {isTransferMode ? (
                   <>
-                    {/* Transfer Out Button (Red, Smaller) */}
+                    {/* Transfer out: a soft red pill, clear but not shouting */}
                     <Pressable
                       onPress={onTransfer}
+                      accessibilityRole="button"
                       style={({ pressed }) => ({
                         flex: 1,
-                        minHeight: 42,
+                        height: 46,
+                        flexDirection: "row",
                         alignItems: "center",
                         justifyContent: "center",
-                        borderRadius: 14,
-                        backgroundColor: "#dc2626",
-                        opacity: pressed ? 0.8 : 1,
-                        elevation: 4,
+                        gap: 6,
+                        borderRadius: 23,
+                        backgroundColor: pressed ? "rgba(255, 107, 125, 0.26)" : "rgba(255, 107, 125, 0.16)",
+                        borderWidth: 1,
+                        borderColor: "rgba(255, 107, 125, 0.5)",
                       })}
                     >
-                      <Text style={{ color: "#ffffff", fontWeight: "900", fontSize: 13.5 }}>
+                      <AppSymbol
+                        name={{ ios: "arrow.left.arrow.right", android: "swap_horiz", web: "swap_horiz" }}
+                        color={THEME.bad}
+                        size={16}
+                      />
+                      <Text style={{ color: THEME.bad, fontWeight: "700", fontSize: 14 }}>
                         {isReplaced ? "Change player" : "Transfer out"}
                       </Text>
                     </Pressable>
@@ -533,21 +553,26 @@ export function PlayerDetailsSheet({
                     {isReplaced && (
                       <Pressable
                         onPress={onUndoTransfer}
+                        accessibilityRole="button"
                         style={({ pressed }) => ({
-                          paddingHorizontal: 14,
-                          minHeight: 42,
+                          paddingHorizontal: 18,
+                          height: 46,
+                          flexDirection: "row",
                           alignItems: "center",
                           justifyContent: "center",
-                          borderRadius: 14,
-                          backgroundColor: "rgba(255, 255, 255, 0.1)",
+                          gap: 5,
+                          borderRadius: 23,
+                          backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
                           borderWidth: 1,
-                          borderColor: "rgba(255, 255, 255, 0.2)",
-                          opacity: pressed ? 0.8 : 1,
+                          borderColor: "rgba(255, 255, 255, 0.14)",
                         })}
                       >
-                        <Text style={{ color: "#ff8080", fontWeight: "800", fontSize: 13 }}>
-                          Undo
-                        </Text>
+                        <AppSymbol
+                          name={{ ios: "arrow.uturn.backward", android: "undo", web: "undo" }}
+                          color={THEME.soft}
+                          size={15}
+                        />
+                        <Text style={{ color: THEME.soft, fontWeight: "600", fontSize: 13.5 }}>Undo</Text>
                       </Pressable>
                     )}
                   </>
@@ -557,41 +582,29 @@ export function PlayerDetailsSheet({
                       <>
                         <Pressable
                           onPress={() => onSetRole("cap")}
-                          style={{
-                            flex: 1,
-                            minHeight: 40,
-                            alignItems: "center",
-                            justifyContent: "center",
-                            borderRadius: 12,
-                            backgroundColor: player.cap ? "#ffd400" : "rgba(255, 255, 255, 0.12)",
-                            borderWidth: player.cap ? 0 : 1,
-                            borderColor: "rgba(255, 255, 255, 0.2)",
-                          }}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: player.cap }}
+                          style={({ pressed }) => ({
+                            ...ACTION_PILL,
+                            backgroundColor: player.cap ? GOLD : pressed ? THEME.surfaceRaised : THEME.surface,
+                            borderColor: player.cap ? GOLD : "rgba(255, 255, 255, 0.14)",
+                          })}
                         >
-                          <Text
-                            style={{
-                              color: player.cap ? "#000000" : "#ffffff",
-                              fontWeight: "900",
-                              fontSize: 12,
-                            }}
-                          >
+                          <Text style={{ color: player.cap ? THEME.onAccent : THEME.ink, fontWeight: "700", fontSize: 13 }}>
                             {player.cap ? "Captain ✓" : "Captain"}
                           </Text>
                         </Pressable>
                         <Pressable
                           onPress={() => onSetRole("vice")}
-                          style={{
-                            flex: 1,
-                            minHeight: 40,
-                            alignItems: "center",
-                            justifyContent: "center",
-                            borderRadius: 12,
-                            backgroundColor: player.vice ? "#ffffff" : "rgba(255, 255, 255, 0.12)",
-                            borderWidth: player.vice ? 0 : 1,
-                            borderColor: "rgba(255, 255, 255, 0.2)",
-                          }}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: player.vice }}
+                          style={({ pressed }) => ({
+                            ...ACTION_PILL,
+                            backgroundColor: player.vice ? THEME.ink : pressed ? THEME.surfaceRaised : THEME.surface,
+                            borderColor: player.vice ? THEME.ink : "rgba(255, 255, 255, 0.14)",
+                          })}
                         >
-                          <Text style={{ color: player.vice ? "#000000" : "#ffffff", fontWeight: "900", fontSize: 12 }}>
+                          <Text style={{ color: player.vice ? THEME.bg : THEME.ink, fontWeight: "700", fontSize: 13 }}>
                             {player.vice ? "Vice ✓" : "Vice"}
                           </Text>
                         </Pressable>
@@ -599,20 +612,14 @@ export function PlayerDetailsSheet({
                     )}
                     <Pressable
                       onPress={onStartSubstitution}
-                      style={{
-                        flex: 1,
-                        minHeight: 40,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        borderRadius: 12,
-                        borderWidth: 1,
-                        borderColor: "rgba(255, 255, 255, 0.2)",
-                        backgroundColor: "rgba(255, 255, 255, 0.1)",
-                      }}
+                      accessibilityRole="button"
+                      style={({ pressed }) => ({
+                        ...ACTION_PILL,
+                        backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
+                        borderColor: "rgba(255, 255, 255, 0.14)",
+                      })}
                     >
-                      <Text style={{ color: "#ffffff", fontWeight: "900", fontSize: 12 }}>
-                        Substitute
-                      </Text>
+                      <Text style={{ color: THEME.ink, fontWeight: "700", fontSize: 13 }}>Substitute</Text>
                     </Pressable>
                   </>
                 )}

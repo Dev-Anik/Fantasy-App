@@ -53,6 +53,22 @@ export function loadFplBasics(): Promise<FplBasics> {
   return basics;
 }
 
+// A team's overall rank after each gameweek played (public entry history).
+// Resolves to an empty list if FPL can't be reached.
+export type RankPoint = { event: number; rank: number };
+export function loadOverallRanks(entry: number): Promise<RankPoint[]> {
+  return fetch(`${API}entry/${entry}/history/`)
+    .then((response) => (response.ok ? response.json() : null))
+    .then((data) =>
+      Array.isArray(data?.current)
+        ? data.current
+            .filter((row: { overall_rank?: number | null }) => typeof row.overall_rank === "number" && row.overall_rank > 0)
+            .map((row: { event: number; overall_rank: number }) => ({ event: row.event, rank: row.overall_rank }))
+        : [],
+    )
+    .catch(() => []);
+}
+
 // A team's name and its manager's name (public entry data), cached for the
 // session. Resolves to null if FPL can't be reached.
 export type EntryName = { teamName: string; managerName: string };
