@@ -30,6 +30,12 @@ export type Row = {
   autoSub?: "in" | "out";
   // Points view, live gameweek: bonus from matches still in play.
   provisionalBonus?: number;
+  // FPL's expected points for the next gameweek (ep_next), and the season total.
+  epNext?: number | null;
+  totalPoints?: number;
+  // Season points per match, and expected goal involvements per 90 minutes.
+  ppg?: number | null;
+  xgi90?: number | null;
 };
 
 export type PlayerFixture = {
@@ -37,6 +43,8 @@ export type PlayerFixture = {
   opponent: string;
   venue: "H" | "A";
   difficulty: "easy" | "average" | "hard";
+  // FPL's difficulty rating, 1 (easiest) to 5.
+  fdr?: number;
   started?: boolean;
   finished?: boolean;
 };
@@ -56,6 +64,10 @@ export type Player = {
   chance?: number | null;
   news?: string;
   formMood?: "good" | "bad";
+  // FPL's expected points for the next gameweek.
+  epNext?: number | null;
+  ppg?: number | null;
+  xgi90?: number | null;
 };
 
 export type Squad = {
@@ -91,6 +103,11 @@ export type Gameweek = {
   isCurrent: boolean;
   isNext?: boolean;
   deadlineTime?: string | null;
+  // FPL's figures for the gameweek: the average score, the highest score and
+  // the team (entry id) that scored it. Null until FPL has them.
+  averageScore?: number | null;
+  highestScore?: number | null;
+  highestEntry?: number | null;
 };
 
 // Season label such as "26-27", derived from the first gameweek's deadline.
@@ -275,10 +292,13 @@ export function buildFetchJs() {
       const r = await fetch(u, { credentials: "include" });
       if (!r.ok) {
         const body = await r.text().catch(() => "");
-        throw new Error(
+        const error = new Error(
           u.replace("https://fantasy.premierleague.com/api/", "") + " -> " + r.status +
             (body ? " " + body.slice(0, 80) : "")
         );
+        // FPL refused the sign-in for this call: the app renews it and retries.
+        error.authRejected = r.status === 401 || r.status === 403;
+        throw error;
       }
       return r.json();
     };
@@ -302,7 +322,10 @@ export function buildFetchJs() {
       finished: e.finished,
       isCurrent: Boolean(e.is_current),
       isNext: Boolean(e.is_next),
-      deadlineTime: e.deadline_time || (e.deadline_time_epoch ? new Date(e.deadline_time_epoch * 1000).toISOString() : null)
+      deadlineTime: e.deadline_time || (e.deadline_time_epoch ? new Date(e.deadline_time_epoch * 1000).toISOString() : null),
+      averageScore: typeof e.average_entry_score === "number" ? e.average_entry_score : null,
+      highestScore: typeof e.highest_score === "number" ? e.highest_score : null,
+      highestEntry: typeof e.highest_scoring_entry === "number" ? e.highest_scoring_entry : null
     }));
     const players = {};
     bs.elements.forEach(p => { players[p.id] = p; });
@@ -343,6 +366,7 @@ export function buildFetchJs() {
                 : difficulty === 3
                   ? "average"
                   : "hard",
+              fdr: difficulty,
               started: fixture.started ?? false,
               finished: fixture.finished ?? false,
             };
@@ -372,7 +396,11 @@ export function buildFetchJs() {
       status: players[p.element].status,
       chance: players[p.element].chance_of_playing_next_round,
       news: players[p.element].news || "",
-      fixtures: fixturesFor(players[p.element].team)
+      fixtures: fixturesFor(players[p.element].team),
+      epNext: players[p.element].ep_next == null || players[p.element].ep_next === "" ? null : Number(players[p.element].ep_next),
+      totalPoints: players[p.element].total_points,
+      ppg: players[p.element].points_per_game == null ? null : Number(players[p.element].points_per_game),
+      xgi90: players[p.element].expected_goal_involvements_per_90 == null ? null : Number(players[p.element].expected_goal_involvements_per_90)
     }));
 
     const pool = bs.elements.map(p => ({
@@ -389,7 +417,10 @@ export function buildFetchJs() {
       status: p.status,
       chance: p.chance_of_playing_next_round,
       news: p.news || "",
-      formMood: moodFor(p.form)
+      formMood: moodFor(p.form),
+      epNext: p.ep_next == null || p.ep_next === "" ? null : Number(p.ep_next),
+      ppg: p.points_per_game == null ? null : Number(p.points_per_game),
+      xgi90: p.expected_goal_involvements_per_90 == null ? null : Number(p.expected_goal_involvements_per_90)
     }));
 
     const t = d.transfers || {};
@@ -439,7 +470,7 @@ export function buildFetchJs() {
       }
     });
   } catch (e) {
-    send({ ok: false, error: String(e) });
+    send({ ok: false, error: String(e), authRejected: !!(e && e.authRejected) });
   }
 })();
 true;

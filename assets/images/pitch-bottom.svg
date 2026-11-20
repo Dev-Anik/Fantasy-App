@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -55 600 185">
+  <!-- Bottom of the pitch: the opponent box top, its sides and its arc.
+       Drawn at its true shape, pinned to the bottom of the pitch. -->
+  <line x1="170" y1="0" x2="430" y2="0" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <line x1="170" y1="0" x2="170" y2="130" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <line x1="430" y1="0" x2="430" y2="130" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <circle cx="300" cy="55" r="3" fill="#ffffff" fill-opacity="0.3" />
+  <path d="M 250 0 A 50 50 0 0 1 350 0" fill="none" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+</svg>

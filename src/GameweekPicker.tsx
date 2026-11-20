@@ -1,10 +1,11 @@
 import { FlatList, Modal, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Gameweek } from "./fpl";
+import { THEME } from "./theme";
 
-const GREEN = "#00d982";
-const DARK_GREEN = "#071b12";
-const MUTED = "#9db3a6";
+const GREEN = THEME.accent;
+const DARK_GREEN = THEME.onAccent;
+const MUTED = THEME.muted;
 const ROW_HEIGHT = 46;
 
 type Props = {
@@ -41,7 +42,7 @@ export function GameweekPicker({ visible, gameweeks, selected, onSelect, onClose
         accessibilityRole="button"
         accessibilityLabel="Close gameweek selector"
         onPress={onClose}
-        style={{ flex: 1, backgroundColor: "rgba(0, 0, 0, 0.45)" }}
+        style={{ flex: 1, backgroundColor: "rgba(3, 5, 12, 0.6)" }}
       >
         <Pressable
           // Swallow taps inside the panel so they don't close it.
@@ -52,10 +53,10 @@ export function GameweekPicker({ visible, gameweeks, selected, onSelect, onClose
             right: 12,
             width: 210,
             maxHeight: "65%",
-            backgroundColor: "#0b2117",
+            backgroundColor: THEME.surfaceRaised,
             borderRadius: 16,
             borderWidth: 1,
-            borderColor: "rgba(0, 217, 130, 0.35)",
+            borderColor: "rgba(255, 255, 255, 0.08)",
             overflow: "hidden",
             elevation: 16,
             shadowColor: "#000",

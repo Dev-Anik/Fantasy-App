@@ -4,11 +4,12 @@
 // role) are left out.
 import { useEffect } from "react";
 import { Pressable, Text, View } from "react-native";
+import { THEME } from "./theme";
 
-const GREEN = "#00d982";
-const MUTED = "#9db3a6";
-const GOLD = "#ffd400";
-const RED = "#ff526f";
+const GREEN = THEME.accent;
+const MUTED = THEME.muted;
+const GOLD = "#f2c14e";
+const RED = THEME.bad;
 
 // The fields of FPL's player record (bootstrap-static "elements") used here.
 export type FplElement = {
@@ -108,12 +109,13 @@ function SectionTitle({ children }: { children: string }) {
   return (
     <Text
       accessibilityRole="header"
+      // Quiet spaced capitals, as across the app (and FIXTURES above).
       style={{
-        color: "#ffffff",
-        fontSize: 12,
-        fontWeight: "900",
-        letterSpacing: 0.4,
-        marginTop: 16,
+        color: THEME.soft,
+        fontSize: 11,
+        fontWeight: "700",
+        letterSpacing: 1.4,
+        marginTop: 18,
         marginBottom: 8,
       }}
     >
@@ -138,9 +140,9 @@ function StatGrid({ stats }: { stats: Stat[] }) {
             paddingVertical: 7,
             paddingHorizontal: 8,
             borderRadius: 12,
-            backgroundColor: "rgba(5, 20, 16, 0.85)",
+            backgroundColor: THEME.surface,
             borderWidth: 1,
-            borderColor: "rgba(255, 255, 255, 0.08)",
+            borderColor: "rgba(255, 255, 255, 0.06)",
           }}
         >
           <Text numberOfLines={1} style={{ color: MUTED, fontSize: 9, fontWeight: "800" }}>
@@ -202,9 +204,9 @@ export function PlayerProfile({
             paddingHorizontal: 14,
             paddingVertical: 7,
             borderRadius: 14,
-            backgroundColor: pressed ? "rgba(0, 217, 130, 0.3)" : "rgba(0, 217, 130, 0.18)",
+            backgroundColor: pressed ? THEME.accentLine : THEME.accentSoft,
             borderWidth: 1,
-            borderColor: "rgba(0, 217, 130, 0.5)",
+            borderColor: THEME.accentLine,
           })}
         >
           <Text style={{ color: GREEN, fontSize: 12, fontWeight: "900" }}>Retry</Text>
@@ -309,16 +311,16 @@ export function PlayerProfile({
     {
       label: "Since start",
       value: priceChange === 0 ? "No change" : `${priceChange > 0 ? "+" : "−"}${money(Math.abs(priceChange))}`,
-      color: priceChange > 0 ? "#00e676" : priceChange < 0 ? RED : undefined,
+      color: priceChange > 0 ? THEME.good : priceChange < 0 ? RED : undefined,
     },
     { label: "Selected by", value: `${element.selected_by_percent}%` },
     { label: "Value", value: element.value_season, note: "points per £m" },
-    { label: "In this GW", value: thousands(element.transfers_in_event), color: "#00e676" },
+    { label: "In this GW", value: thousands(element.transfers_in_event), color: THEME.good },
     { label: "Out this GW", value: thousands(element.transfers_out_event), color: RED },
     {
       label: "Net this GW",
       value: `${netTransfers > 0 ? "+" : netTransfers < 0 ? "−" : ""}${thousands(Math.abs(netTransfers))}`,
-      color: netTransfers > 0 ? "#00e676" : netTransfers < 0 ? RED : undefined,
+      color: netTransfers > 0 ? THEME.good : netTransfers < 0 ? RED : undefined,
     },
   ];
 
@@ -358,7 +360,7 @@ export function PlayerProfile({
             style={{
               padding: 10,
               borderRadius: 12,
-              backgroundColor: "rgba(5, 20, 16, 0.85)",
+              backgroundColor: THEME.surface,
               gap: 4,
             }}
           >
@@ -377,7 +379,7 @@ export function PlayerProfile({
       ) : recent.length === 0 ? (
         <Text style={{ color: MUTED, fontSize: 12 }}>No matches played yet this season.</Text>
       ) : (
-        <View style={{ borderRadius: 12, overflow: "hidden", backgroundColor: "rgba(5, 20, 16, 0.85)" }}>
+        <View style={{ borderRadius: 12, overflow: "hidden", backgroundColor: THEME.surface }}>
           <TableRow header cells={["GW", "Opponent", "Result", "Min", "G", "A", "B", "Pts"]} />
           {recent.map((row) => {
             const own = row.was_home ? row.team_h_score : row.team_a_score;
@@ -408,7 +410,7 @@ export function PlayerProfile({
       {past.length > 0 && (
         <>
           <SectionTitle>PREVIOUS SEASONS</SectionTitle>
-          <View style={{ borderRadius: 12, overflow: "hidden", backgroundColor: "rgba(5, 20, 16, 0.85)" }}>
+          <View style={{ borderRadius: 12, overflow: "hidden", backgroundColor: THEME.surface }}>
             <TableRow header cells={["Season", "Pts", "Min", "G", "A", "Price"]} widths={PAST_WIDTHS} />
             {past.map((row) => (
               <TableRow
@@ -455,7 +457,7 @@ function TableRow({
         alignItems: "center",
         paddingHorizontal: 8,
         paddingVertical: header ? 6 : 7,
-        backgroundColor: header ? "rgba(0, 217, 130, 0.12)" : "transparent",
+        backgroundColor: header ? "rgba(255, 255, 255, 0.04)" : "transparent",
         borderTopWidth: header ? 0 : 1,
         borderTopColor: "rgba(255, 255, 255, 0.06)",
       }}

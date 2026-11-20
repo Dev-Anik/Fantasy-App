@@ -1,0 +1,113 @@
+// The app's look: deep midnight navy fading to black, one green accent,
+// calm light text and letter-spaced capitals for section titles. The pitch,
+// the player cards and difficulty colours keep their own football colours;
+// green and red still mean good and bad numbers.
+import { Image } from "expo-image";
+import { Text, View } from "react-native";
+
+export const THEME = {
+  // Backgrounds
+  bg: "#0b1020",
+  surface: "#151b2c",
+  surfaceRaised: "#1b2236",
+  nav: "#06080e",
+  line: "rgba(255, 255, 255, 0.07)",
+  // Text
+  ink: "#f3f4f8",
+  soft: "#c3c8d6",
+  muted: "#7d8398",
+  // Accent
+  accent: "#00d982",
+  accentSoft: "rgba(0, 217, 130, 0.14)",
+  accentLine: "rgba(0, 217, 130, 0.45)",
+  // Ink on an accent (green) button
+  onAccent: "#04210f",
+  // Meaning
+  good: "#2fd39a",
+  bad: "#ff6b7d",
+};
+
+// Height of the bottom tab bar (above the phone's own system area). Pages
+// drawn under it leave this much room at the end of their scroll.
+export const FOOTER_HEIGHT = 56;
+
+const BACKGROUND = require("../assets/images/app-background.png");
+
+// The navy-to-black backdrop, filling its parent. Put it first in a screen.
+export function ScreenBackground() {
+  return (
+    <Image
+      source={BACKGROUND}
+      contentFit="fill"
+      accessible={false}
+      style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }}
+    />
+  );
+}
+
+// The Skippr wordmark: the name in white, then the logo's green dot, raised
+// as on the icon. The story, shared with the logo: the S is the skipper's path
+// through the season, and the green dot is the ball, the moment of decision
+// (the weekly captain call). Green is also the app's colour for good
+// outcomes. Use this everywhere the name is shown as a logo.
+export function Wordmark({ size, weight = "800" }: { size: number; weight?: "700" | "800" | "900" }) {
+  const dot = Math.max(4, Math.round(size * 0.2));
+  return (
+    <View accessible accessibilityRole="header" accessibilityLabel="Skippr" style={{ flexDirection: "row", alignItems: "flex-start" }}>
+      <Text numberOfLines={1} maxFontSizeMultiplier={1.2} style={{ flexShrink: 0, color: THEME.ink, fontSize: size, fontWeight: weight, letterSpacing: size >= 30 ? -0.5 : 0.2 }}>
+        Skippr
+      </Text>
+      <View
+        style={{
+          width: dot,
+          height: dot,
+          borderRadius: dot / 2,
+          backgroundColor: THEME.accent,
+          marginLeft: Math.max(2, Math.round(size * 0.06)),
+          marginTop: Math.round(size * 0.24),
+        }}
+      />
+    </View>
+  );
+}
+
+// The panels that float on the pitch (points, average and highest): the app's
+// navy, lit from the top like a raised glass panel, with a brighter top edge.
+export const PITCH_PANEL = {
+  backgroundColor: "rgba(16, 22, 40, 0.94)",
+  backgroundImage: "linear-gradient(180deg, rgba(38, 48, 80, 0.96) 0%, rgba(18, 24, 44, 0.96) 55%, rgba(10, 14, 28, 0.97) 100%)",
+  borderWidth: 1,
+  borderColor: "rgba(255, 255, 255, 0.09)",
+  borderTopColor: "rgba(255, 255, 255, 0.2)",
+} as const;
+
+// A section label: green capitals, widely spaced.
+export function SectionLabel({ children, style }: { children: string; style?: object }) {
+  return (
+    <Text
+      accessibilityRole="header"
+      style={[
+        { color: THEME.accent, fontSize: 11.5, fontWeight: "500", letterSpacing: 2, textTransform: "uppercase" },
+        style,
+      ]}
+    >
+      {children}
+    </Text>
+  );
+}
+
+// A centred title between two thin accent lines: ── LIVE UPDATES ──
+export function SectionDivider({ children, style }: { children: string; style?: object }) {
+  return (
+    <View style={[{ flexDirection: "row", alignItems: "center", gap: 14 }, style]}>
+      <View style={{ flex: 1, height: 1, backgroundColor: THEME.accentLine, opacity: 0.6 }} />
+      <Text
+        accessibilityRole="header"
+        style={{ color: THEME.ink, fontSize: 13, fontWeight: "500", letterSpacing: 3, textTransform: "uppercase" }}
+      >
+        {children}
+      </Text>
+      <View style={{ flex: 1, height: 1, backgroundColor: THEME.accentLine, opacity: 0.6 }} />
+    </View>
+  );
+}

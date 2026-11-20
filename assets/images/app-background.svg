@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 220" preserveAspectRatio="none">
+  <!-- The app's background: deep midnight navy at the top fading to near
+       black, with a faint glow from the top-left corner. -->
+  <defs>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#151d36" />
+      <stop offset="45%" stop-color="#0b1020" />
+      <stop offset="100%" stop-color="#05060a" />
+    </linearGradient>
+    <radialGradient id="glow" cx="15%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="#2a3560" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#2a3560" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="100" height="220" fill="url(#fade)" />
+  <rect width="100" height="220" fill="url(#glow)" />
+</svg>

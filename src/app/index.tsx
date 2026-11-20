@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -7,16 +7,13 @@ import {
   Easing,
   Linking,
   Modal,
-  Platform,
   Pressable,
-  ScrollView,
   StatusBar,
-  Switch,
   Text,
   View,
 } from "react-native";
+import { useAnimatedValue } from "../useAnimatedValue";
 import { Image } from "expo-image";
-import { GlassView } from "expo-glass-effect";
 import type { SymbolViewProps } from "expo-symbols";
 import { AppDialog, SubstitutionRow } from "../AppDialog";
 import type { ReactNode } from "react";
@@ -57,7 +54,25 @@ import {
 import { computeLive } from "../live";
 import { LeagueHub } from "../LeagueHub";
 import { ManagerHistory } from "../ManagerHistory";
-import { FadeIn } from "../FadeIn";
+import { loadEntryName, loadOverallRanks } from "../fplPublic";
+import type { RankPoint } from "../fplPublic";
+import { MorePage } from "../MorePage";
+import { PrivacyPolicy, TermsAndConditions } from "../LegalPage";
+import { FixturePlanner } from "../FixturePlanner";
+import { MatchCentre } from "../MatchCentre";
+import { GameweekHelper } from "../GameweekHelper";
+import { CardInfoSheet } from "../CardInfoSheet";
+import { SaveProgress } from "../SaveProgress";
+import { CameraIcon, SquadSnapshot } from "../SquadSnapshot";
+import { loadSquadDirect } from "../squadDirect";
+import { loadCardStats, saveCardStats } from "../cardStats";
+import type { CardStatKey } from "../cardStats";
+import { APP_VERSION } from "../appInfo";
+import { FOOTER_HEIGHT, ScreenBackground, THEME, Wordmark } from "../theme";
+import { isTemporary, MESSAGES, userMessage } from "../errors";
+import { EmailSignIn } from "../EmailSignIn";
+import { loadRememberedLogin, pauseAutoSignIn } from "../rememberedLogin";
+import { AnimatedScreen, LoadingVeil } from "../AnimatedScreen";
 import { Pitch, preloadAvatars } from "../Pitch";
 import { PlayerDetailsSheet } from "../PlayerDetailsSheet";
 import { PlayerPicker } from "../PlayerPicker";
@@ -125,36 +140,46 @@ const CHIP_SYMBOLS: Record<PlayableChip, SymbolViewProps["name"]> = {
   },
 };
 
-const PURPLE = "#37003c";
-const GREEN = "#00d982";
-const APP_VERSION = "1.1.1";
-// Test build safety: refuse transfers that would cost points.
-// Set to true later if you want to allow point hits.
-const ALLOW_HITS = false;
+// The accent colour (green); see theme.tsx.
+const GREEN = THEME.accent;
+// Transfers beyond the free ones cost points (a "hit"), as on FPL. The
+// confirmation shows the cost before anything is sent.
+const ALLOW_HITS = true;
 
 function Feature({
   icon,
   text,
+  detail,
 }: {
   icon: SymbolViewProps["name"];
   text: string;
+  detail?: string;
 }) {
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", marginTop: 14 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", marginTop: 16 }}>
       <View
-          style={{
-          width: 36,
-          height: 36,
-          borderRadius: 18,
-          backgroundColor: "rgba(255,255,255,0.12)",
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 12,
+          backgroundColor: "rgba(255, 255, 255, 0.06)",
+          borderWidth: 1,
+          borderColor: "rgba(255, 255, 255, 0.08)",
           alignItems: "center",
           justifyContent: "center",
-          marginRight: 12,
+          marginRight: 14,
         }}
       >
-        <AppSymbol name={icon} color="#fff" size={18} />
+        <AppSymbol name={icon} color={GREEN} size={19} />
       </View>
-      <Text style={{ color: "#fff", fontSize: 15 }}>{text}</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={{ color: "#ffffff", fontSize: 15, fontWeight: "800" }}>{text}</Text>
+        {!!detail && (
+          <Text style={{ color: "#8fa198", fontSize: 12.5, marginTop: 1, lineHeight: 17 }}>
+            {detail}
+          </Text>
+        )}
+      </View>
     </View>
   );
 }
@@ -181,7 +206,7 @@ function BottomTab({
       onHoverIn={() => setHovered(true)}
       onHoverOut={() => setHovered(false)}
       android_ripple={{
-        color: "rgba(0, 217, 130, 0.25)",
+        color: "rgba(255, 255, 255, 0.1)",
         borderless: false,
         radius: 24,
       }}
@@ -190,48 +215,30 @@ function BottomTab({
       accessibilityState={{ selected }}
       style={({ pressed }) => ({
         flex: 1,
-        height: 48,
+        height: 52,
         alignItems: "center",
         justifyContent: "center",
-        borderRadius: 24,
-        overflow: "hidden",
-        paddingVertical: 4,
-        backgroundColor: selected
-          ? pressed
-            ? "#02351b"
-            : "#044222"
-          : pressed
-            ? "rgba(0, 217, 130, 0.22)"
-            : hovered
-              ? "rgba(0, 217, 130, 0.12)"
-              : "transparent",
-        borderWidth: selected ? 1.5 : pressed || hovered ? 1 : 0,
-        borderColor: selected
-          ? "#00d982"
-          : pressed
-            ? "rgba(0, 217, 130, 0.5)"
-            : hovered
-              ? "rgba(0, 217, 130, 0.3)"
-              : "transparent",
-        shadowColor: "#00d982",
-        shadowOpacity: selected ? 0.35 : pressed ? 0.25 : 0,
-        shadowRadius: selected ? 8 : pressed ? 6 : 0,
-        shadowOffset: { width: 0, height: 0 },
-        transform: [{ scale: pressed ? 0.93 : hovered ? 1.02 : 1 }],
+        opacity: pressed || hovered ? 0.7 : 1,
       })}
     >
-      {({ pressed }) => (
+      {() => (
         <>
-          <AppSymbol
-            name={icon}
-            color={selected || pressed ? "#00d982" : "#c4d8ce"}
-            size={19}
+          <AppSymbol name={icon} color={selected ? THEME.ink : THEME.muted} size={21} />
+          <View
+            style={{
+              width: 16,
+              height: 2,
+              borderRadius: 1,
+              marginTop: 3,
+              backgroundColor: selected ? THEME.accent : "transparent",
+            }}
           />
           <Text
             style={{
-              color: selected ? "#ffffff" : pressed ? "#00d982" : "#c4d8ce",
-              fontSize: 11,
-              fontWeight: selected || pressed ? "800" : "500",
+              color: selected ? THEME.ink : THEME.muted,
+              fontSize: 10.5,
+              fontWeight: selected ? "600" : "400",
+              letterSpacing: 0.3,
               marginTop: 2,
             }}
           >
@@ -260,6 +267,26 @@ function orderStartingPicksByType(picks: Row[]) {
 
 const money = (x: number) => `£${(x / 10).toFixed(1)}m`;
 
+// FPL's reason from an error reply: the messages in its JSON (e.g.
+// {"non_field_errors": ["..."]}), or the start of a plain-text reply.
+function fplReason(detail: unknown): string {
+  if (typeof detail !== "string" || !detail.trim()) return "";
+  const collect = (value: unknown): string[] =>
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.flatMap(collect)
+        : value && typeof value === "object"
+          ? Object.values(value).flatMap(collect)
+          : [];
+  try {
+    const messages = collect(JSON.parse(detail)).filter((text) => text.trim());
+    if (messages.length) return userMessage(messages.slice(0, 3).join(" "), "");
+  } catch {}
+  // Plain text is kept only if it reads as a sentence (not server output).
+  return userMessage(detail.trim(), "");
+}
+
 const formatDeadlineDate = (isoString?: string | null) => {
   if (!isoString) return "Deadline unavailable";
   try {
@@ -278,31 +305,15 @@ const formatDeadlineDate = (isoString?: string | null) => {
   }
 };
 
-const formatRemainingTime = (isoString?: string | null, nowMs: number = Date.now()) => {
-  if (!isoString) return "—";
-  const deadlineMs = new Date(isoString).getTime();
-  if (isNaN(deadlineMs)) return "—";
-  const diff = deadlineMs - nowMs;
-  if (diff <= 0) return "Deadline Passed";
-
-  const totalSecs = Math.floor(diff / 1000);
-  const days = Math.floor(totalSecs / (3600 * 24));
-  const hours = Math.floor((totalSecs % (3600 * 24)) / 3600);
-  const mins = Math.floor((totalSecs % 3600) / 60);
-  const secs = totalSecs % 60;
-
-  if (days > 0) {
-    return `${days}d ${hours}h ${mins}m`;
-  }
-  return `${hours}h ${mins}m ${secs}s`;
-};
 
 export default function Index() {
   const insets = useSafeAreaInsets();
   const webRef = useRef<any>(null);
   const [stage, setStage] = useState<Stage>("checking");
   const stageRef = useRef<Stage>(stage);
-  stageRef.current = stage;
+  useEffect(() => {
+    stageRef.current = stage;
+  }, [stage]);
 
   const [squad, setSquad] = useState<Squad | null>(null);
   const [draft, setDraft] = useState<Row[]>([]);
@@ -311,16 +322,23 @@ export default function Index() {
   const [mode, setMode] = useState<Mode>("lineup");
   const [activeBottomTab, setActiveBottomTab] =
     useState<BottomTabId>("lineup");
-  const modeTransitionOpacity = useRef(new Animated.Value(1)).current;
-  const modeTransitionX = useRef(new Animated.Value(0)).current;
-  const modeTransitioning = useRef(false);
-  const leaguesAnim = useRef(new Animated.Value(0)).current;
-  const historyAnim = useRef(new Animated.Value(0)).current;
+  const modeTransitionOpacity = useAnimatedValue(1);
+  const modeTransitionX = useAnimatedValue(0);
+  // Page switches: the page being switched to while the old one fades out,
+  // and the side the new one slides in from once it has been built.
+  const switchTarget = useRef<Mode | null>(null);
+  const pendingSlide = useRef<number | null>(null);
+  const leaguesAnim = useAnimatedValue(0);
 
   const [transferStatsVisible, setTransferStatsVisible] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const [pendingChip, setPendingChip] = useState<PlayableChip | null>(null);
   const [showChipMenu, setShowChipMenu] = useState(false);
+  // The last lineup save sent, so one refused by FPL can be retried with a
+  // freshly renewed sign-in.
+  // The lineup change being saved: its script (to resend once if FPL refuses
+  // the sign-in) and the lineup to show once FPL accepts it.
+  const lastSave = useRef<{ script: string; retried: boolean; draft: Row[] } | null>(null);
   const [dialog, setDialog] = useState<{
     title: string;
     message: string;
@@ -329,12 +347,21 @@ export default function Index() {
     content?: ReactNode;
   } | null>(null);
   const [pickPos, setPickPos] = useState<number | null>(null);
+  // A problem loading the team while it is on screen (shown as a strip).
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
+  // A moment of "Lineup saved" after FPL accepts a lineup change.
+  const [savedFlash, setSavedFlash] = useState(false);
+  const savedFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
+    },
+    [],
+  );
   const [sending, setSending] = useState(false);
   const [showLeagues, setShowLeagues] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
   const [activeMember, setActiveMember] = useState<{
     entry: number;
     teamName: string;
@@ -344,6 +371,41 @@ export default function Index() {
   const [activeMemberEvent, setActiveMemberEvent] = useState<number>(1);
   // Notification settings shown in More.
   const [notifSettings, setNotifSettings] = useState<NotificationSettings>(DEFAULT_SETTINGS);
+  // Extra figures on the home pitch's cards, chosen in "Card info" and saved.
+  const [cardStats, setCardStats] = useState<CardStatKey[]>([]);
+  const [showCardInfo, setShowCardInfo] = useState(false);
+  // The manager's overall rank after each gameweek (public history), for the
+  // movement beside the rank on the home screen. Read again when the rank
+  // changes (a new gameweek, or FPL updating the live rank).
+  const [rankHistory, setRankHistory] = useState<{ entry: number; points: RankPoint[] } | null>(null);
+  const rankEntry = squad?.entry;
+  const rankNow = squad?.overallRank;
+  useEffect(() => {
+    if (!rankEntry) return;
+    let active = true;
+    loadOverallRanks(rankEntry).then((points) => {
+      if (active && points.length) setRankHistory({ entry: rankEntry, points });
+    });
+    return () => {
+      active = false;
+    };
+  }, [rankEntry, rankNow]);
+  // The squad picture being made (camera button on Home and Transfers).
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
+  // Transfers keeps its own choice (none by default: position and club only).
+  const [transferCardStats, setTransferCardStats] = useState<CardStatKey[]>([]);
+  useEffect(() => {
+    loadCardStats("lineup").then(setCardStats);
+    loadCardStats("transfers").then(setTransferCardStats);
+  }, []);
+  // The choice for the page on screen.
+  const cardStatsPage = mode === "transfers" ? "transfers" : "lineup";
+  const shownCardStats = cardStatsPage === "transfers" ? transferCardStats : cardStats;
+  const changeCardStats = (keys: CardStatKey[]) => {
+    if (cardStatsPage === "transfers") setTransferCardStats(keys);
+    else setCardStats(keys);
+    saveCardStats(keys, cardStatsPage);
+  };
   const [notifPermission, setNotifPermission] = useState<PermissionState>("undetermined");
   useEffect(() => {
     loadSettings().then(setNotifSettings);
@@ -380,7 +442,7 @@ export default function Index() {
       if (permission !== "granted") {
         showDialog(
           "Notifications are off",
-          "Allow notifications for ProFPL in your phone's settings to get deadline reminders and squad news.",
+          "Allow notifications for Skippr in your phone's settings to get deadline reminders and squad news.",
           [
             { text: "Not now", style: "cancel" },
             { text: "Open settings", onPress: () => Linking.openSettings() },
@@ -399,14 +461,22 @@ export default function Index() {
 
   // "My season" page, opened from More.
   const [showSeason, setShowSeason] = useState(false);
+  // The privacy policy, readable signed in or not.
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  // The fixture planner, opened from More.
+  const [showPlanner, setShowPlanner] = useState(false);
+  const [showHelper, setShowHelper] = useState(false);
+  // Matches (live scores and results), opened from More.
+  const [showMatches, setShowMatches] = useState(false);
+  // Android back button: what it does depends on the screen; set further
+  // down, once everything it needs is defined. Pop-ups (dialogs, sheets,
+  // the player list) handle Back themselves.
+  const onBack = useRef<() => boolean>(() => false);
   useEffect(() => {
-    if (!showSeason) return;
-    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-      setShowSeason(false);
-      return true;
-    });
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => onBack.current());
     return () => subscription.remove();
-  }, [showSeason]);
+  }, []);
   // The signed-in manager's live numbers for the gameweek in play.
   const [ownLive, setOwnLive] = useState<{
     entry: number;
@@ -421,7 +491,6 @@ export default function Index() {
     preloadAvatars();
   }, []);
 
-  const [nowMs, setNowMs] = useState(Date.now());
   const [fplEvents, setFplEvents] = useState<any[]>([]);
 
   // Latest injury / suspension news per player id. Kept apart from the squad
@@ -508,14 +577,6 @@ export default function Index() {
     };
   }, []);
 
-  useEffect(() => {
-    if (mode !== "transfers") return;
-    const interval = setInterval(() => {
-      setNowMs(Date.now());
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [mode]);
-
   const nextGwDeadlineInfo = useMemo(() => {
     const events = fplEvents.length > 0
       ? fplEvents
@@ -549,9 +610,10 @@ export default function Index() {
       id: targetEvent.id ?? nextGwId,
       name: targetEvent.name ?? `Gameweek ${targetEvent.id ?? nextGwId}`,
       formattedDate: deadlineTimeIso ? formatDeadlineDate(deadlineTimeIso) : `GW ${targetEvent.id ?? nextGwId} Deadline`,
-      remainingText: deadlineTimeIso ? formatRemainingTime(deadlineTimeIso, nowMs) : "Active",
+      // The countdown itself ticks inside the transfer bar.
+      deadlineIso: deadlineTimeIso ?? null,
     };
-  }, [squad, fplEvents, nowMs]);
+  }, [squad, fplEvents]);
 
   const modalWebRef = useRef<any>(null);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -605,38 +667,59 @@ export default function Index() {
     startLoginTimer();
     check();
   };
+  // Signed in, but the team couldn't be loaded after the automatic retries:
+  // offer Try again (on the sign-in screen). At start-up, leave the loading
+  // screen for it, so a signed-in user is never left waiting or shown as
+  // signed out.
+  const squadLoadGaveUp = (text: string) => {
+    setSquadLoadFailed(true);
+    finishLogin(text);
+    if (stageRef.current === "checking") setStage("login");
+  };
   const startLoginTimer = () => {
     stopLoginTimer();
+    // Generous: the team load tries FPL directly, then the web page route
+    // with its retries, and on a slow connection that all takes time. This
+    // only catches a load that never answers at all.
     loginTimer.current = setTimeout(() => {
       loginTimer.current = null;
-      awaitingSquad.current = false;
-      setLoginLoading(false);
-      setLoginError(
-        "Sign in is taking too long. Please check your connection and try again.",
-      );
-    }, 45000);
+      squadLoadGaveUp("Loading your team is taking too long. Check your connection and tap Try again.");
+    }, 90000);
   };
   useEffect(() => stopLoginTimer, []);
+
+  // Set up further down (it needs state declared there); see clearAccountViews.
+  const clearAccountViewsRef = useRef<() => void>(() => {});
 
   // The session can no longer be renewed: the user has to sign in again.
   const sessionLost = () => {
     if (signedOut.current) return;
     signedOut.current = true;
     sessionRetried.current = false;
+    clearAccountViewsRef.current();
     signOut();
     AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
     if (stageRef.current === "squad" || awaitingSquad.current) {
       finishLogin("Your FPL session has expired. Please sign in again.");
       setStage("login");
     } else if (stageRef.current === "checking") {
-      setStage("welcome");
+      loadRememberedLogin().then((remembered) =>
+        setStage((s) => (s === "checking" ? (remembered?.auto ? "login" : "welcome") : s)),
+      );
     }
   };
 
   // Runs a script in the FPL WebView with the user's access token attached,
   // renewing the token first if it is about to expire.
-  const runInWeb = (script: string) => {
-    getAccessToken()
+  // `onOffline`: for requests that need the sign-in. If the token could not
+  // be renewed (no connection, FPL busy), the request is not sent at all:
+  // sent without a token, FPL would answer "not signed in" and the app would
+  // wrongly sign the user out.
+  const runInWeb = (
+    script: string,
+    options: { force?: boolean; onOffline?: () => void } = {},
+  ) => {
+    getAccessToken({ force: options.force })
       .then(
         (token) => token,
         (error) => {
@@ -644,7 +727,11 @@ export default function Index() {
             sessionLost();
             return undefined;
           }
-          // Renewal failed for network reasons; the request itself reports it.
+          if (options.onOffline) {
+            options.onOffline();
+            return undefined;
+          }
+          // Public data (league tables) still loads without a token.
           return null;
         },
       )
@@ -657,13 +744,15 @@ export default function Index() {
         }
         queuedScripts.current.push(wrapped);
         // Safety net: never hold a request for long if the page does not
-        // report that it finished loading.
+        // report that it finished loading. (The FPL site is heavy: on a slow
+        // connection it can take a while, and a request sent before it has
+        // loaded is blocked, so wait a fair time first.)
         setTimeout(() => {
           const index = queuedScripts.current.indexOf(wrapped);
           if (index < 0) return;
           queuedScripts.current.splice(index, 1);
           webRef.current?.injectJavaScript(wrapped);
-        }, 6000);
+        }, 12000);
       });
   };
 
@@ -675,7 +764,10 @@ export default function Index() {
       try {
         if (!(await hasSession())) {
           signedOut.current = true;
-          setStage("welcome");
+          // A login saved with Remember me: go to sign-in, which signs in
+          // with it by itself.
+          const remembered = await loadRememberedLogin();
+          setStage(remembered?.auto ? "login" : "welcome");
           return;
         }
         const cachedSquadStr = await AsyncStorage.getItem(STORAGE_SQUAD);
@@ -684,10 +776,21 @@ export default function Index() {
           if (cachedSquad && cachedSquad.entry) {
             setSquad(cachedSquad);
             setStage("squad");
+            return;
           }
         }
-      } catch (e) {}
+        // Signed in, but no saved team to show yet: wait for it on the
+        // loading screen, with the same retries and time limit as a sign-in
+        // (if it can't be loaded, Try again is offered).
+        if (stageRef.current === "checking") {
+          awaitingSquad.current = true;
+          squadRetries.current = 0;
+          startLoginTimer();
+        }
+      } catch {}
     })();
+    // Runs once, at launch; startLoginTimer only uses refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Coming back to the app: renew the session if it is close to expiring, so
@@ -700,6 +803,8 @@ export default function Index() {
       });
     });
     return () => subscription.remove();
+    // Subscribed once; sessionLost only uses refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const closeGoogleModal = () => {
@@ -715,6 +820,16 @@ export default function Index() {
     setSignInUrl(pending.url);
     setGoogleModalKey((k) => k + 1);
     setShowGoogleModal(true);
+  };
+
+  // Email and password sign-in: starts a sign-in on the official page, which
+  // the form fills in out of sight, and returns that page's address.
+  const beginPasswordSignIn = () => {
+    const pending = beginSignIn();
+    pendingSignIn.current = pending;
+    webLoginDone.current = false;
+    setLoginError("");
+    return pending.url;
   };
 
   // The login page has redirected back with a sign-in code: swap it for the
@@ -733,12 +848,13 @@ export default function Index() {
       () => {
         signedOut.current = false;
         sessionRetried.current = false;
+        authRetried.current = false;
         squadRetries.current = 0;
         setSquadLoadFailed(false);
         setSquadLoadDetail("");
         check();
       },
-      (error) => finishLogin(error?.message || "Sign in failed. Please try again."),
+      (error) => finishLogin(userMessage(error, "Sign in failed. Please try again.")),
     );
   };
 
@@ -766,7 +882,7 @@ export default function Index() {
   const handleLogout = () => {
     showDialog(
       "Log Out",
-      "Are you sure you want to log out of ProFPL?",
+      "Are you sure you want to log out of Skippr?",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -780,6 +896,8 @@ export default function Index() {
             queuedScripts.current = [];
             finishLogin();
             signOut();
+            // Keep a remembered login for the form, but don't sign straight back in.
+            pauseAutoSignIn();
             clearNotifications();
             stopBackgroundTask();
             AsyncStorage.removeItem(STORAGE_SQUAD).catch(() => {});
@@ -790,6 +908,7 @@ export default function Index() {
             setPendingChip(null);
             setSelectedPos(null);
             setPickPos(null);
+            clearAccountViewsRef.current();
             setStage("welcome");
             setShowSeason(false);
             setActiveBottomTab("lineup");
@@ -808,16 +927,7 @@ export default function Index() {
       easing: showLeagues ? Easing.out(Easing.cubic) : Easing.in(Easing.quad),
       useNativeDriver: true,
     }).start();
-  }, [showLeagues]);
-
-  useEffect(() => {
-    Animated.timing(historyAnim, {
-      toValue: showHistory ? 1 : 0,
-      duration: showHistory ? 260 : 180,
-      easing: showHistory ? Easing.out(Easing.cubic) : Easing.in(Easing.quad),
-      useNativeDriver: true,
-    }).start();
-  }, [showHistory]);
+  }, [showLeagues, leaguesAnim]);
   const mainScrollRef = useRef<any>(null);
   const [selectedLeague, setSelectedLeague] = useState<FplLeague | null>(null);
   const [leagueStandings, setLeagueStandings] =
@@ -850,8 +960,41 @@ export default function Index() {
   const [memberSquad, setMemberSquad] = useState<MemberSquad | null>(null);
   const [managerLoading, setManagerLoading] = useState(false);
   const [managerError, setManagerError] = useState("");
-  const [historyEvent, setHistoryEvent] = useState<number | null>(null);
   const managerRequest = useRef<{ entry: number; event: number } | null>(null);
+
+  // Leagues, other managers' teams and live numbers belong to the account
+  // that was signed in: forget them, so the next account never sees them.
+  const clearAccountViews = () => {
+    // A save or transfer in flight belongs to the account that is going.
+    setSaving(false);
+    setSending(false);
+    setSavedFlash(false);
+    leagueView.current = null;
+    managerRequest.current = null;
+    setSelectedLeague(null);
+    setLeagueStandings(null);
+    setUserStanding(null);
+    setH2hMatches([]);
+    setH2hEvent(null);
+    setLeagueError("");
+    setLeagueLoading(false);
+    setH2hLoading(false);
+    setInviteCodes({});
+    setActiveMember(null);
+    setMemberSquad(null);
+    setManagerLoading(false);
+    setManagerError("");
+    setOwnLive(null);
+    setShowLeagues(false);
+    setShowPlanner(false);
+    setShowHelper(false);
+    setShowMatches(false);
+    setError("");
+  };
+
+  useEffect(() => {
+    clearAccountViewsRef.current = clearAccountViews;
+  });
 
   const showDialog = (
     title: string,
@@ -861,8 +1004,57 @@ export default function Index() {
     content?: ReactNode,
   ) => setDialog({ title, message, buttons, kind, content });
 
-  const check = () =>
-    runInWeb(buildFetchJs());
+  // Couldn't renew the sign-in for a network reason: keep it, say so, and try
+  // again shortly.
+  const offlineRetry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleWebMessage = useRef<((e: { nativeEvent: { data: string } }) => void) | null>(null);
+  const squadOffline = () => {
+    setRefreshing(false);
+    if (awaitingSquad.current) {
+      setSquadLoadDetail("could not reach FPL to renew the sign-in");
+      squadLoadGaveUp("Couldn't reach FPL. Check your connection and tap Try again.");
+      return;
+    }
+    if (stageRef.current === "squad") {
+      setError(`${MESSAGES.offline.replace(" and try again.", ".")} Showing your last saved team.`);
+    }
+    if (offlineRetry.current) clearTimeout(offlineRetry.current);
+    offlineRetry.current = setTimeout(() => {
+      offlineRetry.current = null;
+      if (!signedOut.current) check();
+    }, 15_000);
+  };
+  // Loading the team: straight from FPL first (squadDirect.ts), which doesn't
+  // depend on the hidden web page having loaded. Only if that doesn't fully
+  // work does the web page route run, with all its sign-in and outage
+  // handling, so the direct route can never sign anyone out by mistake.
+  const check = (options: { force?: boolean } = {}) => {
+    const viaWeb = () => runInWeb(buildFetchJs(), { force: options.force, onOffline: squadOffline });
+    getAccessToken({ force: options.force }).then(
+      (token) => {
+        if (!token) {
+          viaWeb();
+          return;
+        }
+        loadSquadDirect(token).then((result) => {
+          if (signedOut.current) return;
+          if (!result.ok) {
+            viaWeb();
+            return;
+          }
+          handleWebMessage.current?.({ nativeEvent: { data: JSON.stringify(result) } });
+        });
+      },
+      // Couldn't get a token: the web page route reports why, as before.
+      () => viaWeb(),
+    );
+  };
+  // FPL refused the sign-in once already this round; a second refusal after
+  // a fresh renewal is final.
+  const authRetried = useRef(false);
+  // Quiet retries when FPL is briefly busy while the team is on screen.
+  const quietRetries = useRef(0);
+  const quietRetry = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runLeagueAction = (
     action: Exclude<LeagueAction, { action: "leagues" }>,
   ) => {
@@ -935,6 +1127,9 @@ export default function Index() {
       clearInterval(interval);
       subscription.remove();
     };
+    // runInWeb is a plain function remade each render; listing it would
+    // restart the polling on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [squadEntry, liveGwId, homeVisible, viewingEntry, activeMemberEvent]);
 
   // Keep the ranks on the league cards current: re-read the manager's leagues
@@ -981,6 +1176,8 @@ export default function Index() {
       clearInterval(interval);
       subscription.remove();
     };
+    // As above: runInWeb would restart this on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, stage, squadEntry]);
 
   const loadH2hMatches = (league: FplLeague, event: number) => {
@@ -1064,8 +1261,40 @@ export default function Index() {
     loadManagerGameweek(entry, event);
   };
 
+  // Teams opened from another team's page (the gameweek's highest score):
+  // Back returns to the one before.
+  const memberTrail = useRef<{ member: NonNullable<typeof activeMember>; event: number }[]>([]);
+  const openTopEntry = (entry: number, event: number) => {
+    if (activeMember) memberTrail.current.push({ member: activeMember, event: activeMemberEvent });
+    viewMemberSquad(entry, event, `Highest score · GW ${event}`, "");
+    // Fill in the team and manager names once FPL sends them (if this team
+    // is still the one on screen).
+    loadEntryName(entry).then((names) => {
+      if (!names) return;
+      setActiveMember((current) =>
+        current && current.entry === entry && !current.isOwnPoints
+          ? { ...current, teamName: names.teamName, managerName: names.managerName }
+          : current,
+      );
+    });
+  };
+  const closeActiveMember = () => {
+    const previous = memberTrail.current.pop();
+    if (previous) {
+      setActiveMember(previous.member);
+      setActiveMemberEvent(previous.event);
+      loadManagerGameweek(previous.member.entry, previous.event);
+      return;
+    }
+    setActiveMember(null);
+  };
+  useEffect(() => {
+    if (!activeMember) memberTrail.current = [];
+  }, [activeMember]);
+
   const openOwnHistory = (event?: number) => {
     if (!squad) return;
+    memberTrail.current = [];
     setShowLeagues(false);
     const liveGw = squad.gameweeks.find((gw) => gw.isCurrent && !gw.finished);
     const finishedGws = squad.gameweeks.filter((gw) => gw.finished);
@@ -1086,11 +1315,6 @@ export default function Index() {
     loadManagerGameweek(squad.entry, targetGw);
   };
 
-  const selectOwnHistoryEvent = (event: number) => {
-    if (!squad) return;
-    setHistoryEvent(event);
-    loadManagerGameweek(squad.entry, event);
-  };
 
   const joinLeague = (code: string) => {
     showDialog(
@@ -1137,8 +1361,11 @@ export default function Index() {
       ],
     );
   };
-  // Whenever fresh squad data arrives, reset all editable state
-  useEffect(() => {
+  // Whenever fresh squad data arrives, reset all editable state (done while
+  // rendering, so the old edits are never drawn over the new squad).
+  const [resetFor, setResetFor] = useState(squad);
+  if (squad !== resetFor) {
+    setResetFor(squad);
     if (squad) {
       setDraft(squad.picks);
       setSelectedPos(null);
@@ -1147,17 +1374,49 @@ export default function Index() {
       setPendingChip(null);
       setPickPos(null);
     }
-  }, [squad]);
+  }
 
   useEffect(() => {
     if (stage !== "checking") return;
     check();
-    const t = setTimeout(
-      () => setStage((s) => (s === "checking" ? "welcome" : s)),
-      8000,
-    );
+    // Safety net for someone who isn't signed in: never sit on the loading
+    // screen. A signed-in user waits for their team instead (see above), so
+    // they are never shown the welcome screen as if signed out.
+    const t = setTimeout(() => {
+      hasSession().then(
+        (signedIn) => {
+          if (!signedIn) setStage((s) => (s === "checking" ? "welcome" : s));
+        },
+        () => setStage((s) => (s === "checking" ? "welcome" : s)),
+      );
+    }, 8000);
     return () => clearTimeout(t);
+    // Runs when the stage becomes "checking"; check is remade each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage]);
+
+  // Safety net for the save overlay: if FPL hasn't answered a save or a
+  // transfer in 45 seconds, stop waiting, reload the team as FPL has it and
+  // say so, instead of holding the screen.
+  const saveStuckRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    saveStuckRef.current = () => {
+      setSaving(false);
+      setSending(false);
+      check();
+      showDialog(
+        "Still waiting for FPL",
+        "FPL hasn't confirmed the change yet. Your team has been reloaded as FPL has it: check it before trying again.",
+        [{ text: "OK" }],
+        "warning",
+      );
+    };
+  });
+  useEffect(() => {
+    if (!saving && !sending) return;
+    const timer = setTimeout(() => saveStuckRef.current(), 45_000);
+    return () => clearTimeout(timer);
+  }, [saving, sending]);
 
   const onMessage = (e: any) => {
     let msg: any;
@@ -1170,31 +1429,55 @@ export default function Index() {
     if (signedOut.current) return;
     if (msg.saved) {
       setSaving(false);
+      // FPL accepted it: now the players move (the reload below confirms it).
+      if (lastSave.current) setDraft(lastSave.current.draft);
       setPendingChip(null);
+      setSavedFlash(true);
+      if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
+      savedFlashTimer.current = setTimeout(() => setSavedFlash(false), 1300);
       check();
       return;
     }
     if (msg.saveError) {
       setSaving(false);
+      const reason = fplReason(msg.detail);
+      console.warn("FPL save error", msg.status, msg.detail);
+      if ((msg.status === 401 || msg.status === 403) && lastSave.current && !lastSave.current.retried) {
+        // FPL refused the sign-in: renew it and send the same change again.
+        lastSave.current.retried = true;
+        setSaving(true);
+        runInWeb(lastSave.current.script, { force: true });
+        return;
+      }
       if (msg.status === 401 || msg.status === 403) {
-        // The session was renewed just before this request, so a refusal is
-        // not grounds to sign the user out and lose their edits.
-        console.warn("FPL save refused", msg.status, msg.detail);
         showDialog(
           "FPL refused the change",
-          "Your changes were not saved. Please try again. If this keeps happening, log out and sign in again.",
+          reason ||
+            "Your changes were not saved. If this keeps happening, log out and sign in again.",
+          [{ text: "OK" }],
+          "danger",
+        );
+      } else if (msg.status == null) {
+        showDialog(
+          "Could not reach FPL",
+          "Your changes were not saved. Check your connection and try again.",
           [{ text: "OK" }],
           "danger",
         );
       } else {
-        console.warn("FPL save error", msg.status, msg.detail);
+        // FPL answered but would not accept the change: show its reason.
         showDialog(
-          "Could not save",
-          "We couldn't save your changes to FPL. Please check your connection and try again.",
+          msg.status >= 500 ? "FPL is busy" : "FPL didn't accept the change",
+          reason ||
+            (msg.status >= 500
+              ? "Your changes were not saved because FPL is busy at the moment. Please try again in a few minutes."
+              : "Your changes were not saved. Please try again."),
           [{ text: "OK" }],
           "danger",
         );
       }
+      // Show the team as FPL has it, not the unsaved edit.
+      check();
       return;
     }
     if (msg.transferred) {
@@ -1219,7 +1502,8 @@ export default function Index() {
         console.warn("FPL transfer refused", msg.status, msg.detail);
         showDialog(
           "FPL refused the transfers",
-          "Your transfers were not sent. Please try again. If this keeps happening, log out and sign in again.",
+          fplReason(msg.detail) ||
+            "Your transfers were not sent. Please try again. If this keeps happening, log out and sign in again.",
           [{ text: "OK" }],
           "danger",
         );
@@ -1233,9 +1517,16 @@ export default function Index() {
         check();
       } else {
         console.warn("FPL transfer error", msg.status, msg.detail);
+        const reason = fplReason(msg.detail);
         showDialog(
           "Transfer failed",
-          "We couldn't send your transfers to FPL. Nothing was retried — please check the FPL site or app to see your real team.",
+          reason
+            ? `FPL didn't accept the transfers: ${reason}`
+            : msg.status == null
+              ? "Couldn't reach FPL, so the transfers were not sent. Check your connection and try again."
+              : msg.status >= 500
+                ? "FPL is busy at the moment, so the transfers were not sent. Please try again in a few minutes."
+                : "FPL didn't accept the transfers, so nothing was changed. Please try again.",
           [{ text: "OK" }],
           "danger",
         );
@@ -1293,7 +1584,7 @@ export default function Index() {
         if (!view || view.league.id !== msg.leagueId || view.h2hEvent !== msg.event) return;
         setH2hLoading(false);
         if (msg.leagueAction === "error") {
-          setLeagueError(msg.error || "The fixtures could not be loaded.");
+          setLeagueError(userMessage(msg.error, "The matches couldn't be loaded. Please try again."));
         } else {
           setH2hMatches(Array.isArray(msg.results) ? msg.results : []);
           setLeagueError("");
@@ -1343,7 +1634,7 @@ export default function Index() {
           request.event === msg.event
         ) {
           setManagerLoading(false);
-          setManagerError(msg.error || "The gameweek could not be loaded.");
+          setManagerError(userMessage(msg.error, "This gameweek couldn't be loaded. Please try again."));
         }
         return;
       }
@@ -1360,9 +1651,7 @@ export default function Index() {
         }
         const inviteText = msg.inviteCode
           ? ` Invite code: ${msg.inviteCode}`
-          : ` The invite code could not be loaded${
-              msg.inviteCodeError ? ` (${msg.inviteCodeError})` : ""
-            }. Select the league and try "Show invite code".`;
+          : ` The invite code couldn't be loaded just now. Open the league and tap "Show invite code".`;
         showDialog(
           "League created",
           "Your league was created." + inviteText,
@@ -1391,14 +1680,16 @@ export default function Index() {
         );
         check();
       } else if (msg.leagueAction === "error") {
-        setLeagueError(msg.error || "The league request failed.");
+        setLeagueError(userMessage(msg.error, "That didn't work. Please try again."));
       }
       return;
     }
     setRefreshing(false);
     if (msg.ok) {
       sessionRetried.current = false;
+      authRetried.current = false;
       squadRetries.current = 0;
+      quietRetries.current = 0;
       setSquadLoadFailed(false);
       setSquadLoadDetail("");
       finishLogin();
@@ -1415,36 +1706,65 @@ export default function Index() {
         // Signed in fine, but this account has never created an FPL team.
         signedOut.current = true;
         signOut();
+        pauseAutoSignIn();
         finishLogin(
           "No FPL team found on this account. Please create one at fantasy.premierleague.com and try again.",
         );
         setStage("login");
-      } else if (!sessionRetried.current) {
-        // FPL did not accept the session. Ask once more before giving up on
-        // it, in case that was a passing fault.
-        sessionRetried.current = true;
-        check();
+      } else if (!authRetried.current) {
+        // FPL did not accept the token. Renew it and ask again: only if FPL
+        // refuses a freshly renewed token, or refuses to renew it at all, is
+        // the user really signed out.
+        authRetried.current = true;
+        check({ force: true });
       } else {
+        authRetried.current = false;
         sessionLost();
       }
+    } else if (msg.authRejected && !authRetried.current) {
+      // A call needing the sign-in was refused: renew the token and retry.
+      authRetried.current = true;
+      check({ force: true });
     } else if (stageRef.current === "squad") {
-      setError(msg.error || "Something went wrong");
+      if (isTemporary(msg.error) && quietRetries.current < 3) {
+        quietRetries.current += 1;
+        if (quietRetry.current) clearTimeout(quietRetry.current);
+        quietRetry.current = setTimeout(() => {
+          quietRetry.current = null;
+          if (!signedOut.current) check();
+        }, 10_000 * quietRetries.current);
+        return;
+      }
+      setError(
+        isTemporary(msg.error)
+          ? `${userMessage(msg.error)} Showing your last saved team.`
+          : "Couldn't refresh your team from FPL. Showing your last saved team.",
+      );
     } else if (awaitingSquad.current) {
       // FPL often fails briefly right after a sign-in (or while the game is
       // updating): try twice more on our own before asking the user.
-      if (squadRetries.current < 2) {
+      if (squadRetries.current < 3) {
         squadRetries.current += 1;
+        // Before the last try, start a fresh hidden FPL page in case this one
+        // is stuck (it reloads, then the try below runs once it's ready).
+        if (squadRetries.current === 3) restartWeb();
         setTimeout(() => {
           if (awaitingSquad.current) check();
-        }, 2000 * squadRetries.current);
+        }, [2000, 5000, 10000][squadRetries.current - 1]);
         return;
       }
-      console.warn("Squad load failed after sign-in:", msg.error);
-      setSquadLoadDetail(typeof msg.error === "string" ? msg.error.slice(0, 160) : "");
-      setSquadLoadFailed(true);
-      finishLogin("You're signed in, but we couldn't load your team from FPL. Tap Try again.");
+      squadLoadGaveUp(
+        isTemporary(msg.error)
+          ? `${userMessage(msg.error)} You're signed in; tap Try again shortly.`
+          : "You're signed in, but we couldn't load your team from FPL. Tap Try again.",
+      );
     }
   };
+  // The message handler, for results that don't come from the web page (the
+  // direct team load, in check() above).
+  useEffect(() => {
+    handleWebMessage.current = onMessage;
+  });
 
   const refresh = () => {
     setError("");
@@ -1481,10 +1801,6 @@ export default function Index() {
   };
 
   // ---------- Lineup mode ----------
-  const dirty =
-    !!squad &&
-    JSON.stringify(draft.map((p) => [p.id, p.pos, p.cap, p.vice])) !==
-      JSON.stringify(squad.picks.map((p) => [p.id, p.pos, p.cap, p.vice]));
 
   const confirmLineupChange = (nextDraft: Row[], chipToPlay: PlayableChip | null = pendingChip) => {
     if (!squad) return;
@@ -1520,7 +1836,8 @@ export default function Index() {
       );
     }
 
-    setDraft(nextDraft);
+    // The pitch keeps the current lineup while the user decides: players
+    // move only once FPL has accepted the change (see msg.saved).
     setSelectedPos(null);
     setPlayerSheetOpen(false);
 
@@ -1530,20 +1847,17 @@ export default function Index() {
         : "Save lineup?",
       lines.join("\n"),
       [
-        {
-          text: "Cancel",
-          style: "cancel",
-          onPress: () => {
-            setDraft(squad.picks);
-          },
-        },
+        { text: "Cancel", style: "cancel" },
         {
           text: "Save",
           onPress: () => {
             setSaving(true);
-            runInWeb(
-              buildSaveJs(squad.entry, nextDraft, chipToPlay),
-            );
+            lastSave.current = {
+              script: buildSaveJs(squad.entry, nextDraft, chipToPlay),
+              retried: false,
+              draft: nextDraft,
+            };
+            runInWeb(lastSave.current.script);
           },
         },
       ],
@@ -1646,10 +1960,6 @@ export default function Index() {
     confirmLineupChange(next);
   };
 
-  const confirmSave = () => {
-    confirmLineupChange(draft);
-  };
-
   // ---------- Transfers mode ----------
   // The squad as it would look with all pending transfers applied
   const tdraft: Row[] = useMemo(() => {
@@ -1674,11 +1984,38 @@ export default function Index() {
             chance: t.inn.chance,
             news: t.inn.news,
             fixtures: squad.fixturesByTeam[t.inn.teamId] ?? [],
+            epNext: t.inn.epNext ?? null,
+            ppg: t.inn.ppg ?? null,
+            xgi90: t.inn.xgi90 ?? null,
+            totalPoints: t.inn.pts,
             pendingIn: true,
           }
         : p;
     });
   }, [squad, pending]);
+
+  // Chips & captain: the lineup as edited (captain, bench order) with any
+  // unsaved transfers swapped in.
+  const helperRows: Row[] = useMemo(() => {
+    if (!squad) return [];
+    const base = draft.length ? draft : squad.picks;
+    const incoming = new Map<number, Row>();
+    tdraft.forEach((row) => {
+      if (!row.pendingIn) return;
+      const original = squad.picks.find((p) => p.pos === row.pos);
+      if (original) incoming.set(original.id, row);
+    });
+    return base.map((row) => {
+      const inn = incoming.get(row.id);
+      return inn ? { ...inn, pos: row.pos, cap: row.cap, vice: row.vice } : row;
+    });
+  }, [squad, draft, tdraft]);
+
+  // Squad value at today's prices: the 15 players' current prices added up
+  // (the bank not included), with any pending transfers made. The same
+  // figure the season review shows, so the two always agree.
+  const squadValueAfter = tdraft.reduce((total, p) => total + (p.price ?? p.buy), 0);
+  const squadValueNow = squad ? squad.picks.reduce((total, p) => total + (p.price ?? p.buy), 0) : 0;
 
   const bankAfter = squad
     ? squad.bank +
@@ -1688,8 +2025,11 @@ export default function Index() {
       }, 0)
     : 0;
 
+  // Something to review or reset on the transfer page (shown in the header).
+  const transfersPending = pending.length > 0 || pendingChip === "wildcard" || pendingChip === "freehit";
+
   const freeLeft = squad?.freeTransfers ?? null;
-  const extra = freeLeft == null ? 0 : Math.max(pending.length - freeLeft, 0);
+  const extra =freeLeft == null ? 0 : Math.max(pending.length - freeLeft, 0);
   const hit = extra * (squad?.hitCost ?? 4);
 
   // Budget and club-limit info for the spot being replaced
@@ -1784,7 +2124,7 @@ export default function Index() {
       warn(
         `This would cost ${hit} points (you have ${freeLeft} free transfer${
           freeLeft === 1 ? "" : "s"
-        }). Point hits are switched off in this test build. Reduce to ${freeLeft} transfer${
+        }). Point hits are switched off. Reduce to ${freeLeft} transfer${
           freeLeft === 1 ? "" : "s"
         }.`,
       );
@@ -1872,45 +2212,152 @@ export default function Index() {
     if (a) swap(a, r);
   };
 
+  // The new page, once built, slides a short way in from its side and fades
+  // up. Started from a layout effect, so it never runs on the old page.
+  const slideInPage = () => {
+    const from = pendingSlide.current;
+    if (from == null) return;
+    pendingSlide.current = null;
+    modeTransitionX.setValue(from);
+    Animated.parallel([
+      Animated.timing(modeTransitionOpacity, {
+        toValue: 1,
+        duration: 240,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        useNativeDriver: true,
+      }),
+      Animated.timing(modeTransitionX, {
+        toValue: 0,
+        duration: 320,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+  // The animated values never change; mode is what triggers it.
+  useLayoutEffect(slideInPage, [mode, modeTransitionOpacity, modeTransitionX]);
+
   const switchMode = (m: Mode) => {
-    if (m === mode) return;
+    if (m === mode && switchTarget.current === null) return;
     // Slide in from the side the new tab sits on in the bottom bar.
     const fromRight = TAB_ORDER.indexOf(m) > TAB_ORDER.indexOf(mode);
-
-    // Stop any in-flight animations and reset transition lock to prevent getting stuck on rapid taps
-    modeTransitionX.stopAnimation();
-    modeTransitionOpacity.stopAnimation();
-    modeTransitioning.current = false;
-
-    // Preload mode and transfer data instantly
-    setMode(m);
-    setTransferStatsVisible(m === "transfers");
+    switchTarget.current = m;
     setPendingChip(null);
     setSelectedPos(null);
     setPlayerSheetOpen(false);
 
-    const startX = fromRight ? 320 : -320;
-    modeTransitionX.setValue(startX);
-    modeTransitionOpacity.setValue(0);
-
-    modeTransitioning.current = true;
+    // 1. The current page fades out quickly, drifting away from the new tab.
+    //    It must be gone before the new page is built: otherwise the old
+    //    page would briefly slide back in while the new one renders.
+    modeTransitionX.stopAnimation();
+    modeTransitionOpacity.stopAnimation();
     Animated.parallel([
       Animated.timing(modeTransitionOpacity, {
-        toValue: 1,
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.spring(modeTransitionX, {
         toValue: 0,
-        damping: 24,
-        stiffness: 220,
+        duration: 90,
+        easing: Easing.in(Easing.quad),
         useNativeDriver: true,
       }),
-    ]).start(() => {
-      modeTransitioning.current = false;
+      Animated.timing(modeTransitionX, {
+        toValue: fromRight ? -24 : 24,
+        duration: 90,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      // Another tab was tapped meanwhile: that switch takes over.
+      if (!finished || switchTarget.current !== m) return;
+      switchTarget.current = null;
+      // 2. Build the new page while nothing shows; 3. it slides in after.
+      pendingSlide.current = fromRight ? 36 : -36;
+      if (m === mode) {
+        // Back to the page already built (tapped away and back quickly).
+        slideInPage();
+      } else {
+        setMode(m);
+        setTransferStatsVisible(m === "transfers");
+      }
     });
   };
+
+  // The fixture planner's clubs (from the player list) and how many of
+  // your players each has.
+  const plannerTeams = useMemo(() => {
+    const seen = new Map<number, string>();
+    (squad?.pool ?? []).forEach((player) => {
+      if (player.team && !seen.has(player.teamId)) seen.set(player.teamId, player.team);
+    });
+    return [...seen].map(([id, short]) => ({ id, short }));
+  }, [squad]);
+  const plannerMyClubs = useMemo(() => {
+    const counts: Record<number, number> = {};
+    (squad?.picks ?? []).forEach((pick) => {
+      counts[pick.teamId] = (counts[pick.teamId] ?? 0) + 1;
+    });
+    return counts;
+  }, [squad]);
+
+  // Your players, highlighted in match events.
+  const matchesMyPlayers = useMemo(() => (squad?.picks ?? []).map((pick) => pick.id), [squad]);
+
+  // Android back button, from the innermost screen outwards. Returning false
+  // lets Android handle it (leaving the app from the Lineup tab).
+  useEffect(() => {
+    onBack.current = () => {
+      if (showTerms) {
+        setShowTerms(false);
+        return true;
+      }
+      if (showPrivacy) {
+        setShowPrivacy(false);
+        return true;
+      }
+      if (showSeason) {
+        setShowSeason(false);
+        return true;
+      }
+      if (showPlanner) {
+        setShowPlanner(false);
+        return true;
+      }
+      if (showHelper) {
+        setShowHelper(false);
+        return true;
+      }
+      if (showMatches) {
+        setShowMatches(false);
+        return true;
+      }
+      if (stage === "login") {
+        setStage("welcome");
+        return true;
+      }
+      if (stage !== "squad") return false;
+      if (activeMember) {
+        closeActiveMember();
+        return true;
+      }
+      if (showChipMenu) {
+        setShowChipMenu(false);
+        return true;
+      }
+      if (mode === "leagues" && selectedLeague) {
+        closeLeague();
+        return true;
+      }
+      if (selectedPos !== null) {
+        setSelectedPos(null);
+        setPlayerSheetOpen(false);
+        return true;
+      }
+      if (mode !== "lineup") {
+        setActiveBottomTab("lineup");
+        switchMode("lineup");
+        return true;
+      }
+      return false;
+    };
+  });
 
   const pickSlot =
     pickPos !== null ? tdraft.find((p) => p.pos === pickPos) : null;
@@ -1938,17 +2385,16 @@ export default function Index() {
   const currentSelectedGw = squad?.gw ?? 1;
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#071818" }}>
+    <View style={{ flex: 1, backgroundColor: THEME.bg }}>
       <StatusBar barStyle="light-content" />
 
       {stage === "checking" && (
         <View
           style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
         >
-          <Text style={{ color: "#fff", fontSize: 32, fontWeight: "800" }}>
-            Pro<Text style={{ color: GREEN }}>FPL</Text>
-          </Text>
+          <Wordmark size={32} />
           <ActivityIndicator color={GREEN} style={{ marginTop: 24 }} />
+          <Text style={{ color: THEME.muted, fontSize: 12.5, marginTop: 12 }}>Loading your team…</Text>
         </View>
       )}
 
@@ -1963,20 +2409,23 @@ export default function Index() {
           }}
         >
           <View>
-            <Text style={{ color: "#fff", fontSize: 48, fontWeight: "800" }}>
-              Pro<Text style={{ color: GREEN }}>FPL</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <Image
+                source={require("../../assets/images/icon-small.png")}
+                accessible={false}
+                style={{ width: 52, height: 52, borderRadius: 14 }}
+              />
+              <Wordmark size={40} weight="900" />
+            </View>
+            <Text style={{ color: THEME.soft, fontSize: 17, marginTop: 14, lineHeight: 24 }}>
+              Manage your Fantasy Premier League team with live points, smart
+              alerts and season insights.
             </Text>
-            <Text style={{ color: "#e6d9ea", fontSize: 18, marginTop: 8 }}>
-              Your Fantasy Premier League team, all in one place.
-            </Text>
-            <View style={{ marginTop: 32 }}>
+            <View style={{ marginTop: 26 }}>
               <Feature
-                icon={{
-                  ios: "soccerball",
-                  android: "sports_soccer",
-                  web: "sports_soccer",
-                }}
-                text="See your squad on the pitch"
+                icon={{ ios: "bolt.fill", android: "bolt", web: "bolt" }}
+                text="Live gameweek points"
+                detail="Bonus, auto-subs and captaincy as matches happen"
               />
               <Feature
                 icon={{
@@ -1984,15 +2433,23 @@ export default function Index() {
                   android: "swap_horiz",
                   web: "swap_horiz",
                 }}
-                text="Substitutes and captain changes"
+                text="Lineup, transfers and chips"
+                detail="Pick your team and send changes straight to FPL"
               />
               <Feature
-                icon={{
-                  ios: "trophy.fill",
-                  android: "trophy",
-                  web: "trophy",
-                }}
-                text="Leagues (coming soon)"
+                icon={{ ios: "trophy.fill", android: "trophy", web: "trophy" }}
+                text="Leagues and rivals"
+                detail="Tables, rank changes and every manager's team"
+              />
+              <Feature
+                icon={{ ios: "bell.badge.fill", android: "notifications_active", web: "notifications_active" }}
+                text="Deadline and injury alerts"
+                detail="Reminders before each deadline and squad news"
+              />
+              <Feature
+                icon={{ ios: "chart.bar.fill", android: "insights", web: "insights" }}
+                text="Season insights"
+                detail="Your strengths, weak spots and form at a glance"
               />
             </View>
           </View>
@@ -2007,195 +2464,61 @@ export default function Index() {
                 opacity: pressed ? 0.85 : 1,
               })}
             >
-              <Text style={{ color: PURPLE, fontSize: 17, fontWeight: "800" }}>
-                Sign in with FPL
+              <Text style={{ color: THEME.onAccent, fontSize: 17, fontWeight: "900" }}>
+                Get started
               </Text>
             </Pressable>
             <Text
               style={{
-                color: "#cdb9d1",
+                color: "#8fa198",
                 fontSize: 12,
                 textAlign: "center",
                 marginTop: 12,
+                lineHeight: 17,
               }}
             >
-              You sign in on the official FPL page. ProFPL never sees your
-              password.
+              Sign in with your FPL account. Your password goes only to the
+              Premier League and is never stored.
             </Text>
             <Text
               style={{
-                color: "#cdb9d1",
-                fontSize: 12,
+                color: THEME.muted,
+                fontSize: 11,
                 textAlign: "center",
                 marginTop: 8,
+                lineHeight: 15,
               }}
             >
-              App version {APP_VERSION}
+              Not affiliated with the Premier League. Version {APP_VERSION}
             </Text>
           </View>
         </View>
       )}
 
       {stage === "login" && (
-        <View style={{ flex: 1, backgroundColor: "#071818" }}>
-          <Image
-            source={require("../../assets/images/background-texture.png")}
-            contentFit="cover"
-            style={{
-              position: "absolute",
-              top: 0,
-              right: 0,
-              bottom: 0,
-              left: 0,
-              opacity: 0.6,
+        <View style={{ flex: 1, backgroundColor: THEME.bg }}>
+          <ScreenBackground />
+          <EmailSignIn
+            topInset={insets.top}
+            bottomInset={insets.bottom}
+            version={APP_VERSION}
+            loading={loginLoading}
+            error={loginError}
+            errorDetail={squadLoadDetail}
+            squadLoadFailed={squadLoadFailed}
+            begin={beginPasswordSignIn}
+            onRedirect={finishWebSignIn}
+            onOtherMethods={openSignIn}
+            onRetrySquad={retrySquadLoad}
+            onDismissSquadFailure={() => {
+              setSquadLoadFailed(false);
+              setSquadLoadDetail("");
+              setLoginError("");
             }}
+            onBack={() => setStage("welcome")}
+            onOpenPrivacy={() => setShowPrivacy(true)}
+            onOpenTerms={() => setShowTerms(true)}
           />
-
-          <ScrollView
-            contentContainerStyle={{
-              paddingHorizontal: 24,
-              paddingTop: insets.top + 24,
-              paddingBottom: insets.bottom + 24,
-            }}
-            keyboardShouldPersistTaps="handled"
-          >
-            {/* App Branding */}
-            <View style={{ alignItems: "center", marginBottom: 28, marginTop: 8 }}>
-              <Text style={{ color: "#fff", fontSize: 36, fontWeight: "900" }}>
-                Pro<Text style={{ color: GREEN }}>FPL</Text>
-              </Text>
-              <Text style={{ color: "#d2c4d6", fontSize: 14, marginTop: 4, textAlign: "center" }}>
-                Sign in with your Premier League account
-              </Text>
-            </View>
-
-            {/* Login Form Card */}
-            <View
-              style={{
-                backgroundColor: "rgba(255, 255, 255, 0.08)",
-                borderRadius: 18,
-                borderWidth: 1,
-                borderColor: "rgba(255, 255, 255, 0.15)",
-                padding: 16,
-                elevation: 6,
-              }}
-            >
-              {/* Error Alert */}
-              {!!loginError && (
-                <View
-                  style={{
-                    backgroundColor: "rgba(239, 68, 68, 0.18)",
-                    borderWidth: 1,
-                    borderColor: "rgba(239, 68, 68, 0.4)",
-                    borderRadius: 10,
-                    paddingHorizontal: 10,
-                    paddingVertical: 8,
-                    marginBottom: 12,
-                    flexDirection: "row",
-                    alignItems: "center",
-                  }}
-                >
-                  <AppSymbol
-                    name={{ ios: "exclamationmark.triangle.fill", android: "warning", web: "warning" }}
-                    color="#ef4444"
-                    size={15}
-                  />
-                  <Text style={{ color: "#ff8080", fontSize: 12, fontWeight: "600", marginLeft: 6, flex: 1 }}>
-                    {loginError}
-                    {squadLoadFailed && !!squadLoadDetail && (
-                      <Text style={{ color: "#c98a8a", fontSize: 10.5, fontWeight: "500" }}>
-                        {`\n(${squadLoadDetail})`}
-                      </Text>
-                    )}
-                  </Text>
-                </View>
-              )}
-
-              {/* Sign in on the official Premier League page */}
-              <Pressable
-                onPress={squadLoadFailed ? retrySquadLoad : openSignIn}
-                disabled={loginLoading}
-                accessibilityRole="button"
-                accessibilityLabel={squadLoadFailed ? "Try loading your team again" : "Sign in with Premier League"}
-                style={({ pressed }) => ({
-                  backgroundColor: GREEN,
-                  height: 44,
-                  borderRadius: 22,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  opacity: pressed || loginLoading ? 0.7 : 1,
-                  paddingHorizontal: 12,
-                })}
-              >
-                {loginLoading ? (
-                  <>
-                    <ActivityIndicator color="#051a0f" size="small" />
-                    <Text style={{ color: "#051a0f", fontSize: 14, fontWeight: "900", marginLeft: 8 }}>
-                      Signing you in…
-                    </Text>
-                  </>
-                ) : (
-                  <Text style={{ color: "#051a0f", fontSize: 14, fontWeight: "900" }}>
-                    {squadLoadFailed ? "Try again" : "Sign in with Premier League"}
-                  </Text>
-                )}
-              </Pressable>
-              {squadLoadFailed && !loginLoading && (
-                <Pressable
-                  onPress={() => {
-                    setSquadLoadFailed(false);
-                    setSquadLoadDetail("");
-                    openSignIn();
-                  }}
-                  accessibilityRole="button"
-                  hitSlop={8}
-                  style={{ alignSelf: "center", marginTop: 10 }}
-                >
-                  <Text style={{ color: GREEN, fontSize: 13, fontWeight: "800" }}>Sign in again instead</Text>
-                </Pressable>
-              )}
-              <Text
-                style={{
-                  color: "#a893ae",
-                  fontSize: 12,
-                  textAlign: "center",
-                  marginTop: 10,
-                  lineHeight: 16,
-                }}
-              >
-                You only need to do this once. You stay signed in until you log out.
-              </Text>
-            </View>
-
-            {/* Privacy notice */}
-            <View
-              style={{
-                marginTop: 24,
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingHorizontal: 12,
-              }}
-            >
-              <AppSymbol
-                name={{ ios: "lock.fill", android: "verified_user", web: "verified_user" }}
-                color="#a893ae"
-                size={16}
-              />
-              <Text
-                style={{
-                  color: "#bda8c2",
-                  fontSize: 12,
-                  textAlign: "center",
-                  marginLeft: 8,
-                  lineHeight: 16,
-                }}
-              >
-                You sign in on the official Premier League page. ProFPL never sees or stores your password.
-              </Text>
-            </View>
-          </ScrollView>
         </View>
       )}
 
@@ -2226,7 +2549,7 @@ export default function Index() {
         statusBarTranslucent
         onRequestClose={closeGoogleModal}
       >
-        <View style={{ flex: 1, backgroundColor: "#071818", paddingTop: insets.top }}>
+        <View style={{ flex: 1, backgroundColor: THEME.bg, paddingTop: insets.top }}>
           {/* Modal Header */}
           <View
             style={{
@@ -2234,9 +2557,9 @@ export default function Index() {
               flexDirection: "row",
               alignItems: "center",
               paddingHorizontal: 16,
-              backgroundColor: "rgba(14, 38, 26, 0.95)",
+              backgroundColor: THEME.bg,
               borderBottomWidth: 1.5,
-              borderBottomColor: "rgba(0, 217, 130, 0.25)",
+              borderBottomColor: "rgba(255, 255, 255, 0.08)",
             }}
           >
             <Pressable onPress={closeGoogleModal} hitSlop={12}>
@@ -2291,18 +2614,8 @@ export default function Index() {
       </Modal>
 
       {stage === "squad" && squad && (
-        <View style={{ flex: 1, backgroundColor: "#071818" }}>
-          <Image
-            source={require("../../assets/images/background-texture.png")}
-            contentFit="cover"
-            style={{
-              position: "absolute",
-              top: 0,
-              right: 0,
-              bottom: 0,
-              left: 0,
-            }}
-          />
+        <View style={{ flex: 1, backgroundColor: THEME.bg }}>
+          <ScreenBackground />
           <View>
             <View
               style={{
@@ -2320,21 +2633,20 @@ export default function Index() {
                 overflow: "hidden",
               }}
             >
-              {/* Row 1: ProFPL + Refresh (left) and GW Button (right) */}
+              {/* Row 1: Skippr + Refresh (left) and GW Button (right) */}
               <View
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
                   paddingHorizontal: 2,
                   marginBottom: showLeagues ? 0 : 2,
+                  // Same height on every tab, so the logo never shifts.
+                  height: 28,
                 }}
               >
-                <View style={{ flexDirection: "row", alignItems: "center" }}>
-                  <Text
-                    style={{ color: "#fff", fontSize: 16, fontWeight: "900", letterSpacing: 0.4 }}
-                  >
-                    Pro<Text style={{ color: GREEN }}>FPL</Text>
-                  </Text>
+                {/* The logo never shrinks: whatever sits on the right gives way. */}
+                <View style={{ flexDirection: "row", alignItems: "center", flexShrink: 0 }}>
+                  <Wordmark size={16} weight="900" />
                   {!showLeagues && (
                     <Pressable
                       onPress={refresh}
@@ -2374,8 +2686,72 @@ export default function Index() {
                 <View style={{ flex: 1 }} />
 
                 {!showLeagues && (
-                  mode === "transfers" || mode === "more" ? (
-                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  mode === "transfers" && transfersPending ? (
+                    // Pending transfers: Reset and Review live here, in the
+                    // header (the cost and bank are in the bar below it).
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginLeft: 10 }}>
+                      <Pressable
+                        onPress={() => {
+                          setPending([]);
+                          setPendingChip(null);
+                        }}
+                        disabled={sending}
+                        accessibilityRole="button"
+                        accessibilityLabel="Reset all transfers"
+                        hitSlop={8}
+                        style={({ pressed }) => ({
+                          height: 28,
+                          paddingHorizontal: 10,
+                          borderRadius: 14,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 4,
+                          borderWidth: 1,
+                          borderColor: "rgba(255, 255, 255, 0.16)",
+                          backgroundColor: pressed ? "rgba(255, 255, 255, 0.1)" : "rgba(255, 255, 255, 0.04)",
+                          opacity: sending ? 0.5 : 1,
+                        })}
+                      >
+                        <AppSymbol
+                          name={{ ios: "arrow.uturn.backward", android: "undo", web: "undo" }}
+                          color={THEME.soft}
+                          size={13}
+                        />
+                        <Text style={{ color: THEME.soft, fontWeight: "600", fontSize: 12 }}>Reset</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={reviewTransfers}
+                        disabled={sending || pending.length === 0}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Review and confirm ${pending.length} transfer${pending.length === 1 ? "" : "s"}`}
+                        hitSlop={8}
+                        style={({ pressed }) => ({
+                          height: 28,
+                          paddingLeft: 12,
+                          paddingRight: 8,
+                          borderRadius: 14,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 4,
+                          backgroundColor: THEME.accent,
+                          opacity: sending || pending.length === 0 ? 0.45 : pressed ? 0.85 : 1,
+                        })}
+                      >
+                        {sending && <ActivityIndicator color={THEME.onAccent} size="small" />}
+                        <Text style={{ color: THEME.onAccent, fontWeight: "700", fontSize: 12.5 }}>
+                          {sending ? "Sending" : `Review ${pending.length}`}
+                        </Text>
+                        {!sending && (
+                          <AppSymbol
+                            name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
+                            color={THEME.onAccent}
+                            size={14}
+                          />
+                        )}
+                      </Pressable>
+                    </View>
+                  ) : mode === "transfers" || mode === "more" ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", flexShrink: 1, minWidth: 0, marginLeft: 10 }}>
                       <View
                         style={{
                           width: 3,
@@ -2388,6 +2764,7 @@ export default function Index() {
                       <Text
                         numberOfLines={1}
                         style={{
+                          flexShrink: 1,
                           color: "#fff",
                           fontSize: 12,
                           fontWeight: "500",
@@ -2408,10 +2785,10 @@ export default function Index() {
                         paddingVertical: 5,
                         borderWidth: 1,
                         borderColor: "rgba(255,255,255,0.12)",
-                        backgroundColor: "rgba(14, 38, 26, 0.6)",
+                        backgroundColor: "rgba(21, 27, 44, 0.85)",
                       }}
                     >
-                      <Text style={{ color: "#c5d8ce", fontSize: 11, fontWeight: "800" }}>
+                      <Text style={{ color: THEME.soft, fontSize: 11, fontWeight: "800" }}>
                         GW {squad.gw}
                         {squad.chip ? ` · ${squad.chip}` : ""}
                       </Text>
@@ -2420,6 +2797,9 @@ export default function Index() {
                 )}
               </View>
 
+              {/* The page's own header rows fade out and in with the page, so
+                  they leave the moment a different tab is tapped. */}
+              <Animated.View style={{ opacity: modeTransitionOpacity }}>
               {/* Row 2: Team Name with Green Accent Bar (left) and Points Button (right) */}
               {!showLeagues && mode !== "transfers" && mode !== "more" && (
                 <View
@@ -2468,6 +2848,14 @@ export default function Index() {
                 return (
                   <View style={{ marginTop: 4, marginHorizontal: 2 }}>
                     <SquadSummaryBar
+                      rankChange={(() => {
+                        // This gameweek's rank against the one before it (the
+                        // last gameweek played before this one).
+                        const shown = liveNow?.overallRank ?? squad.overallRank ?? null;
+                        if (!shown || rankHistory?.entry !== squad.entry || eventId == null) return null;
+                        const before = rankHistory.points.filter((point) => point.event < eventId).pop();
+                        return before ? before.rank - shown : null;
+                      })()}
                       gameweek={eventId ?? null}
                       gameweekPoints={liveNow ? liveNow.total : (squad.eventPoints ?? null)}
                       live={Boolean(eventGw?.isCurrent && !eventGw.finished)}
@@ -2479,23 +2867,66 @@ export default function Index() {
                   </View>
                 );
               })()}
+              </Animated.View>
             </View>
           </View>
 
+          {/* A problem loading the team while it's on screen: say so, quietly.
+              Cleared by the next successful load. */}
+          {!!error && (
+            <View
+              accessibilityLiveRegion="polite"
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 10,
+                marginHorizontal: 8,
+                marginBottom: 6,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                borderRadius: 10,
+                backgroundColor: "#151c19",
+                borderWidth: 1,
+                borderColor: "rgba(242, 193, 78, 0.35)",
+              }}
+            >
+              <Text style={{ flex: 1, color: "#e9dcb5", fontSize: 12.5, lineHeight: 17 }}>{error}</Text>
+              <Pressable onPress={refresh} accessibilityRole="button" hitSlop={8}>
+                <Text style={{ color: "#f2f5f3", fontSize: 12.5, fontWeight: "700" }}>Retry</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setError("")}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss"
+                hitSlop={8}
+              >
+                <AppSymbol name={{ ios: "xmark", android: "close", web: "close" }} color="#7f8c86" size={16} />
+              </Pressable>
+            </View>
+          )}
+
           {!showLeagues && transferStatsVisible && (
-            <View style={{ paddingHorizontal: 8, paddingTop: 2, marginBottom: 6 }}>
+            // Fades with the page, like the header rows above.
+            <Animated.View
+              style={{
+                paddingHorizontal: 8,
+                paddingTop: 2,
+                marginBottom: 6,
+                opacity: modeTransitionOpacity,
+              }}
+            >
               <TransferSummaryBar
                 gameweek={nextGwDeadlineInfo?.id ?? squad.gw}
                 deadlineDate={nextGwDeadlineInfo?.formattedDate ?? null}
-                deadlineRemaining={nextGwDeadlineInfo?.remainingText ?? null}
+                deadlineIso={nextGwDeadlineInfo?.deadlineIso ?? null}
                 freeTransfers={squad.freeTransfers}
                 pendingCount={pending.length}
                 bank={bankAfter}
                 pointsCost={pendingChip ? 0 : hit}
                 chipLabel={pendingChip ? selectedChipOption?.label ?? "Chip active" : null}
-                squadValue={squad.value}
+                squadValue={squadValueAfter}
               />
-            </View>
+            </Animated.View>
           )}
 
           <Animated.ScrollView
@@ -2504,9 +2935,9 @@ export default function Index() {
               flex: 1,
               opacity: modeTransitionOpacity,
               transform: [{ translateX: modeTransitionX }],
-              // Clear the floating tab bar: it is 56 tall and sits 2 above the
-              // phone's navigation area, whose height differs between devices.
-              marginBottom: insets.bottom + 62,
+              // Clear the docked tab bar: 56 tall plus the phone's navigation
+              // area, whose height differs between devices.
+              marginBottom: insets.bottom + 56,
             }}
             scrollEnabled={mode === "leagues" || mode === "more"}
             showsVerticalScrollIndicator={false}
@@ -2546,367 +2977,23 @@ export default function Index() {
                 userEntryId={squad?.entry}
               />
             ) : mode === "more" ? (
-              <ScrollView
-                style={{ flex: 1, width: "100%" }}
-                contentContainerStyle={{
-                  paddingHorizontal: 18,
-                  paddingTop: 16,
-                  paddingBottom: 100,
-                }}
-                showsVerticalScrollIndicator={false}
-              >
-                {/* Manager Profile Card */}
-                <View
-                  style={{
-                    backgroundColor: "#212826",
-                    borderRadius: 20,
-                    padding: 18,
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.08)",
-                    marginBottom: 24,
-                    elevation: 4,
-                  }}
-                >
-                  <View style={{ flexDirection: "row", alignItems: "center" }}>
-                    <View
-                      style={{
-                        width: 50,
-                        height: 50,
-                        borderRadius: 25,
-                        backgroundColor: "rgba(255, 255, 255, 0.06)",
-                        borderWidth: 1.5,
-                        borderColor: "rgba(0, 217, 130, 0.5)",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        marginRight: 14,
-                      }}
-                    >
-                      <AppSymbol
-                        name={{ ios: "person.fill", android: "person", web: "person" }}
-                        color={GREEN}
-                        size={24}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: "#ffffff", fontSize: 18, fontWeight: "900" }}>
-                        {squad.teamName || "Your Team"}
-                      </Text>
-                      <Text style={{ color: "#9db3a6", fontSize: 13, fontWeight: "600", marginTop: 2 }}>
-                        {squad.managerName || "Manager"} · ID: {squad.entry}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-
-                {/* Section: Insights */}
-                <Text
-                  style={{
-                    color: "#9db3a6",
-                    fontSize: 12,
-                    fontWeight: "800",
-                    letterSpacing: 0.5,
-                    textTransform: "uppercase",
-                    marginBottom: 8,
-                    marginLeft: 4,
-                  }}
-                >
-                  Insights
-                </Text>
-                <View
-                  style={{
-                    backgroundColor: "#212826",
-                    borderRadius: 18,
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.08)",
-                    overflow: "hidden",
-                    marginBottom: 24,
-                    elevation: 4,
-                  }}
-                >
-                  <Pressable
-                    onPress={() => setShowSeason(true)}
-                    accessibilityRole="button"
-                    accessibilityLabel="My season. Your strengths, weak spots and season stats"
-                    style={({ pressed }) => ({
-                      flexDirection: "row",
-                      alignItems: "center",
-                      paddingHorizontal: 16,
-                      paddingVertical: 16,
-                      backgroundColor: pressed ? "rgba(0, 217, 130, 0.12)" : "transparent",
-                    })}
-                  >
-                    <View
-                      style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 10,
-                        backgroundColor: "rgba(255, 255, 255, 0.06)",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        marginRight: 12,
-                      }}
-                    >
-                      <AppSymbol
-                        name={{ ios: "chart.bar.fill", android: "insights", web: "insights" }}
-                        color={GREEN}
-                        size={18}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: "#ffffff", fontSize: 15, fontWeight: "800" }}>My season</Text>
-                      <Text style={{ color: "#9db3a6", fontSize: 12, marginTop: 1 }}>
-                        Strengths, weak spots and season stats
-                      </Text>
-                    </View>
-                    <AppSymbol
-                      name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
-                      color="#9db3a6"
-                      size={18}
-                    />
-                  </Pressable>
-                </View>
-
-                {/* Section: Notifications */}
-                <Text
-                  style={{
-                    color: "#9db3a6",
-                    fontSize: 12,
-                    fontWeight: "800",
-                    letterSpacing: 0.5,
-                    textTransform: "uppercase",
-                    marginBottom: 8,
-                    marginLeft: 4,
-                  }}
-                >
-                  Notifications
-                </Text>
-                <View
-                  style={{
-                    backgroundColor: "#212826",
-                    borderRadius: 18,
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.08)",
-                    overflow: "hidden",
-                    marginBottom: 24,
-                    elevation: 4,
-                  }}
-                >
-                  {notifPermission === "denied" && (
-                    <Pressable
-                      onPress={() => Linking.openSettings()}
-                      accessibilityRole="button"
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 10,
-                        paddingHorizontal: 16,
-                        paddingVertical: 12,
-                        backgroundColor: "rgba(255, 159, 28, 0.12)",
-                      }}
-                    >
-                      <AppSymbol
-                        name={{ ios: "bell.slash.fill", android: "notifications_off", web: "notifications_off" }}
-                        color="#ff9f1c"
-                        size={18}
-                      />
-                      <Text style={{ flex: 1, color: "#ffd9a8", fontSize: 12.5, fontWeight: "700" }}>
-                        Notifications are blocked for ProFPL. Tap to open settings.
-                      </Text>
-                    </Pressable>
-                  )}
-                  {(
-                    [
-                      {
-                        key: "deadline24h",
-                        title: "Deadline: 24 hours before",
-                        detail: "A day's notice to plan transfers",
-                        icon: { ios: "calendar", android: "event", web: "event" },
-                      },
-                      {
-                        key: "deadline1h",
-                        title: "Deadline: 1 hour before",
-                        detail: "Last call, naming any flagged starters",
-                        icon: { ios: "alarm.fill", android: "alarm", web: "alarm" },
-                      },
-                      {
-                        key: "news",
-                        title: "Squad news",
-                        detail: "Injuries, suspensions and returns for your players",
-                        icon: { ios: "cross.case.fill", android: "medical_services", web: "medical_services" },
-                      },
-                    ] as const
-                  ).map((row, index) => {
-                    const on = notifSettings[row.key] && notifPermission === "granted";
-                    return (
-                      <View
-                        key={row.key}
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          paddingHorizontal: 16,
-                          paddingVertical: 12,
-                          borderTopWidth: index === 0 && notifPermission !== "denied" ? 0 : 1,
-                          borderTopColor: "rgba(255, 255, 255, 0.06)",
-                        }}
-                      >
-                        <View
-                          style={{
-                            width: 36,
-                            height: 36,
-                            borderRadius: 10,
-                            backgroundColor: "rgba(255, 255, 255, 0.06)",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            marginRight: 12,
-                          }}
-                        >
-                          <AppSymbol name={row.icon} color={GREEN} size={18} />
-                        </View>
-                        <View style={{ flex: 1, paddingRight: 8 }}>
-                          <Text style={{ color: "#ffffff", fontSize: 14.5, fontWeight: "800" }}>{row.title}</Text>
-                          <Text style={{ color: "#9db3a6", fontSize: 12, marginTop: 1 }}>{row.detail}</Text>
-                        </View>
-                        <Switch
-                          value={on}
-                          onValueChange={() => toggleNotification(row.key)}
-                          accessibilityLabel={row.title}
-                          trackColor={{ false: "rgba(255, 255, 255, 0.2)", true: "rgba(0, 217, 130, 0.6)" }}
-                          thumbColor={on ? GREEN : "#d7e6dd"}
-                        />
-                      </View>
-                    );
-                  })}
-                </View>
-
-                {/* Section: Account */}
-                <Text
-                  style={{
-                    color: "#9db3a6",
-                    fontSize: 12,
-                    fontWeight: "800",
-                    letterSpacing: 0.5,
-                    textTransform: "uppercase",
-                    marginBottom: 8,
-                    marginLeft: 4,
-                  }}
-                >
-                  Account
-                </Text>
-
-                <View
-                  style={{
-                    backgroundColor: "#212826",
-                    borderRadius: 18,
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.08)",
-                    overflow: "hidden",
-                    marginBottom: 24,
-                    elevation: 4,
-                  }}
-                >
-                  <Pressable
-                    onPress={handleLogout}
-                    style={({ pressed }) => ({
-                      flexDirection: "row",
-                      alignItems: "center",
-                      paddingHorizontal: 16,
-                      paddingVertical: 16,
-                      backgroundColor: pressed ? "rgba(255, 59, 48, 0.15)" : "transparent",
-                    })}
-                  >
-                    <View
-                      style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 10,
-                        backgroundColor: "rgba(255, 59, 48, 0.15)",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        marginRight: 12,
-                      }}
-                    >
-                      <AppSymbol
-                        name={{
-                          ios: "rectangle.portrait.and.arrow.right",
-                          android: "logout",
-                          web: "logout",
-                        }}
-                        color="#ff453a"
-                        size={18}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: "#ff453a", fontSize: 15, fontWeight: "800" }}>
-                        Log Out
-                      </Text>
-                      <Text style={{ color: "#9db3a6", fontSize: 12, marginTop: 1 }}>
-                        Sign out of your FPL account
-                      </Text>
-                    </View>
-                    <AppSymbol
-                      name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
-                      color="#9db3a6"
-                      size={14}
-                    />
-                  </Pressable>
-                </View>
-
-                {/* Section: About */}
-                <Text
-                  style={{
-                    color: "#9db3a6",
-                    fontSize: 12,
-                    fontWeight: "800",
-                    letterSpacing: 0.5,
-                    textTransform: "uppercase",
-                    marginBottom: 8,
-                    marginLeft: 4,
-                  }}
-                >
-                  About
-                </Text>
-
-                <View
-                  style={{
-                    backgroundColor: "#212826",
-                    borderRadius: 18,
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.08)",
-                    padding: 16,
-                    elevation: 4,
-                  }}
-                >
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 10,
-                    }}
-                  >
-                    <Text style={{ color: "#ffffff", fontSize: 14, fontWeight: "700" }}>
-                      App Version
-                    </Text>
-                    <Text style={{ color: GREEN, fontSize: 14, fontWeight: "800" }}>
-                      v{APP_VERSION}
-                    </Text>
-                  </View>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                    }}
-                  >
-                    <Text style={{ color: "#ffffff", fontSize: 14, fontWeight: "700" }}>
-                      Data Source
-                    </Text>
-                    <Text style={{ color: "#9db3a6", fontSize: 13, fontWeight: "600" }}>
-                      Official FPL API
-                    </Text>
-                  </View>
-                </View>
-              </ScrollView>
+              <MorePage
+                teamName={squad.teamName || "Your team"}
+                managerName={squad.managerName || "Manager"}
+                entry={squad.entry}
+                version={APP_VERSION}
+                notifSettings={notifSettings}
+                notifPermission={notifPermission}
+                onToggleNotification={toggleNotification}
+                onOpenSettings={() => Linking.openSettings()}
+                onOpenSeason={() => setShowSeason(true)}
+                onOpenPlanner={() => setShowPlanner(true)}
+                onOpenHelper={() => setShowHelper(true)}
+                onOpenMatches={() => setShowMatches(true)}
+                onOpenPrivacy={() => setShowPrivacy(true)}
+                onOpenTerms={() => setShowTerms(true)}
+                onLogout={handleLogout}
+              />
             ) : (
               <View style={{ flex: 1, width: "100%", position: "relative" }}>
                 {selectedPos !== null && (
@@ -2949,6 +3036,7 @@ export default function Index() {
                       setPlayerSheetOpen(true);
                     }}
                     onBackgroundPress={() => setSelectedPos(null)}
+                    cardStats={shownCardStats}
                     overlay={
                       <View
                         pointerEvents="box-none"
@@ -2961,6 +3049,74 @@ export default function Index() {
                           zIndex: 10,
                         }}
                       >
+                        {/* Top right: choose extra info for the cards (Home
+                            and Transfers each keep their own choice) */}
+                        {(mode === "lineup" || mode === "transfers") && (
+                          <Pressable
+                            onPress={() => setShowCardInfo(true)}
+                            accessibilityRole="button"
+                            accessibilityLabel="Card info: choose extra figures to show on player cards"
+                            style={({ pressed }) => ({
+                              position: "absolute",
+                              top: 8,
+                              right: 8,
+                              zIndex: 10,
+                              width: 38,
+                              height: 38,
+                              borderRadius: 19,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderWidth: 1,
+                              borderColor: shownCardStats.length ? THEME.accentLine : "rgba(255, 255, 255, 0.14)",
+                              backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
+                              elevation: 5,
+                              shadowColor: "#000",
+                              shadowOpacity: 0.3,
+                              shadowRadius: 6,
+                              shadowOffset: { width: 0, height: 2 },
+                            })}
+                          >
+                            <AppSymbol
+                              name={{ ios: "slider.horizontal.3", android: "tune", web: "tune" }}
+                              color={shownCardStats.length ? THEME.accent : THEME.ink}
+                              size={18}
+                            />
+                          </Pressable>
+                        )}
+                        {/* Top right (under card info on Home): a picture of
+                            the squad to share */}
+                        <Pressable
+                          onPress={() => {
+                            setSelectedPos(null);
+                            setPlayerSheetOpen(false);
+                            setShowChipMenu(false);
+                            setSnapshotOpen(true);
+                          }}
+                          disabled={snapshotOpen}
+                          accessibilityRole="button"
+                          accessibilityLabel="Share a picture of your squad"
+                          style={({ pressed }) => ({
+                            position: "absolute",
+                            top: 54,
+                            right: 8,
+                            zIndex: 10,
+                            width: 38,
+                            height: 38,
+                            borderRadius: 19,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            borderWidth: 1,
+                            borderColor: "rgba(255, 255, 255, 0.14)",
+                            backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
+                            elevation: 5,
+                            shadowColor: "#000",
+                            shadowOpacity: 0.3,
+                            shadowRadius: 6,
+                            shadowOffset: { width: 0, height: 2 },
+                          })}
+                        >
+                          <CameraIcon color={THEME.ink} size={18} />
+                        </Pressable>
                         {/* Top Left Chip Button */}
                         <View
                           pointerEvents="box-none"
@@ -2988,7 +3144,7 @@ export default function Index() {
                               borderColor: showChipMenu
                                 ? "rgba(255, 255, 255, 0.35)"
                                 : "rgba(255, 255, 255, 0.14)",
-                              backgroundColor: pressed ? "#2c3431" : "#212826",
+                              backgroundColor: pressed ? "#252d45" : THEME.surfaceRaised,
                               elevation: 5,
                               shadowColor: "#000",
                               shadowOpacity: 0.3,
@@ -3002,7 +3158,7 @@ export default function Index() {
                                 android: "layers",
                                 web: "layers",
                               }}
-                              color="#e6efe9"
+                              color={THEME.ink}
                               size={18}
                             />
                             {(pendingChip || squad.chip) && (
@@ -3016,7 +3172,7 @@ export default function Index() {
                                   borderRadius: 5,
                                   backgroundColor: GREEN,
                                   borderWidth: 1.5,
-                                  borderColor: "#212826",
+                                  borderColor: THEME.surfaceRaised,
                                 }}
                               />
                             )}
@@ -3032,7 +3188,7 @@ export default function Index() {
                                 borderRadius: 16,
                                 borderWidth: 1,
                                 borderColor: "rgba(255, 255, 255, 0.08)",
-                                backgroundColor: "#212826",
+                                backgroundColor: THEME.surfaceRaised,
                                 elevation: 14,
                                 shadowColor: "#000",
                                 shadowOpacity: 0.4,
@@ -3051,7 +3207,7 @@ export default function Index() {
                                 <Text
                                   accessibilityRole="header"
                                   style={{
-                                    color: "#9db3a6",
+                                    color: THEME.muted,
                                     fontSize: 11,
                                     fontWeight: "800",
                                     letterSpacing: 0.6,
@@ -3071,7 +3227,7 @@ export default function Index() {
                                       android: "close",
                                       web: "close",
                                     }}
-                                    color="#9db3a6"
+                                    color={THEME.muted}
                                     size={16}
                                   />
                                 </Pressable>
@@ -3133,7 +3289,7 @@ export default function Index() {
                                     >
                                       <AppSymbol
                                         name={CHIP_SYMBOLS[chip.id]}
-                                        color={highlighted ? GREEN : usable ? "#e6efe9" : "#9db3a6"}
+                                        color={highlighted ? GREEN : usable ? THEME.ink : THEME.muted}
                                         size={17}
                                       />
                                       <View style={{ flex: 1 }}>
@@ -3151,7 +3307,7 @@ export default function Index() {
                                         </Text>
                                         <Text
                                           style={{
-                                            color: highlighted ? GREEN : "#9db3a6",
+                                            color: highlighted ? GREEN : THEME.muted,
                                             fontSize: 9.5,
                                             fontWeight: highlighted ? "800" : "600",
                                             marginTop: 1,
@@ -3232,102 +3388,6 @@ export default function Index() {
             teamNames={teamNames}
           />
 
-
-
-          {/* Summary bar: transfers mode */}
-          {mode === "transfers" &&
-            (pending.length > 0 ||
-              pendingChip === "wildcard" ||
-              pendingChip === "freehit") &&
-            selectedPos === null && (
-              <View
-                style={{
-                  position: "absolute",
-                  left: 16,
-                  right: 16,
-                  bottom: insets.bottom + 116,
-                  backgroundColor: "rgba(4, 16, 10, 0.96)",
-                  borderRadius: 18,
-                  padding: 8,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 10,
-                  borderWidth: 1,
-                  borderColor: "rgba(0, 217, 130, 0.35)",
-                  shadowColor: "#000",
-                  shadowOpacity: 0.4,
-                  shadowRadius: 16,
-                  shadowOffset: { width: 0, height: 6 },
-                  elevation: 10,
-                }}
-              >
-                <Pressable
-                  onPress={() => {
-                    setPending([]);
-                    setPendingChip(null);
-                  }}
-                  disabled={sending}
-                  accessibilityRole="button"
-                  accessibilityLabel="Reset all transfers"
-                  style={({ pressed }) => ({
-                    height: 44,
-                    paddingHorizontal: 16,
-                    borderRadius: 14,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderWidth: 1,
-                    borderColor: "rgba(255, 255, 255, 0.2)",
-                    backgroundColor: pressed ? "rgba(255, 255, 255, 0.16)" : "rgba(255, 255, 255, 0.06)",
-                    opacity: sending ? 0.5 : 1,
-                  })}
-                >
-                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 13 }}>Reset</Text>
-                </Pressable>
-                <View style={{ flex: 1, alignItems: "center" }}>
-                  <Text numberOfLines={1} style={{ color: "#ffffff", fontWeight: "900", fontSize: 14 }}>
-                    {pending.length} transfer{pending.length === 1 ? "" : "s"}
-                  </Text>
-                  <Text
-                    numberOfLines={1}
-                    style={{
-                      color: hit > 0 && !pendingChip ? "#ff526f" : GREEN,
-                      fontSize: 11,
-                      fontWeight: "800",
-                      marginTop: 1,
-                    }}
-                  >
-                    {pendingChip
-                      ? `${selectedChipOption?.label ?? "Chip"} · free`
-                      : hit > 0
-                        ? `Costs ${hit} points`
-                        : "No points cost"}
-                  </Text>
-                </View>
-                <Pressable
-                  onPress={reviewTransfers}
-                  disabled={sending || pending.length === 0}
-                  accessibilityRole="button"
-                  accessibilityLabel="Review and confirm transfers"
-                  style={({ pressed }) => ({
-                    height: 44,
-                    paddingHorizontal: 20,
-                    borderRadius: 14,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 6,
-                    backgroundColor: GREEN,
-                    opacity: sending || pending.length === 0 ? 0.45 : pressed ? 0.8 : 1,
-                  })}
-                >
-                  {sending && <ActivityIndicator color="#071b12" size="small" />}
-                  <Text style={{ color: "#071b12", fontWeight: "900", fontSize: 14 }}>
-                    {sending ? "Sending" : "Review"}
-                  </Text>
-                </Pressable>
-              </View>
-            )}
-
           <PlayerPicker
             visible={pickPos !== null}
             title={pickSlot ? `Replace ${pickSlot.name}` : "Replace player"}
@@ -3341,6 +3401,7 @@ export default function Index() {
             fullClubs={pickInfo ? pickInfo.fullClubs : []}
             squadIds={squadIds}
             outgoingId={pickSlot?.id ?? null}
+            sellPrice={pickSlot?.sell}
             onPick={pickPlayer}
             onClose={() => setPickPos(null)}
           />
@@ -3351,11 +3412,13 @@ export default function Index() {
         <View
           pointerEvents="box-none"
           style={{
+            // Docked: full width, square corners, flush with the bottom edge
+            // and extending under the phone's navigation area.
             position: "absolute",
-            left: 8,
-            right: 8,
-            bottom: insets.bottom + 2,
-            height: 56,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: FOOTER_HEIGHT + insets.bottom,
             zIndex: 20,
             overflow: "visible",
           }}
@@ -3363,41 +3426,19 @@ export default function Index() {
           <View
             style={{
               flex: 1,
-              borderRadius: 28,
               overflow: "hidden",
-              borderWidth: 1,
-              borderColor: "rgba(0, 217, 130, 0.22)",
-              backgroundColor:
-                Platform.OS === "ios"
-                  ? "rgba(5, 20, 16, 0.88)"
-                  : "rgba(5, 20, 16, 0.96)",
-              elevation: 10,
-              shadowColor: "#00d982",
-              shadowOpacity: 0.18,
-              shadowRadius: 14,
-              shadowOffset: { width: 0, height: 4 },
+              borderTopWidth: 1,
+              borderTopColor: THEME.line,
+              paddingBottom: insets.bottom,
+              backgroundColor: THEME.nav,
             }}
           >
-            <GlassView
-              pointerEvents="none"
-              glassEffectStyle="regular"
-              tintColor="rgba(5, 20, 16, 0.88)"
-              style={{
-                position: "absolute",
-                top: 0,
-                right: 0,
-                bottom: 0,
-                left: 0,
-                borderRadius: 28,
-              }}
-            />
             <View
               style={{
                 flex: 1,
                 flexDirection: "row",
                 alignItems: "center",
                 paddingHorizontal: 4,
-                gap: 2,
               }}
             >
               <BottomTab
@@ -3412,6 +3453,11 @@ export default function Index() {
                 onPress={() => {
                   setActiveMember(null);
                   setShowSeason(false);
+                  setShowPlanner(false);
+                  setShowHelper(false);
+                  setShowMatches(false);
+                  setShowPrivacy(false);
+                  setShowTerms(false);
                   setShowLeagues(false);
                   switchMode("lineup");
                 }}
@@ -3428,6 +3474,11 @@ export default function Index() {
                 onPress={() => {
                   setActiveMember(null);
                   setShowSeason(false);
+                  setShowPlanner(false);
+                  setShowHelper(false);
+                  setShowMatches(false);
+                  setShowPrivacy(false);
+                  setShowTerms(false);
                   setShowLeagues(false);
                   switchMode("transfers");
                 }}
@@ -3444,6 +3495,11 @@ export default function Index() {
                 onPress={() => {
                   setActiveMember(null);
                   setShowSeason(false);
+                  setShowPlanner(false);
+                  setShowHelper(false);
+                  setShowMatches(false);
+                  setShowPrivacy(false);
+                  setShowTerms(false);
                   setActiveBottomTab("leagues");
                   switchMode("leagues");
                 }}
@@ -3460,6 +3516,11 @@ export default function Index() {
                 onPress={() => {
                   setActiveMember(null);
                   setShowSeason(false);
+                  setShowPlanner(false);
+                  setShowHelper(false);
+                  setShowMatches(false);
+                  setShowPrivacy(false);
+                  setShowTerms(false);
                   setActiveBottomTab("more");
                   switchMode("more");
                 }}
@@ -3471,81 +3532,22 @@ export default function Index() {
 
       {/* Team page is opening: hold the current screen until its data is in */}
       {stage === "squad" && squad && activeMember && !activeMemberReady && (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Loading team. Tap to cancel"
-          onPress={() => setActiveMember(null)}
-          style={{
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0,
-            zIndex: 15,
-            elevation: 15,
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "rgba(0, 0, 0, 0.35)",
-          }}
-        >
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 10,
-              paddingHorizontal: 18,
-              paddingVertical: 12,
-              borderRadius: 14,
-              backgroundColor: "rgba(4, 16, 10, 0.95)",
-              borderWidth: 1,
-              borderColor: "rgba(0, 217, 130, 0.35)",
-            }}
-          >
-            <ActivityIndicator color={GREEN} />
-            <Text style={{ color: "#fff", fontSize: 13, fontWeight: "800" }}>
-              Loading team…
-            </Text>
-          </View>
-        </Pressable>
+        <LoadingVeil label="Loading team…" zIndex={15} accent={GREEN} onCancel={() => setActiveMember(null)} />
       )}
 
-      {stage === "squad" && squad && showSeason && (
-        <FadeIn
-          offsetX={28}
-          offsetY={0}
-          style={{
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0,
-            zIndex: 16,
-            elevation: 16,
-          }}
-        >
+      <AnimatedScreen visible={stage === "squad" && !!squad && showSeason} zIndex={16}>
+        {stage === "squad" && squad && showSeason && (
           <SeasonInsights
             entry={squad.entry}
             teamName={squad.teamName || "Your team"}
+            live={{ squadValue: squadValueNow, bank: squad.bank }}
             onBack={() => setShowSeason(false)}
           />
-        </FadeIn>
-      )}
+        )}
+      </AnimatedScreen>
 
-      {stage === "squad" && squad && activeMember && activeMemberReady && (
-        <FadeIn
-          key={activeMember.entry}
-          offsetX={28}
-          offsetY={0}
-          style={{
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0,
-            zIndex: 15,
-            elevation: 15,
-          }}
-        >
+      <AnimatedScreen visible={stage === "squad" && !!squad && !!activeMember && activeMemberReady} zIndex={15}>
+        {stage === "squad" && squad && activeMember && activeMemberReady && (
           <ManagerHistory
             title={activeMember.teamName}
             managerName={activeMember.managerName}
@@ -3558,13 +3560,92 @@ export default function Index() {
             loading={managerLoading}
             error={managerError}
             fixturesByTeam={squad.fixturesByTeam}
-            onBack={() => setActiveMember(null)}
+            onBack={closeActiveMember}
+            onViewEntry={openTopEntry}
             onSelectEvent={(event) => {
               setActiveMemberEvent(event);
               loadManagerGameweek(activeMember.entry, event);
             }}
           />
-        </FadeIn>
+        )}
+      </AnimatedScreen>
+      <AnimatedScreen visible={stage === "squad" && !!squad && showHelper} zIndex={16}>
+        {stage === "squad" && squad && showHelper && (
+          <GameweekHelper
+            rows={helperRows}
+            event={squad.gw}
+            eventName={squad.gameweeks.find((gw) => gw.id === squad.gw)?.name ?? `Gameweek ${squad.gw}`}
+            chipStatuses={squad.chipStatuses ?? {}}
+            activeChip={pendingChip ?? squad.chip ?? null}
+            onBack={() => setShowHelper(false)}
+          />
+        )}
+      </AnimatedScreen>
+      <AnimatedScreen visible={stage === "squad" && !!squad && showPlanner} zIndex={16}>
+        {stage === "squad" && squad && showPlanner && (
+          <FixturePlanner
+            teams={plannerTeams}
+            myClubs={plannerMyClubs}
+            startEvent={squad.gw}
+            onBack={() => setShowPlanner(false)}
+          />
+        )}
+      </AnimatedScreen>
+      <AnimatedScreen visible={stage === "squad" && !!squad && showMatches} zIndex={16}>
+        {stage === "squad" && squad && showMatches && (
+          <MatchCentre
+            startEvent={squad.gameweeks.find((gw) => gw.isCurrent)?.id ?? squad.gw}
+            myPlayerIds={matchesMyPlayers}
+            onBack={() => setShowMatches(false)}
+          />
+        )}
+      </AnimatedScreen>
+      <CardInfoSheet
+        visible={showCardInfo && stage === "squad"}
+        selected={shownCardStats}
+        page={cardStatsPage}
+        onChange={changeCardStats}
+        onClose={() => setShowCardInfo(false)}
+      />
+      <AnimatedScreen visible={showPrivacy} zIndex={30}>
+        {showPrivacy && <PrivacyPolicy onBack={() => setShowPrivacy(false)} />}
+      </AnimatedScreen>
+      <AnimatedScreen visible={showTerms} zIndex={30}>
+        {showTerms && <TermsAndConditions onBack={() => setShowTerms(false)} />}
+      </AnimatedScreen>
+      {stage === "squad" && snapshotOpen && squad && (
+        <SquadSnapshot
+          picks={shownPicks}
+          selectedGw={currentSelectedGw}
+          showPrice={mode === "transfers"}
+          gameweekName={squad.gameweeks.find((gw) => gw.id === squad.gw)?.name ?? `Gameweek ${squad.gw}`}
+          chip={pendingChip ?? squad.chip}
+          bank={mode === "transfers" ? bankAfter : null}
+          // Same rule as the transfer bar: unlimited with a chip or before
+          // the season, otherwise what's left after the pending transfers.
+          freeTransfers={
+            mode !== "transfers"
+              ? undefined
+              : freeLeft == null || pendingChip
+                ? null
+                : Math.max(freeLeft - pending.length, 0)
+          }
+          onDone={() => setSnapshotOpen(false)}
+        />
+      )}
+      {stage === "squad" && (
+        <SaveProgress
+          key="save-progress"
+          state={
+            saving
+              ? { kind: "lineup", phase: "working" }
+              : sending
+                ? { kind: "transfers", phase: "working" }
+                : savedFlash
+                  ? { kind: "lineup", phase: "done" }
+                  : null
+          }
+        />
       )}
       <AppDialog
         visible={dialog !== null}

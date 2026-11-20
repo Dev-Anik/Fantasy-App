@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
-import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Gameweek, MemberSquad, PlayerFixture, Row } from "./fpl";
 import { AppSymbol } from "./AppSymbol";
@@ -8,6 +7,10 @@ import { GameweekPicker } from "./GameweekPicker";
 import { computeLive } from "./live";
 import { Pitch } from "./Pitch";
 import { PointsBadge } from "./PointsBadge";
+import { PlayerMatchSheet } from "./PlayerMatchSheet";
+import { CameraIcon, SquadSnapshot } from "./SquadSnapshot";
+import type { PlayerMatchTarget } from "./PlayerMatchSheet";
+import { PITCH_PANEL, ScreenBackground, THEME } from "./theme";
 
 type Props = {
   title: string;
@@ -22,21 +25,31 @@ type Props = {
   fixturesByTeam?: Record<number, PlayerFixture[]>;
   onBack: () => void;
   onSelectEvent: (event: number) => void;
+  // Opens another team's page (the gameweek's highest scorer).
+  onViewEntry?: (entry: number, event: number) => void;
 };
 
-const GREEN = "#00d982";
-const DARK_GREEN = "#071b12";
+const GREEN = THEME.accent;
+const DARK_GREEN = THEME.bg;
 
 // Small status lines under the points badge.
 const STATUS_TEXT = {
-  color: "#d7e6dd",
+  color: THEME.soft,
   fontSize: 10,
   fontWeight: "800" as const,
-  backgroundColor: "rgba(4, 16, 10, 0.88)",
+  backgroundColor: "rgba(11, 16, 32, 0.88)",
   borderRadius: 8,
   paddingHorizontal: 7,
   paddingVertical: 2,
   overflow: "hidden" as const,
+};
+
+type Size = { width: number; height: number };
+// A measured size, kept as the same object when it hasn't really changed (so
+// measuring doesn't re-render forever).
+const sameSize = (current: Size | null, next: Size): Size => {
+  const rounded = { width: Math.ceil(next.width), height: Math.ceil(next.height) };
+  return current && current.width === rounded.width && current.height === rounded.height ? current : rounded;
 };
 
 const CHIP_LABELS: Record<string, string> = {
@@ -59,9 +72,21 @@ export function ManagerHistory({
   fixturesByTeam,
   onBack,
   onSelectEvent,
+  onViewEntry,
 }: Props) {
   const insets = useSafeAreaInsets();
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The points card and the average/highest card measure themselves; both
+  // then take the larger width and height, so they match and neither clips.
+  const [badgeSize, setBadgeSize] = useState<Size | null>(null);
+  const [statsSize, setStatsSize] = useState<Size | null>(null);
+  const sharedSize =
+    badgeSize && statsSize
+      ? { width: Math.max(badgeSize.width, statsSize.width), height: Math.max(badgeSize.height, statsSize.height) }
+      : null;
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
+  // The player whose match is open (tapped on the pitch).
+  const [openPlayer, setOpenPlayer] = useState<PlayerMatchTarget | null>(null);
   const ownData = data?.entry === entry ? data : null;
   // While another gameweek loads, keep the previous one on screen (dimmed)
   // instead of blanking the pitch and popping the new one in.
@@ -136,17 +161,7 @@ export function ManagerHistory({
 
   return (
     <View style={{ flex: 1, backgroundColor: DARK_GREEN }}>
-      <Image
-        source={require("../assets/images/background-texture.png")}
-        contentFit="cover"
-        style={{
-          position: "absolute",
-          top: 0,
-          right: 0,
-          bottom: 0,
-          left: 0,
-        }}
-      />
+      <ScreenBackground />
 
       {/* Top Header Section */}
       <View
@@ -174,35 +189,47 @@ export function ManagerHistory({
             style={({ pressed }) => ({
               flexDirection: "row",
               alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: "rgba(0, 217, 130, 0.15)",
-              borderWidth: 1,
-              borderColor: "rgba(0, 217, 130, 0.4)",
-              borderRadius: 16,
-              paddingHorizontal: 14,
+              gap: 2,
               height: 34,
-              gap: 4,
-              opacity: pressed ? 0.7 : 1,
+              marginLeft: -4,
+              opacity: pressed ? 0.6 : 1,
             })}
           >
             <AppSymbol
               name={{ ios: "chevron.left", android: "chevron_left", web: "chevron_left" }}
-              color={GREEN}
-              size={16}
+              color={THEME.soft}
+              size={20}
             />
-            <Text
-              style={{
-                color: "#fff",
-                fontSize: 13,
-                fontWeight: "800",
-                includeFontPadding: false,
-                textAlignVertical: "center",
-              }}
-            >
-              Back
-            </Text>
+            <Text style={{ color: THEME.soft, fontSize: 14, fontWeight: "500" }}>Back</Text>
           </Pressable>
 
+          <View style={{ flex: 1 }} />
+          {/* A picture of this gameweek's squad to share */}
+          {!!currentData && !stale && (
+            <Pressable
+              onPress={() => {
+                setOpenPlayer(null);
+                setSnapshotOpen(true);
+              }}
+              disabled={snapshotOpen}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Share a picture of this squad"
+              style={({ pressed }) => ({
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                marginRight: 8,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: "rgba(255, 255, 255, 0.1)",
+                backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
+              })}
+            >
+              <CameraIcon color={THEME.ink} size={16} />
+            </Pressable>
+          )}
           <Pressable
             onPress={() => setPickerOpen(true)}
             disabled={gameweeks.length === 0}
@@ -212,55 +239,75 @@ export function ManagerHistory({
             style={({ pressed }) => ({
               flexDirection: "row",
               alignItems: "center",
-              gap: 6,
+              gap: 4,
               height: 34,
               borderRadius: 17,
-              paddingHorizontal: 14,
+              paddingLeft: 14,
+              paddingRight: 10,
               borderWidth: 1,
-              borderColor: "rgba(0, 217, 130, 0.4)",
-              backgroundColor: pressed ? "rgba(0, 217, 130, 0.25)" : "rgba(0, 217, 130, 0.15)",
+              borderColor: "rgba(255, 255, 255, 0.1)",
+              backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
             })}
           >
-            <Text style={{ color: "#fff", fontSize: 13, fontWeight: "900" }}>
-              GW {selectedEvent}
+            <Text style={{ color: THEME.ink, fontSize: 13.5, fontWeight: "600", fontVariant: ["tabular-nums"] }}>
+              {`GW ${selectedEvent}`}
             </Text>
             <AppSymbol
               name={{ ios: "chevron.down", android: "expand_more", web: "expand_more" }}
-              color={GREEN}
-              size={16}
+              color={THEME.muted}
+              size={18}
             />
           </Pressable>
         </View>
 
         {/* Row 2: Team Name with Green Accent Bar & Manager Name */}
         <View style={{ flexDirection: "row", alignItems: "center" }}>
-          <View
-            style={{
-              width: 3,
-              height: 14,
-              backgroundColor: GREEN,
-              borderRadius: 2,
-              marginRight: 6,
-            }}
-          />
           <View style={{ flex: 1 }}>
             <Text
+              accessibilityRole="header"
               numberOfLines={1}
-              style={{ color: "#fff", fontSize: 13, fontWeight: "900" }}
+              style={{ color: THEME.ink, fontSize: 17, fontWeight: "700" }}
             >
               {title}
             </Text>
             {!!managerName && (
               <Text
                 numberOfLines={1}
-                style={{ color: "#9db3a6", fontSize: 10, marginTop: 1 }}
+                style={{ color: THEME.muted, fontSize: 12, marginTop: 1 }}
               >
                 {managerName}
               </Text>
             )}
           </View>
+          {/* The chip played this gameweek: here in the header, clear of the
+              players on the pitch. */}
+          {!!currentData?.chip && (
+            <View
+              accessible
+              accessibilityLabel={`Chip played: ${CHIP_LABELS[currentData.chip] ?? currentData.chip}`}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                marginLeft: 10,
+                paddingHorizontal: 10,
+                height: 26,
+                borderRadius: 13,
+                backgroundColor: THEME.accentSoft,
+                borderWidth: 1,
+                borderColor: THEME.accentLine,
+              }}
+            >
+              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: THEME.accent }} />
+              <Text style={{ color: THEME.accent, fontWeight: "700", fontSize: 11, letterSpacing: 0.4 }}>
+                {CHIP_LABELS[currentData.chip] ?? currentData.chip}
+              </Text>
+            </View>
+          )}
         </View>
       </View>
+
+      <PlayerMatchSheet player={openPlayer} event={shownEvent} onClose={() => setOpenPlayer(null)} />
 
       <GameweekPicker
         visible={pickerOpen}
@@ -291,15 +338,38 @@ export function ManagerHistory({
             picks={currentData ? picks : blankPicks}
             selectedGw={shownEvent}
             selectedPos={null}
-            compactAvatar
+            layoutId="points"
+            onPress={
+              currentData
+                ? (row) =>
+                    setOpenPlayer({
+                      id: row.id,
+                      name: row.name,
+                      team: row.team,
+                      teamId: row.teamId,
+                      type: row.type,
+                      multiplier: row.multiplier ?? 1,
+                      captain: row.cap,
+                    })
+                : undefined
+            }
             overlay={
               <>
                 <View pointerEvents="none" style={{ position: "absolute", top: 8, right: 8, zIndex: 10 }}>
+                  {/* Measured, so the average/highest card can match its size. */}
+                  <View
+                    onLayout={(event) => {
+                      const layout = event.nativeEvent.layout;
+                      setBadgeSize((size) => sameSize(size, layout));
+                    }}
+                  >
                   <PointsBadge
+                    minSize={sharedSize}
                     gameweek={shownEvent}
                     points={currentData ? totalPts : null}
                     live={isLive}
                   />
+                  </View>
                   {currentData && (isLive || (currentData.history.transferCost ?? 0) > 0) && (
                     <View
                       style={{
@@ -324,24 +394,24 @@ export function ManagerHistory({
                     </View>
                   )}
                 </View>
-                {currentData?.chip && (
-                  <View pointerEvents="none" style={{ position: "absolute", top: 8, left: 8, zIndex: 10 }}>
-                    <View
-                      style={{
-                        backgroundColor: "rgba(4, 16, 10, 0.92)",
-                        borderRadius: 12,
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                        borderWidth: 1,
-                        borderColor: GREEN,
-                      }}
-                    >
-                      <Text style={{ color: GREEN, fontWeight: "900", fontSize: 11, letterSpacing: 0.3 }}>
-                        {CHIP_LABELS[currentData.chip] ?? currentData.chip}
-                      </Text>
-                    </View>
-                  </View>
-                )}
+                <View
+                  pointerEvents="box-none"
+                  style={{ position: "absolute", top: 8, left: 8, zIndex: 10, alignItems: "flex-start", gap: 6 }}
+                >
+                  {selectedGwData && (
+                    <GameweekStats
+                      size={sharedSize}
+                      onMeasure={(layout) => setStatsSize((size) => sameSize(size, layout))}
+                      average={selectedGwData.averageScore ?? null}
+                      highest={selectedGwData.highestScore ?? null}
+                      onOpenHighest={
+                        onViewEntry && selectedGwData.highestEntry && selectedGwData.highestEntry !== entry
+                          ? () => onViewEntry(selectedGwData.highestEntry as number, selectedGwData.id)
+                          : undefined
+                      }
+                    />
+                  )}
+                </View>
               </>
             }
           />
@@ -371,7 +441,7 @@ export function ManagerHistory({
           <View style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: 24 }}>
             <Text
               style={{
-                color: "#9db3a6",
+                color: THEME.muted,
                 fontSize: 14,
                 fontWeight: "600",
                 textAlign: "center",
@@ -383,7 +453,113 @@ export function ManagerHistory({
           </View>
         ) : null}
       </View>
+
+      {snapshotOpen && currentData && (
+        <SquadSnapshot
+          picks={picks}
+          selectedGw={shownEvent}
+          showPrice={false}
+          gameweekName={selectedGwData?.name ?? `Gameweek ${shownEvent}`}
+          chip={currentData.chip}
+          points={totalPts}
+          onDone={() => setSnapshotOpen(false)}
+        />
+      )}
     </View>
   );
 }
 
+
+// The gameweek's average and highest score across all FPL teams, in the
+// pitch's top-left corner. Tapping the highest opens that team.
+function GameweekStats({
+  size,
+  onMeasure,
+  average,
+  highest,
+  onOpenHighest,
+}: {
+  // The size both cards share (the larger of the two), once measured.
+  size: { width: number; height: number } | null;
+  onMeasure: (layout: { width: number; height: number }) => void;
+  average: number | null;
+  highest: number | null;
+  onOpenHighest?: () => void;
+}) {
+  // FPL reports 0 before a gameweek has scores.
+  const avg = average != null && average > 0 ? String(average) : "—";
+  const top = highest != null && highest > 0 ? String(highest) : "—";
+  const canOpen = !!onOpenHighest && top !== "—";
+  const label = {
+    color: THEME.muted,
+    fontSize: 7.5,
+    lineHeight: 9,
+    fontWeight: "500" as const,
+    letterSpacing: 1.4,
+    includeFontPadding: false,
+  };
+  const value = {
+    color: THEME.ink,
+    fontSize: 14,
+    lineHeight: 16,
+    fontWeight: "700" as const,
+    fontVariant: ["tabular-nums" as const],
+    includeFontPadding: false,
+  };
+  // Each half shares out any extra height, its text centred like the
+  // points card's; never less than its own padding, so nothing is clipped.
+  const half = {
+    flexGrow: 1,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  };
+  return (
+    <View
+      onLayout={(event) => onMeasure(event.nativeEvent.layout)}
+      style={{
+        // At least the points card's size: both cards grow to the larger.
+        minWidth: Math.max(64, size?.width ?? 0),
+        minHeight: size?.height,
+        borderRadius: 14,
+        overflow: "hidden",
+        ...PITCH_PANEL,
+        shadowColor: "#000",
+        shadowOpacity: 0.4,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 8,
+      }}
+    >
+      <View
+        accessible
+        accessibilityLabel={`Average score: ${avg === "—" ? "not available yet" : `${avg} points`}`}
+        style={half}
+      >
+        <Text maxFontSizeMultiplier={1.2} style={label}>AVERAGE</Text>
+        <Text maxFontSizeMultiplier={1.2} style={[value, { marginTop: 2 }]}>{avg}</Text>
+      </View>
+      <View style={{ height: 1, marginHorizontal: 10, backgroundColor: "rgba(255, 255, 255, 0.08)" }} />
+      <Pressable
+        onPress={onOpenHighest}
+        disabled={!canOpen}
+        accessibilityRole={canOpen ? "button" : undefined}
+        accessibilityLabel={`Highest score: ${top === "—" ? "not available yet" : `${top} points`}`}
+        accessibilityHint={canOpen ? "Shows the team that scored it" : undefined}
+        style={({ pressed }) => ({
+          ...half,
+          backgroundColor: pressed ? THEME.accentSoft : "transparent",
+        })}
+      >
+        <Text maxFontSizeMultiplier={1.2} style={label}>HIGHEST</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 }}>
+          <Text maxFontSizeMultiplier={1.2} style={[value, { color: canOpen ? THEME.accent : THEME.ink }]}>{top}</Text>
+          {canOpen && (
+            <AppSymbol name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }} color={THEME.accent} size={13} />
+          )}
+        </View>
+      </Pressable>
+    </View>
+  );
+}

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" preserveAspectRatio="none">
+  <!-- Match Hero card (a big score on the points page): holographic foil
+       border and star sparkles, drawn over everything else on the card.
+       Card outline as in card-shield.svg. -->
+  <defs>
+    <linearGradient id="holo" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff7ae0" />
+      <stop offset="30%" stop-color="#b48cff" />
+      <stop offset="55%" stop-color="#f4ecff" />
+      <stop offset="78%" stop-color="#6ed8ff" />
+      <stop offset="100%" stop-color="#3fe0ff" />
+    </linearGradient>
+  </defs>
+  <path d="M8 1.5 H92 Q98.5 1.5 98.5 8 V112 Q98.5 118.5 92 118.5 H8 Q1.5 118.5 1.5 112 V8 Q1.5 1.5 8 1.5 Z"
+        fill="none" stroke="url(#holo)" stroke-width="5" stroke-linejoin="round" />
+  <!-- A fine inner line, like the edge of a foil card. -->
+  <path d="M10.5 5.5 H89.5 Q94.5 5.5 94.5 10.5 V109.5 Q94.5 114.5 89.5 114.5 H10.5 Q5.5 114.5 5.5 109.5 V10.5 Q5.5 5.5 10.5 5.5 Z"
+        fill="none" stroke="#f6efff" stroke-opacity="0.55" stroke-width="0.7" />
+  <!-- Corner gems. -->
+  <g fill="#ffffff">
+    <path d="M6 2 L8.4 6 L6 10 L3.6 6 Z" /><path d="M94 2 L96.4 6 L94 10 L91.6 6 Z" />
+    <path d="M6 110 L8.4 114 L6 118 L3.6 114 Z" /><path d="M94 110 L96.4 114 L94 118 L91.6 114 Z" />
+  </g>
+  <!-- Five-point stars on the frame. -->
+  <g fill="#f6efff">
+    <path d="M5 32.5 L6.2 35.6 L9.5 35.8 L7 37.9 L7.8 41.1 L5 39.3 L2.2 41.1 L3 37.9 L0.5 35.8 L3.8 35.6 Z" />
+    <path d="M95.5 56 L96.3 58 L98.5 58.2 L96.8 59.6 L97.4 61.8 L95.5 60.6 L93.6 61.8 L94.2 59.6 L92.5 58.2 L94.7 58 Z" />
+    <path d="M6 75.1 L6.8 77.1 L9 77.3 L7.3 78.7 L7.9 80.9 L6 79.7 L4.1 80.9 L4.7 78.7 L3 77.3 L5.2 77.1 Z" />
+  </g>
+</svg>

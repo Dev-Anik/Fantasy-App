@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 215">
+  <!-- Top of the pitch: goal, goal line, corner arcs, penalty area and arc.
+       Drawn at its true shape, pinned to the top of the pitch. -->
+  <defs>
+    <pattern id="goalNet" width="8" height="8" patternUnits="userSpaceOnUse">
+      <path d="M 8 0 L 0 0 0 8" fill="none" stroke="#ffffff" stroke-opacity="0.32" stroke-width="1" />
+    </pattern>
+  </defs>
+  <line x1="25" y1="32" x2="575" y2="32" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <rect x="150" y="32" width="300" height="135" fill="none" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <rect x="220" y="32" width="160" height="48" fill="none" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <circle cx="300" cy="122" r="3" fill="#ffffff" fill-opacity="0.3" />
+  <path d="M 235 167 A 70 70 0 0 0 365 167" fill="none" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <polygon points="215,8 385,8 400,32 200,32" fill="url(#goalNet)" />
+  <polygon points="215,8 385,8 400,32 200,32" fill="rgba(255,255,255,0.07)" stroke="#ffffff" stroke-opacity="0.28" stroke-width="1.5" />
+  <path d="M 200 32 L 200 8 L 400 8 L 400 32" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+  <line x1="200" y1="8" x2="215" y2="8" stroke="#ffffff" stroke-opacity="0.45" stroke-width="3" />
+  <line x1="400" y1="8" x2="385" y2="8" stroke="#ffffff" stroke-opacity="0.45" stroke-width="3" />
+  <path d="M 25 52 A 20 20 0 0 0 45 32" fill="none" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+  <path d="M 555 32 A 20 20 0 0 0 575 52" fill="none" stroke="#ffffff" stroke-opacity="0.24" stroke-width="2.5" />
+</svg>

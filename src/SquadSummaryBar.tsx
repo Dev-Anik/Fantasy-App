@@ -1,9 +1,10 @@
 import { Pressable, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
+import { THEME } from "./theme";
 
-const GREEN = "#00d982";
-const MUTED = "#9db3a6";
-const RED = "#ff526f";
+const GREEN = THEME.accent;
+const MUTED = THEME.muted;
+const RED = THEME.bad;
 
 type Props = {
   gameweek: number | null;
@@ -12,11 +13,24 @@ type Props = {
   season: string;
   totalPoints: number | null;
   overallRank: number | null;
+  // Places gained (positive) or lost (negative) since the last gameweek;
+  // null when there's nothing to compare with.
+  rankChange?: number | null;
   onOpenPoints: () => void;
 };
 
 const formatNumber = (value: number) =>
   String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+// Short form for the movement beside the rank: 950, 12.3K, 1.2M.
+const shortNumber = (value: number) =>
+  value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+    : value >= 10_000
+      ? `${Math.round(value / 1000)}K`
+      : value >= 1000
+        ? `${(value / 1000).toFixed(1).replace(/\.0$/, "")}K`
+        : String(value);
 
 function Label({ children, color = MUTED }: { children: string; color?: string }) {
   return (
@@ -25,7 +39,7 @@ function Label({ children, color = MUTED }: { children: string; color?: string }
       maxFontSizeMultiplier={1.15}
       style={{
         color,
-        fontSize: 9,
+        fontSize: 8,
         fontWeight: "800",
         letterSpacing: 0.5,
         includeFontPadding: false,
@@ -45,8 +59,8 @@ function Value({ children, color = "#ffffff" }: { children: string; color?: stri
       maxFontSizeMultiplier={1.15}
       style={{
         color,
-        fontSize: 17,
-        lineHeight: 21,
+        fontSize: 14,
+        lineHeight: 18,
         fontWeight: "900",
         includeFontPadding: false,
       }}
@@ -69,8 +83,11 @@ export function SquadSummaryBar({
   season,
   totalPoints,
   overallRank,
+  rankChange = null,
   onOpenPoints,
 }: Props) {
+  const moved = rankChange != null && rankChange !== 0 && !!overallRank;
+  const up = moved && rankChange > 0;
   const gwLabel = gameweek ? `GW ${gameweek} POINTS` : "GW POINTS";
 
   return (
@@ -78,11 +95,11 @@ export function SquadSummaryBar({
       style={{
         flexDirection: "row",
         alignItems: "stretch",
-        minHeight: 48,
+        minHeight: 42,
         borderRadius: 12,
-        backgroundColor: "rgba(4, 16, 10, 0.85)",
+        backgroundColor: THEME.surface,
         borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.12)",
+        borderColor: THEME.line,
         overflow: "hidden",
       }}
     >
@@ -92,16 +109,16 @@ export function SquadSummaryBar({
         accessibilityLabel={`${gameweek ? `Gameweek ${gameweek}` : "Gameweek"}${
           live ? ", live" : ""
         }: ${gameweekPoints ?? "no"} points. Open points breakdown`}
-        android_ripple={{ color: "rgba(0, 217, 130, 0.25)" }}
+        android_ripple={{ color: "rgba(255, 255, 255, 0.06)" }}
         style={({ pressed }) => ({
           flex: 1.15,
           flexDirection: "row",
           alignItems: "center",
           paddingHorizontal: 10,
-          paddingVertical: 6,
-          backgroundColor: pressed ? "rgba(0, 217, 130, 0.22)" : "rgba(0, 217, 130, 0.12)",
+          paddingVertical: 5,
+          backgroundColor: pressed ? "rgba(255, 255, 255, 0.05)" : "transparent",
           borderRightWidth: 1,
-          borderRightColor: "rgba(0, 217, 130, 0.35)",
+          borderRightColor: THEME.line,
         })}
       >
         <View style={{ flex: 1 }}>
@@ -118,14 +135,14 @@ export function SquadSummaryBar({
         <AppSymbol
           name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
           color={GREEN}
-          size={18}
+          size={16}
         />
       </Pressable>
 
       <View
         accessible
         accessibilityLabel={`Season ${season} total: ${totalPoints ?? "no"} points`}
-        style={{ flex: 1, justifyContent: "center", paddingHorizontal: 10, paddingVertical: 6 }}
+        style={{ flex: 1, justifyContent: "center", paddingHorizontal: 10, paddingVertical: 5 }}
       >
         <Label>{`SEASON ${season}`}</Label>
         <Value>{totalPoints == null ? "—" : formatNumber(totalPoints)}</Value>
@@ -136,12 +153,36 @@ export function SquadSummaryBar({
       <View
         accessible
         accessibilityLabel={
-          overallRank ? `Overall rank ${formatNumber(overallRank)}` : "Overall rank not available yet"
+          overallRank
+            ? `Overall rank ${formatNumber(overallRank)}${
+                moved ? `, ${up ? "up" : "down"} ${formatNumber(Math.abs(rankChange))} places since last gameweek` : ""
+              }`
+            : "Overall rank not available yet"
         }
-        style={{ flex: 1.1, justifyContent: "center", paddingHorizontal: 10, paddingVertical: 6 }}
+        style={{ flex: 1.1, justifyContent: "center", paddingHorizontal: 10, paddingVertical: 5 }}
       >
         <Label>OVERALL RANK</Label>
-        <Value>{overallRank ? formatNumber(overallRank) : "—"}</Value>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <View style={{ flexShrink: 1 }}>
+            <Value>{overallRank ? formatNumber(overallRank) : "—"}</Value>
+          </View>
+          {/* Up or down since the last gameweek, as in the league tables. */}
+          {moved && (
+            <Text
+              numberOfLines={1}
+              maxFontSizeMultiplier={1.15}
+              style={{
+                color: up ? THEME.good : RED,
+                fontSize: 9.5,
+                fontWeight: "800",
+                fontVariant: ["tabular-nums"],
+                includeFontPadding: false,
+              }}
+            >
+              {`${up ? "▲" : "▼"} ${shortNumber(Math.abs(rankChange))}`}
+            </Text>
+          )}
+        </View>
       </View>
     </View>
   );

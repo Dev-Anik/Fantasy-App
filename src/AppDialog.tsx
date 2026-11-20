@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Modal, Pressable, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
+import { THEME } from "./theme";
 import type { SymbolViewProps } from "expo-symbols";
 
 export type DialogButton = {
@@ -22,9 +23,9 @@ type Props = {
   onDismiss: () => void;
 };
 
-const GREEN = "#00d982";
-const AMBER = "#ffb020";
-const RED = "#ff5a5f";
+const GREEN = THEME.accent;
+const AMBER = "#f2c14e";
+const RED = THEME.bad;
 
 // A small icon beside the title marks the outcome; plain questions have none.
 const KIND_ICONS: Partial<Record<DialogKind, { icon: SymbolViewProps["name"]; color: string }>> = {
@@ -42,8 +43,8 @@ const KIND_ICONS: Partial<Record<DialogKind, { icon: SymbolViewProps["name"]; co
   },
 };
 
-const IN_COLOR = "#00d982";
-const OUT_COLOR = "#ff6b7a";
+const IN_COLOR = THEME.good;
+const OUT_COLOR = THEME.bad;
 
 // One substitution: the player coming in (green, up arrow), a swap icon,
 // then the player going out (red, down arrow). Either side may be missing.
@@ -77,7 +78,7 @@ export function SubstitutionRow({ inName, outName }: { inName?: string; outName?
       {!!inName && !!outName && (
         <AppSymbol
           name={{ ios: "arrow.left.arrow.right", android: "swap_horiz", web: "swap_horiz" }}
-          color="#6f877a"
+          color={THEME.muted}
           size={15}
         />
       )}
@@ -86,8 +87,10 @@ export function SubstitutionRow({ inName, outName }: { inName?: string; outName?
   );
 }
 
-// A compact, left-aligned dialog: title, short message, and actions on the
-// right. Cancel is a quiet text button; the main action is a solid button.
+// A calm, centred dialog in the app's navy: an icon in a soft circle (for
+// outcomes and warnings), the title, a short message, then full-width pill
+// buttons. Cancel is outlined; the main action is filled (soft red when it
+// is destructive). Three or more buttons stack.
 export function AppDialog({
   visible,
   title,
@@ -98,6 +101,7 @@ export function AppDialog({
   onDismiss,
 }: Props) {
   const marker = KIND_ICONS[kind];
+  const stacked = buttons.length > 2;
 
   return (
     <Modal
@@ -112,8 +116,8 @@ export function AppDialog({
           flex: 1,
           justifyContent: "center",
           alignItems: "center",
-          padding: 24,
-          backgroundColor: "rgba(2, 10, 6, 0.7)",
+          padding: 28,
+          backgroundColor: "rgba(3, 5, 12, 0.72)",
         }}
       >
         <Pressable
@@ -126,59 +130,74 @@ export function AppDialog({
           accessibilityViewIsModal
           style={{
             width: "100%",
-            maxWidth: 340,
-            paddingTop: 20,
-            paddingHorizontal: 20,
-            paddingBottom: 14,
-            borderRadius: 16,
-            backgroundColor: "#0f1f17",
+            maxWidth: 330,
+            paddingTop: marker ? 22 : 24,
+            paddingHorizontal: 22,
+            paddingBottom: 18,
+            borderRadius: 22,
+            alignItems: "center",
+            backgroundColor: THEME.surfaceRaised,
             borderWidth: 1,
             borderColor: "rgba(255, 255, 255, 0.08)",
-            elevation: 16,
+            elevation: 18,
             shadowColor: "#000",
-            shadowOpacity: 0.35,
-            shadowRadius: 18,
-            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.45,
+            shadowRadius: 24,
+            shadowOffset: { width: 0, height: 10 },
           }}
         >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            {marker && <AppSymbol name={marker.icon} color={marker.color} size={18} />}
-            <Text
-              accessibilityRole="header"
+          {marker && (
+            <View
               style={{
-                flex: 1,
-                color: "#ffffff",
-                fontSize: 16,
-                fontWeight: "800",
-                letterSpacing: -0.1,
+                width: 46,
+                height: 46,
+                borderRadius: 23,
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: 14,
+                backgroundColor: `${marker.color}1f`,
+                borderWidth: 1,
+                borderColor: `${marker.color}40`,
               }}
             >
-              {title}
-            </Text>
-          </View>
+              <AppSymbol name={marker.icon} color={marker.color} size={22} />
+            </View>
+          )}
+
+          <Text
+            accessibilityRole="header"
+            style={{
+              color: THEME.ink,
+              fontSize: 17,
+              fontWeight: "700",
+              textAlign: "center",
+            }}
+          >
+            {title}
+          </Text>
 
           {!!message && (
             <Text
               style={{
-                color: "#a9beb3",
-                fontSize: 13.5,
+                color: THEME.soft,
+                fontSize: 14,
                 lineHeight: 20,
                 marginTop: 8,
+                textAlign: "center",
               }}
             >
               {message}
             </Text>
           )}
 
-          {!!content && <View style={{ marginTop: 10 }}>{content}</View>}
+          {!!content && <View style={{ marginTop: 12, alignSelf: "stretch", alignItems: "center" }}>{content}</View>}
 
           <View
             style={{
-              flexDirection: "row",
-              justifyContent: "flex-end",
-              alignItems: "center",
-              gap: 6,
-              marginTop: 18,
+              alignSelf: "stretch",
+              flexDirection: stacked ? "column" : "row",
+              gap: 10,
+              marginTop: 22,
             }}
           >
             {buttons.map((button, index) => {
@@ -186,7 +205,6 @@ export function AppDialog({
                 button.style === "cancel" ||
                 (index === 0 && buttons.length > 1 && !button.style);
               const isDestructive = button.style === "destructive";
-              const solid = isDestructive ? RED : GREEN;
               return (
                 <Pressable
                   key={`${button.text}-${index}`}
@@ -196,24 +214,30 @@ export function AppDialog({
                     button.onPress?.();
                   }}
                   style={({ pressed }) => ({
-                    minHeight: 38,
-                    paddingHorizontal: 16,
-                    borderRadius: 10,
+                    flex: stacked ? undefined : 1,
+                    height: 46,
+                    paddingHorizontal: 14,
+                    borderRadius: 23,
                     alignItems: "center",
                     justifyContent: "center",
                     backgroundColor: isCancel
                       ? pressed
-                        ? "rgba(255, 255, 255, 0.08)"
+                        ? "rgba(255, 255, 255, 0.07)"
                         : "transparent"
-                      : solid,
-                    opacity: !isCancel && pressed ? 0.85 : 1,
+                      : isDestructive
+                        ? "rgba(255, 107, 125, 0.16)"
+                        : GREEN,
+                    borderWidth: isCancel || isDestructive ? 1 : 0,
+                    borderColor: isDestructive ? "rgba(255, 107, 125, 0.5)" : "rgba(255, 255, 255, 0.16)",
+                    opacity: !isCancel && pressed ? 0.8 : 1,
                   })}
                 >
                   <Text
+                    numberOfLines={1}
                     style={{
-                      color: isCancel ? "#c7d8ce" : isDestructive ? "#ffffff" : "#04210f",
-                      fontSize: 13.5,
-                      fontWeight: isCancel ? "700" : "800",
+                      color: isCancel ? THEME.ink : isDestructive ? RED : THEME.onAccent,
+                      fontSize: 14.5,
+                      fontWeight: isCancel ? "600" : "700",
                     }}
                   >
                     {button.text}
