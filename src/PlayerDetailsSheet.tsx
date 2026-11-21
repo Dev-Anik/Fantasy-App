@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Animated,
   Modal,
   Pressable,
   ScrollView,
@@ -14,6 +15,7 @@ import { AppSymbol } from "./AppSymbol";
 import { availability } from "./availability";
 import { PlayerProfile } from "./PlayerProfile";
 import { THEME } from "./theme";
+import { useSwipeToClose } from "./useSwipeToClose";
 import type { FplElement, GameweekRow, PastSeason } from "./PlayerProfile";
 
 const MUTED = THEME.muted;
@@ -165,6 +167,9 @@ export function PlayerDetailsSheet({
     });
   }, [currentGw, player, visible]);
 
+  // Drag the sheet down to close it.
+  const swipe = useSwipeToClose(onClose, visible && player !== null);
+
   return (
     <Modal
       visible={visible && player !== null}
@@ -188,8 +193,10 @@ export function PlayerDetailsSheet({
           }}
         />
         {player && (
-          <View
+          <Animated.View
+            {...swipe.panHandlers}
             style={{
+              transform: swipe.transform,
               maxHeight: "85%",
               paddingTop: 10,
               paddingHorizontal: 18,
@@ -287,6 +294,9 @@ export function PlayerDetailsSheet({
             </View>
 
             <ScrollView
+              onScroll={swipe.onScroll}
+              {...swipe.listTouch}
+              scrollEventThrottle={16}
               style={{ flexGrow: 0, flexShrink: 1 }}
               contentContainerStyle={{ paddingBottom: 4 }}
               showsVerticalScrollIndicator={false}
@@ -591,7 +601,7 @@ export function PlayerDetailsSheet({
                           })}
                         >
                           <Text style={{ color: player.cap ? THEME.onAccent : THEME.ink, fontWeight: "700", fontSize: 13 }}>
-                            {player.cap ? "Captain ✓" : "Captain"}
+                            Captain
                           </Text>
                         </Pressable>
                         <Pressable
@@ -605,7 +615,7 @@ export function PlayerDetailsSheet({
                           })}
                         >
                           <Text style={{ color: player.vice ? THEME.bg : THEME.ink, fontWeight: "700", fontSize: 13 }}>
-                            {player.vice ? "Vice ✓" : "Vice"}
+                            Vice
                           </Text>
                         </Pressable>
                       </>
@@ -625,7 +635,7 @@ export function PlayerDetailsSheet({
                 )}
               </View>
             )}
-          </View>
+          </Animated.View>
         )}
       </View>
     </Modal>

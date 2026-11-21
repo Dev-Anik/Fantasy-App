@@ -4,7 +4,8 @@
 
 const API = "https://fantasy.premierleague.com/api/";
 
-export type PlayerInfo = { name: string; team: string; teamId: number; type: number };
+// `form`: FPL's recent points average (NaN when FPL gives none).
+export type PlayerInfo = { name: string; team: string; teamId: number; type: number; form: number };
 export type TeamInfo = { short: string; name: string };
 export type ChipWindowInfo = { name: string; start: number; stop: number };
 export type FplBasics = {
@@ -31,10 +32,18 @@ export function loadFplBasics(): Promise<FplBasics> {
           ]),
         );
         const players = new Map<number, PlayerInfo>(
-          (data.elements ?? []).map((e: { id: number; web_name: string; team: number; element_type: number }) => [
-            e.id,
-            { name: e.web_name, team: teams.get(e.team)?.short ?? "", teamId: e.team, type: e.element_type },
-          ]),
+          (data.elements ?? []).map(
+            (e: { id: number; web_name: string; team: number; element_type: number; form?: string }) => [
+              e.id,
+              {
+                name: e.web_name,
+                team: teams.get(e.team)?.short ?? "",
+                teamId: e.team,
+                type: e.element_type,
+                form: typeof e.form === "string" && e.form.trim() !== "" ? Number(e.form) : Number.NaN,
+              },
+            ],
+          ),
         );
         const chipWindows: ChipWindowInfo[] = (data.chips ?? [])
           .filter((chip: { name?: string; start_event?: number; stop_event?: number }) => chip.name && chip.start_event && chip.stop_event)

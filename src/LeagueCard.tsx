@@ -68,7 +68,8 @@ export function LeagueCard({ league, loading = false, first = false, onPress }: 
           backgroundColor: pressed ? UI.pressed : "transparent",
         })}
       >
-        <Text numberOfLines={1} style={{ flex: 1, color: UI.soft, fontSize: 13, marginRight: 12 }}>
+        {/* At least 28px between a long league name and the rank. */}
+        <Text numberOfLines={1} style={{ flex: 1, color: UI.soft, fontSize: 13, marginRight: 28 }}>
           {league.name}
         </Text>
         {rank ? (

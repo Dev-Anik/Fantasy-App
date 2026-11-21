@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import type { TextInputProps } from "react-native";
 import { THEME } from "./theme";
+import { LiveDot } from "./LiveDot";
 
 export const LEAGUE_UI = {
   surface: THEME.surface,
@@ -20,6 +21,96 @@ export const LEAGUE_UI = {
   mine: "rgba(0, 217, 130, 0.08)",
 };
 const UI = LEAGUE_UI;
+
+// The signed-in manager's row or match: a soft green-to-blue band with
+// rounded ends, set in from the card's edges.
+export const MINE_BAND = {
+  borderRadius: 12,
+  backgroundColor: "rgba(0, 217, 130, 0.12)",
+  backgroundImage: "linear-gradient(90deg, rgba(0, 217, 130, 0.30) 0%, rgba(56, 120, 248, 0.16) 100%)",
+  borderWidth: 1,
+  borderColor: "rgba(0, 217, 130, 0.32)",
+} as const;
+
+// Table type scale, shared by every league table.
+export const TABLE = {
+  header: { color: UI.muted, fontSize: 12, fontWeight: "600" as const },
+  name: { color: UI.ink, fontSize: 13.5, fontWeight: "700" as const },
+  sub: { color: UI.soft, fontSize: 12.5, marginTop: 2 },
+  figure: { color: UI.soft, fontSize: 13.5, fontVariant: ["tabular-nums" as const] },
+  total: { color: UI.ink, fontSize: 13.5, fontWeight: "800" as const, fontVariant: ["tabular-nums" as const] },
+  rowPaddingV: 13,
+};
+
+// Rank movement: a small round badge, ▲ green, ▼ red, or a dash.
+export function MovementBadge({ value }: { value: "up" | "down" | "same" }) {
+  const color = value === "up" ? UI.good : value === "down" ? UI.bad : UI.muted;
+  return (
+    <View
+      accessible
+      accessibilityLabel={value === "up" ? "Moved up" : value === "down" ? "Moved down" : "No change"}
+      style={{
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: value === "same" ? "rgba(255, 255, 255, 0.08)" : value === "up" ? "rgba(0, 217, 130, 0.16)" : "rgba(255, 92, 119, 0.16)",
+      }}
+    >
+      <Text style={{ color, fontSize: value === "same" ? 11 : 8, fontWeight: "800", marginTop: value === "same" ? -1 : 0 }}>
+        {value === "up" ? "▲" : value === "down" ? "▼" : "–"}
+      </Text>
+    </View>
+  );
+}
+
+// Two or three choices in a rounded track; the chosen one is a raised pill.
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { id: T; label: string; live?: boolean }[];
+  value: T;
+  onChange: (id: T) => void;
+}) {
+  return (
+    <View
+      accessibilityRole="tablist"
+      style={{ flexDirection: "row", padding: 4, borderRadius: 14, backgroundColor: UI.surface, marginBottom: 14 }}
+    >
+      {options.map((option) => {
+        const active = option.id === value;
+        return (
+          <Pressable
+            key={option.id}
+            onPress={() => onChange(option.id)}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            style={({ pressed }) => ({
+              flex: 1,
+              height: 38,
+              borderRadius: 11,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: active ? THEME.surfaceRaised : pressed ? UI.pressed : "transparent",
+              borderWidth: active ? 1 : 0,
+              borderColor: "rgba(255, 255, 255, 0.1)",
+            })}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              {option.live && <LiveDot color={UI.good} />}
+              <Text style={{ color: active ? UI.ink : UI.muted, fontSize: 14, fontWeight: active ? "700" : "500" }}>
+                {option.label}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
 
 export function Heading({ children, hint, first = false }: { children: string; hint?: string; first?: boolean }) {
   return (

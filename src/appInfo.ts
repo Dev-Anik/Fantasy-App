@@ -13,3 +13,11 @@ export const PRIVACY_URL = "";
 export const TERMS_URL = "";
 
 export const APP_VERSION = Constants.expoConfig?.version ?? "";
+
+// Live match alerts: the Skippr server (supabase/). The app signs the phone
+// up at this address with the project's PUBLISHABLE key (sb_publishable_...,
+// made to be shipped in apps; never the secret key). While the key is empty,
+// live alerts stay off and their switches are hidden.
+export const LIVE_ALERTS_URL =
+  "https://oyeqkrlxwpqvzvijlleu.supabase.co/functions/v1/register";
+export const LIVE_ALERTS_KEY = "sb_publishable_OmaLkvFRewKXlvHgAkkYRA_Zfc1cn0H";

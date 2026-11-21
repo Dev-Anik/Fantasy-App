@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Animated,
@@ -9,6 +9,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { useAnimatedValue } from "./useAnimatedValue";
+import { getLoadedFonts, isLoaded as isFontLoaded } from "expo-font";
 import { Image } from "expo-image";
 import { GlassView } from "expo-glass-effect";
 import { AppSymbol } from "./AppSymbol";
@@ -132,8 +133,27 @@ const EPIC_STYLE = {
 export const ELITE_FORM = 8;
 export const HOT_FORM = 7;
 // Points page (a gameweek's scores, which carry no form): a card turns elite
-// when the player scored this many points himself (before the armband).
-export const ELITE_POINTS = 10;
+// when the player scored this many points himself. Counted before the
+// armband, so a captain needs the same 8 as anyone else (not 4 doubled).
+export const ELITE_POINTS = 8;
+// Points page: gap between the name plate and the points chip under it.
+const POINTS_CHIP_TOP = 2;
+// Points page: the points band stays inside the card's border: this far in
+// from the sides (share of the card's width) and from the bottom edge.
+// (The same as the name plate's PLATE_INSET, so the two line up.)
+const POINTS_BAND_SIDE = 0.045;
+const POINTS_BAND_BOTTOM = 4;
+// Vertical nudge for the points in their band, as a share of the font size
+// (negative: up). Android sets a line of this height with the spare room
+// above the text, so the digits sat low (about 3px over them, 1-2px under on
+// a phone); this lifts them to the middle.
+const DIGIT_DROP = -0.04;
+// Points page: the band under every name, in one look (see CapsuleInfo).
+const POINTS_PAGE_BAND = {
+  fill: "rgba(255, 255, 255, 0.22)",
+  ink: "#ffffff",
+  edge: "rgba(255, 255, 255, 0.4)",
+};
 
 // The 3D kit avatar for a club (a neutral one when the club is unknown);
 // goalkeepers get the keeper kit.
@@ -210,10 +230,17 @@ export function PlayerArt({ team, size, goalkeeper = false }: { team: string; si
 // ---------------------------------------------------------------------------
 
 const DESIGN_CARD_WIDTH = 72;
-const ROW_PADDING = 6;
+const ROW_PADDING = 3;
 // Shield cards: the least vertical space between two rows of starters.
 const ROW_GAP = 8;
-const MIN_GAP = 4;
+// The "Substitutes" label at the top of the bench tray.
+const BENCH_LABEL_HEIGHT = 13;
+// The gap between neighbouring cards: one fixed value for every row (a row
+// of five, a row of three, the bench), so the spacing always matches. Card
+// widths are worked out with it, so a row of five still fits.
+const MIN_GAP = 7;
+// Between the four bench cards.
+const BENCH_GAP = 20;
 // Stops pitch text from blowing out the layout at very large system font sizes.
 const MAX_FONT_MULTIPLIER = 1.15;
 
@@ -248,7 +275,7 @@ function computeMetrics(
     clamp(
       (pitchWidth - ROW_PADDING * 2 - MIN_GAP * (slots - 1)) / slots,
       54,
-      100,
+      110,
     ),
   );
   return {
@@ -264,16 +291,21 @@ function computeMetrics(
 // shrunk on short screens so the fixture line below still fits.
 // The face (player, form, name) is 1.2 times as tall as wide; the footer
 // (difficulty bars, then the opponent or points) adds 0.34 below it.
-const SHIELD_RATIO = 1.2;
+// (1.0, a square face: wider for its height than the original 1.2, so on
+// screens where the rows' height sets the size, the cards still gain width.)
+const SHIELD_RATIO = 1.0;
 // Tall enough for the difficulty bars and one line of text under them.
 const SHIELD_FOOTER = 0.34;
 function shieldSize(metrics: PitchMetrics, compact: boolean, benched: boolean) {
-  const ideal = (metrics.cardWidth - 2) * (compact ? 0.94 : 1);
+  // (Compact pitches used to shrink cards by 6%; no longer, so Home and
+  // Transfers cards are as wide as the Points page's for the same room.)
+  void compact;
+  const ideal = metrics.cardWidth - 2;
   // The bench uses the same limit, so its cards match the starters' size.
   void benched;
   const ratio = SHIELD_RATIO + SHIELD_FOOTER;
   const byHeight = metrics.rowSpace != null ? metrics.rowSpace / ratio : Infinity;
-  const width = Math.round(clamp(Math.min(ideal, byHeight), 40, 96));
+  const width = Math.round(clamp(Math.min(ideal, byHeight), 40, 108));
   const face = Math.round(width * SHIELD_RATIO);
   const height = Math.round(width * ratio);
   return { width, height, face, footer: height - face };
@@ -281,6 +313,20 @@ function shieldSize(metrics: PitchMetrics, compact: boolean, benched: boolean) {
 
 // Inside a card's footer: the difficulty bars, a gap, then one line of text
 // (opponent, points or price), in the footer less a small inset.
+// Points page: height of the points band under the name, nearly the whole
+// footer (the bars it replaces are gone), so the points can be large. Kept
+// inside the card: the gap above and the border below fit in the footer.
+function pointsBandHeight(footer: number) {
+  // A little under the full height, so the card's foot stays light.
+  return Math.max(10, Math.floor(pointsBandRoom(footer) * 0.85));
+}
+
+// The room the footer leaves for the band: the points' size is set from
+// this (82% of it), so the band could shrink without the points shrinking.
+function pointsBandRoom(footer: number) {
+  return Math.max(10, footer - POINTS_CHIP_TOP - POINTS_BAND_BOTTOM - 1);
+}
+
 function cardFooterLayout(footer: number) {
   const box = footer - Math.max(1, Math.round(footer * 0.06));
   const inner = footer - Math.max(2, footer * 0.12);
@@ -301,6 +347,156 @@ function avatarBoxHeight(metrics: PitchMetrics, compact: boolean, benched: boole
 
 const PitchMetricsContext = createContext<PitchMetrics>(computeMetrics(360));
 
+// Name plates: one font size for the whole pitch, bench included, so every
+// name is the same size, chosen so the longest name fits its card in full
+// (no "…", no name shrunk on its own), as on the FPL site. Null: no pitch
+// around the card, which then sizes its own name.
+// Larger than before: the condensed face below fits more letters per line.
+const NAME_RATIO_MAX = 0.23;
+// Player names are set in Roboto Condensed ExtraBold (assets/fonts, embedded by
+// the expo-font plugin in app.json): narrower letters, so names can be
+// bigger and still fit. Same name on Android (the file) and iOS (the font's
+// own PostScript name).
+const NAME_FONT = "RobotoCondensed-ExtraBold";
+// The font is built into the app (a new build adds it). On a build without
+// it, use the phone's own font in heavy bold instead, sized for its wider
+// letters, so names are bold either way and still never cut.
+const HAS_NAME_FONT = (() => {
+  try {
+    return isFontLoaded(NAME_FONT) || getLoadedFonts().includes(NAME_FONT);
+  } catch {
+    return false;
+  }
+})();
+const NAME_STYLE = HAS_NAME_FONT
+  ? // The face is bold already; asking for bold again would make Android
+    // thicken it a second time.
+    ({ fontFamily: NAME_FONT, fontWeight: "normal" } as const)
+  : ({ fontWeight: "900" } as const);
+// Roboto Condensed ExtraBold letters against regular Roboto's: about 0.9 on
+// average, but capitals and wide letters run wider, so allow for that.
+const CONDENSED = HAS_NAME_FONT ? 0.97 : 1.08;
+// The name plate's side inset, as a share of the card's width.
+// Inside the card's border, in line with the band below it (POINTS_BAND_SIDE),
+// so name and band read as part of the card rather than laid over it.
+// (Just inside the border: far enough to sit within it, no further, so the
+// names keep as much room as possible.)
+const PLATE_INSET = 0.045;
+// The share of the card's width a name can fill: the plate (the card less
+// its insets) less the plate's slim padding and edge.
+const NAME_TEXT_SHARE = 1 - 2 * PLATE_INSET - 0.035;
+// Letters set a touch closer, which also gives names a little more room.
+const NAME_TRACKING = -0.2;
+const NameFontContext = createContext<number | null>(null);
+
+// A name's width in ems in the name font: narrow letters, wide ones,
+// capitals and the rest, close enough to size the line without measuring.
+function nameEms(name: string) {
+  let ems = 0;
+  for (const ch of name) {
+    if ("iljtfrI.,'’-:! ".includes(ch)) ems += 0.32;
+    else if ("mwMW".includes(ch)) ems += 0.86;
+    else if (ch !== ch.toLowerCase()) ems += 0.68;
+    else ems += 0.57;
+  }
+  return ems * CONDENSED;
+}
+
+// The plate's text area is the card less its side insets, padding and edge
+// (about 90% of the width); keep spare room so rounding never cuts a letter.
+function pitchNameFont(
+  players: { name: string; pos: number }[],
+  metrics: PitchMetrics,
+  compact: boolean,
+  // Largest size as a share of the card's width (Infinity: only the fit).
+  cap = NAME_RATIO_MAX,
+  // How much of the plate the longest name may fill (the rest is spare).
+  // (The closer letter spacing saves about the margin a fill below 1 keeps.)
+  fill = NAME_TEXT_SHARE,
+) {
+  let font = shieldSize(metrics, compact, false).width * cap;
+  for (const player of players) {
+    const width = shieldSize(metrics, compact, player.pos > 11).width;
+    font = Math.min(font, (width * fill) / Math.max(1, nameEms(player.name)));
+  }
+  return Math.max(7, Math.floor(font * 2) / 2);
+}
+
+// Every page sizes its names the same way as the Points page: one size for
+// the whole pitch, the largest at which the squad's longest name fits its
+// card. (Home and Transfers once used a fixed size to stop the cards
+// changing size as the page opened; the real cause of that, the shared pitch
+// keeping the other page's measurements, is fixed in Pitch below.)
+// The Lineup (Home) page is the one exception: its names a little larger,
+// letting the longest name fill a little more of its plate. Still one size
+// for every name, and still never cut.
+const LINEUP_NAME_SCALE = 1.1;
+const LINEUP_NAME_FILL = NAME_TEXT_SHARE;
+// Names are measured on the phone, in the real font, at this size (see
+// NameMeasurer); every name is then drawn at the largest size at which the
+// widest of them exactly fits its plate. Until the measurements arrive (the
+// first moment), the letter-count estimate stands in.
+const NAME_MEASURE_SIZE = 20;
+function nameFontFor(
+  layoutKey: string,
+  players: { name: string; pos: number }[],
+  metrics: PitchMetrics,
+  compact: boolean,
+  widestName: number | null,
+) {
+  const lineup = layoutKey === "lineup";
+  const cap = NAME_RATIO_MAX * (lineup ? LINEUP_NAME_SCALE : 1);
+  if (widestName == null || widestName <= 0) {
+    return lineup
+      ? pitchNameFont(players, metrics, compact, cap, LINEUP_NAME_FILL)
+      : pitchNameFont(players, metrics, compact);
+  }
+  const card = shieldSize(metrics, compact, false).width;
+  // The plate's text room: the card less the plate's insets, padding and
+  // edge, with a hair spare for rounding.
+  const room = card * (1 - 2 * PLATE_INSET) - 3;
+  const fitted = (room / widestName) * NAME_MEASURE_SIZE * 0.98;
+  return Math.max(7, Math.floor(Math.min(card * cap, fitted) * 2) / 2);
+}
+
+// Draws each name once, out of sight, in the plate's font at
+// NAME_MEASURE_SIZE, and reports the widest one's width.
+function NameMeasurer({ names, onWidest }: { names: string[]; onWidest: (width: number) => void }) {
+  const widths = useRef(new Map<string, number>());
+  const unique = [...new Set(names)].filter(Boolean);
+  return (
+    <View
+      pointerEvents="none"
+      accessible={false}
+      importantForAccessibility="no-hide-descendants"
+      style={{ position: "absolute", left: -10000, top: 0, width: 4000, opacity: 0 }}
+    >
+      {unique.map((name) => (
+        <Text
+          key={name}
+          allowFontScaling={false}
+          numberOfLines={1}
+          style={{
+            alignSelf: "flex-start",
+            fontSize: NAME_MEASURE_SIZE,
+            ...NAME_STYLE,
+            letterSpacing: NAME_TRACKING,
+            includeFontPadding: false,
+          }}
+          onLayout={(event) => {
+            widths.current.set(name, event.nativeEvent.layout.width);
+            if (unique.every((n) => widths.current.has(n))) {
+              onWidest(Math.max(...unique.map((n) => widths.current.get(n) ?? 0)));
+            }
+          }}
+        >
+          {name}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
 // The last measured size of each kind of pitch (Lineup, Transfers, points
 // page), so a pitch seen before draws at its final size on the first frame
 // instead of a guessed one.
@@ -309,12 +505,13 @@ const lastLayout = new Map<
   { width: number; startersHeight: number | null; pitchHeight: number | null }
 >();
 
-// Horizontal gap between cards in a row. Rows with fewer players stay grouped
-// around the centre instead of being pushed out to the touchlines.
-function rowGap(count: number, slotWidth: number, rowWidth: number, maxGap: number) {
+// Horizontal gap between cards in a row: the same in every row, so rows of
+// five and rows of three look alike; shorter rows simply sit as a tight
+// group in the centre. Never more than the row has room for.
+function rowGap(count: number, slotWidth: number, rowWidth: number, wanted = MIN_GAP) {
   if (count <= 1) return 0;
-  const evenGap = (rowWidth - count * slotWidth) / (count - 1);
-  return Math.max(MIN_GAP, Math.min(evenGap, maxGap));
+  const room = (rowWidth - count * slotWidth) / (count - 1);
+  return Math.max(0, Math.min(wanted, room));
 }
 
 function PlayerAvatar({
@@ -346,6 +543,9 @@ function PlayerAvatar({
     hero?: boolean;
     // Points page: larger name.
     large?: boolean;
+    // The footer is a band inside the card, right under the name (see
+    // CapsuleInfo), on every page.
+    bandFooter?: boolean;
     // Transfers: this gameweek's price change ("+0.1"), shown on the card's
     // face so the price in the footer keeps its full size.
     priceChange?: { text: string; color: string };
@@ -360,8 +560,9 @@ function PlayerAvatar({
   };
 }) {
   const metrics = useContext(PitchMetricsContext);
-  const { cardWidth, scale } = metrics;
+  const { scale } = metrics;
   const onSettled = useContext(AvatarSettledContext);
+  const pitchNameFontSize = useContext(NameFontContext);
   const reported = useRef(false);
   const reportSettled = () => {
     if (reported.current) return;
@@ -369,7 +570,9 @@ function PlayerAvatar({
     onSettled();
   };
   const avatarSource = teamAvatar(team, goalkeeper);
-  const boxWidth = cardWidth - 6;
+  // Exactly the card: no empty margin either side, so the gap between two
+  // cards is just the row's gap.
+  const boxWidth = shieldSize(metrics, compact, benched).width;
   const boxHeight = avatarBoxHeight(metrics, compact, benched);
   // Swap badge size.
   const swapSize = Math.round(clamp(24 * scale, 20, 30));
@@ -381,9 +584,9 @@ function PlayerAvatar({
   const ink = card?.highlight ?? epic?.ink ?? "#ffffff";
   // The club in the top-right corner, level with the position on the left
   // (a chosen card stat sits just under it).
-  const clubFont = Math.max(8, Math.round(width * 0.115 * 2) / 2);
+  const clubFont = Math.max(7.5, Math.round(width * 0.105 * 2) / 2);
   const clubLine = Math.round(clubFont * 1.2);
-  const clubTop = Math.round(face * 0.05);
+  const clubTop = Math.round(face * 0.035);
   // The name plate is the same dark strip with white lettering on every
   // card (the selection colour when selected).
   const plate = {
@@ -394,7 +597,16 @@ function PlayerAvatar({
   const footerLayout = cardFooterLayout(footer);
   // The card's art (colours, pattern, fade, frame) stops at the middle of
   // the footer's text line; the chip there sits across the bottom edge.
-  const art = card?.footer ? Math.round(face + footerLayout.lineMiddle) : height;
+  // Points page cards: the points sit at the top of the footer, in the dark
+  // band right under the name, and the card ends just below them.
+  // Cards whose footer is a band inside the card, right under the name:
+  // every Home and Transfers card, and Points cards showing points.
+  const pointsCard = !!card?.bandFooter;
+  const art = card?.footer
+    ? pointsCard
+      ? Math.round(face + POINTS_CHIP_TOP + pointsBandHeight(footer) + POINTS_BAND_BOTTOM)
+      : Math.round(face + footerLayout.lineMiddle)
+    : height;
   return (
     <View style={{ width: boxWidth, height: boxHeight }}>
       <View
@@ -617,13 +829,15 @@ function PlayerAvatar({
             <View
               style={{
                 position: "absolute",
-                left: Math.round(width * 0.05),
-                right: Math.round(width * 0.05),
+                // Inside the card's border, in line with the band below.
+                left: Math.round(width * PLATE_INSET),
+                right: Math.round(width * PLATE_INSET),
                 // Just above the footer.
                 bottom: footer + Math.round(face * 0.03),
                 paddingVertical: 1.5,
-                paddingHorizontal: 2,
-                borderRadius: 4,
+                paddingHorizontal: 1,
+                // Square ends: a strip set into the card, not a pill on it.
+                borderRadius: 0,
                 backgroundColor: plate.fill,
                 borderWidth: 0.5,
                 borderColor: plate.edge,
@@ -631,20 +845,21 @@ function PlayerAvatar({
             >
               <Text
                 numberOfLines={1}
-                // Every name on the pitch is the same size: a long one may
-                // shrink only a little, then ends in "…", so no name is tiny
-                // and none towers over the others. Normal case, not capitals,
-                // so most names fit at full size.
+                // Every name on the pitch is exactly the same size, short or
+                // long, and shown in full, as on the official site: the size
+                // is set for the whole pitch from its longest name (see
+                // pitchNameFont). Normal case, in a condensed bold face.
+                // Never "…": should a name still not fit (a font quirk on
+                // some phone), it shrinks slightly instead of being cut.
                 adjustsFontSizeToFit
-                minimumFontScale={0.85}
-                ellipsizeMode="tail"
+                minimumFontScale={0.8}
                 allowFontScaling={false}
                 style={{
                   textAlign: "center",
                   color: plate.ink,
-                  fontSize: Math.max(10, Math.round(width * (card.large ? 0.165 : 0.16) * 2) / 2),
-                  fontWeight: "800",
-                  letterSpacing: 0,
+                  fontSize: pitchNameFontSize ?? Math.floor(width * NAME_RATIO_MAX * 2) / 2,
+                  ...NAME_STYLE,
+                  letterSpacing: NAME_TRACKING,
                   includeFontPadding: false,
                 }}
               >
@@ -661,7 +876,7 @@ function PlayerAvatar({
                 style={{
                   position: "absolute",
                   top: clubTop,
-                  right: Math.round(width * 0.08),
+                  right: Math.round(width * 0.06),
                   textAlign: "right",
                   color: epic?.ink ?? "#ffffff",
                   fontSize: clubFont,
@@ -697,10 +912,13 @@ function PlayerAvatar({
           <View
             style={{
               position: "absolute",
-              top: face,
-              left: Math.round(width * 0.06),
-              right: Math.round(width * 0.06),
-              height: footerLayout.box,
+              // Points cards: exactly the band under the name (as wide as the
+              // name plate), which the gold fills.
+              // Inside the card's border on every side.
+              top: pointsCard ? face + 1 : face,
+              left: Math.round(width * (pointsCard ? POINTS_BAND_SIDE : 0.06)),
+              right: Math.round(width * (pointsCard ? POINTS_BAND_SIDE : 0.06)),
+              height: pointsCard ? art - face - 1 - POINTS_BAND_BOTTOM : footerLayout.box,
               justifyContent: "center",
               overflow: "hidden",
               // Above the elite and hero frames, which cross the chip.
@@ -855,32 +1073,13 @@ function BonusChip({ points }: { points: number }) {
 // flipping to signal "tap another player to swap".
 // Elite cards: a soft band of light sweeps across every few seconds, like
 // light catching a foil card. Runs on the native thread.
-// The aura behind an elite or hero card: a soft glow that slowly breathes.
-// Runs on the native driver, so many on one pitch stay smooth.
+// The aura behind an elite or hero card: a faint, still halo. Enough to mark
+// the card as special without pulling the eye from the rest of the screen
+// (it used to breathe at full strength, which drowned out everything else).
+const CARD_GLOW_OPACITY = 0.32;
 function CardGlow({ hero, width, height }: { hero: boolean; width: number; height: number }) {
-  const pulse = useAnimatedValue(0);
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 1400,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: 1400,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [pulse]);
   return (
-    <Animated.View
+    <View
       pointerEvents="none"
       style={{
         position: "absolute",
@@ -889,7 +1088,7 @@ function CardGlow({ hero, width, height }: { hero: boolean; width: number; heigh
         top: -height * 0.2,
         width: width * 1.4,
         height: height * 1.4,
-        opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
+        opacity: CARD_GLOW_OPACITY,
       }}
     >
       <Image
@@ -899,7 +1098,7 @@ function CardGlow({ hero, width, height }: { hero: boolean; width: number; heigh
         accessible={false}
         style={{ width: "100%", height: "100%" }}
       />
-    </Animated.View>
+    </View>
   );
 }
 
@@ -917,10 +1116,11 @@ function Shimmer({
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.delay(1800),
+        // A rare, slow glint rather than a constant flicker.
+        Animated.delay(7000),
         Animated.timing(sweep, {
           toValue: 1,
-          duration: 1100,
+          duration: 1400,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
@@ -954,9 +1154,9 @@ function Shimmer({
       }}
     >
       {/* Soft edges: faint, bright, faint. */}
-      <View style={{ flex: 1, backgroundColor: `rgba(${tint}, 0.07)` }} />
-      <View style={{ flex: 1, backgroundColor: `rgba(${tint}, 0.2)` }} />
-      <View style={{ flex: 1, backgroundColor: `rgba(${tint}, 0.07)` }} />
+      <View style={{ flex: 1, backgroundColor: `rgba(${tint}, 0.04)` }} />
+      <View style={{ flex: 1, backgroundColor: `rgba(${tint}, 0.11)` }} />
+      <View style={{ flex: 1, backgroundColor: `rgba(${tint}, 0.04)` }} />
     </Animated.View>
   );
 }
@@ -1151,10 +1351,13 @@ function CapsuleInfo({
   started,
   nameFont,
   infoFont,
+  band = false,
 }: {
   // Shield style: drawn inside the card's footer (this tall), with no
   // panel of its own.
   inCard?: number;
+  // Home and Transfers: the footer as a band under the name (SquadBand).
+  band?: boolean;
   // Shield style: the name is printed on the card already.
   hideName?: boolean;
   // Shield style: difficulty as three thin bars (this gameweek and the next
@@ -1204,12 +1407,15 @@ function CapsuleInfo({
     const pointsTone = { fill: dark.fill, ink: points < 0 ? "#ff7a90" : "#ffd400" };
     const fixtureText = current ? `${current.opponent} (${current.venue})` : "";
     if (r.minutes !== undefined) {
-      // Points view: points once he has played, the opponent before kick-off.
-      if ((r.minutes ?? 0) > 0) {
+      // Points view: points once he has played, or once his match is under
+      // way (0 until he scores; FPL's minutes lag the match), the opponent
+      // before kick-off, a dash if his match is over and he didn't play.
+      const matchOver = !!r.matchStarted && !!current?.finished;
+      if ((r.minutes ?? 0) > 0 || (r.matchStarted && !matchOver)) {
         // Just the number: the gold already says these are points.
         text = `${points}`;
         tone = pointsTone;
-      } else if (current && !started) {
+      } else if (current && !started && !r.matchStarted) {
         text = fixtureText;
         tone = DIFFICULTY_TONE[current.difficulty];
         dots = fixtures.slice(1);
@@ -1237,6 +1443,103 @@ function CapsuleInfo({
     // Beside a price or points there is no fixture text, so the first dot is
     // this gameweek's and is drawn larger, with a ring.
     const currentIsDot = !isFixture;
+    // Points page: the number gets a solid chip of its own.
+    const pointsChip = !!emphasis && /^-?\d+$/.test(text);
+    // Points page: one look for every card's band, whatever it says (points,
+    // an opponent, a dash): frosted glass over the card, so it takes on the
+    // card's own club colour and sits in the design, with white lettering.
+    // The points themselves in gold (red below zero), on the frosted band.
+    const pointsBand = {
+      ...POINTS_PAGE_BAND,
+      ink: (r.displayPoints ?? 0) < 0 ? "#ff8a9c" : "#ffd400",
+    };
+
+    // Home and Transfers: one band inside the card, under the name. A wide
+    // segment says this gameweek's opponent in its difficulty colour (or the
+    // price on Transfers, or the points once the match is on); short
+    // segments beside it give the difficulty of the fixtures that follow.
+    // (The Points page's opponent still to play, or its dash for a player
+    // who didn't play, use this band too; its points have their own below.)
+    if (inCard && (band || (emphasis && !pointsChip))) {
+      const bandHeight = pointsBandHeight(inCardHeight ?? 0);
+      // This gameweek's difficulty colours the wide segment itself (behind
+      // the opponent, or the price on Transfers), so only the next two
+      // fixtures need marks, leaving the text plenty of room.
+      const coloured = (isFixture || showPrice) && !!current;
+      // The Points page shows no later fixtures: the gameweek is what counts.
+      const following = emphasis ? [] : coloured ? fixtures.slice(1, 3) : fixtures.slice(0, 2);
+      // Points page: an opponent still to play in its difficulty colour, as
+      // on Home; a dash in the page's frosted band.
+      const main = coloured
+        ? DIFFICULTY_TONE[current.difficulty]
+        : emphasis
+        ? POINTS_PAGE_BAND
+        : text === "BLANK" || text === "—" || !text
+          ? { fill: "rgba(255, 255, 255, 0.08)", ink: "#8c9b93" }
+          : { fill: "#d6dce6", ink: "#0b1020" };
+      // Wide enough to read at a glance.
+      const segment = Math.max(5, Math.round(bandHeight * 0.42));
+      // The text's size: large, from the room the footer leaves (as the
+      // Points page's numbers), but never wider than its segment. Set here,
+      // not shrunk by the phone: that shrinking is what made it tiny.
+      const bandWidth = width * (1 - 2 * POINTS_BAND_SIDE);
+      // Sized from a typical line, not this card's own, so every card's
+      // opponent (or price) is the same size, with two marks beside it.
+      const sample = showPrice ? "£10.0m" : "WHU (H)";
+      const textRoom = bandWidth - (emphasis ? 0 : 2) * (segment + 2) - 4;
+      const textSize = Math.max(
+        7,
+        Math.floor(Math.min(pointsBandRoom(inCardHeight ?? 0) * 0.66, textRoom / (nameEms(sample) * 1.02)) * 2) / 2,
+      );
+      return (
+        <View
+          accessible
+          accessibilityLabel={`${text}${following.length ? `, then ${following.map((f) => `${f.opponent} ${f.difficulty}`).join(", ")}` : ""}`}
+          style={{ flex: 1, flexDirection: "row", alignItems: "stretch", gap: 2 }}
+        >
+          <View
+            style={{
+              flex: 1,
+              borderRadius: 4,
+              alignItems: "center",
+              justifyContent: "center",
+              paddingHorizontal: 2,
+              backgroundColor: main.fill,
+              borderWidth: highlight || (emphasis && !coloured) ? 1 : 0,
+              borderColor: highlight ? highlightColor : POINTS_PAGE_BAND.edge,
+            }}
+          >
+            <Text
+              numberOfLines={1}
+              allowFontScaling={false}
+              style={{
+                color: main.ink,
+                fontSize: textSize,
+                lineHeight: bandHeight,
+                fontWeight: "800",
+                letterSpacing: 0.2,
+                includeFontPadding: false,
+                textAlignVertical: "center",
+              }}
+            >
+              {text}
+            </Text>
+          </View>
+          {following.map((fixture, index) => (
+            <View
+              key={`${fixture.event}-${fixture.opponent}-${index}`}
+              style={{
+                width: segment,
+                borderRadius: 3,
+                backgroundColor: DIFFICULTY_TONE[fixture.difficulty].fill,
+                borderWidth: 1,
+                borderColor: "rgba(0, 0, 0, 0.45)",
+              }}
+            />
+          ))}
+        </View>
+      );
+    }
     // Shield cards on squad screens: smaller opponent and difficulty bars.
     const compactLine = inCard || (hideName && !emphasis);
     const edge = highlight ? highlightColor : r.pendingIn ? GREEN : null;
@@ -1277,6 +1580,8 @@ function CapsuleInfo({
           width: inCard ? "100%" : compactLine ? Math.round(width * 0.82) : width,
           maxWidth: "100%",
           alignItems: "center",
+          // Points page: the gold fills the whole band under the name.
+          ...(inCard && pointsChip ? { flex: 1, alignItems: "stretch" as const } : null),
           marginTop: inCard || hideName ? 0 : benched ? 3 : 2,
           paddingHorizontal: inCard ? 0 : compactLine ? 2 : 3,
           paddingTop: inCard ? 0 : compactLine ? 1 : 1.5,
@@ -1292,7 +1597,11 @@ function CapsuleInfo({
           borderColor: edge ?? "transparent",
         }}
       >
-        {inCard && barsView}
+        {/* Points page: no difficulty bars (the gameweek is being played, so
+            they no longer matter). Points move up into the dark band right
+            under the name, where the bars were; an opponent not yet played
+            keeps its usual place, with the band's height kept above it. */}
+        {inCard && (emphasis ? isFixture ? <View style={{ height: cardBar + cardGap }} /> : null : barsView)}
         {!hideName && (
           <Text
             numberOfLines={1}
@@ -1316,7 +1625,13 @@ function CapsuleInfo({
             accessible
             // A bare number is points; screen readers still say so.
             accessibilityLabel={`${text}${/^-?\d+$/.test(text) ? " points" : ""}${extra ? ` ${extra.text}` : ""}`}
-            style={{ flexDirection: "row", alignItems: "center", gap: 3, maxWidth: "100%" }}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 3,
+              maxWidth: "100%",
+              ...(inCard && pointsChip ? { flex: 1, alignItems: "stretch" as const } : null),
+            }}
           >
             <View
               style={
@@ -1328,6 +1643,19 @@ function CapsuleInfo({
                       paddingHorizontal: 4,
                       borderRadius: 4,
                       backgroundColor: DIFFICULTY_TONE[current.difficulty].fill,
+                    }
+                  : inCard && pointsChip
+                  ? {
+                      // Points page: the band under the name, the points
+                      // centred in it (colour: pointsBand above).
+                      flex: 1,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      // Rounded like the name plate above it.
+                      borderRadius: 5,
+                      backgroundColor: pointsBand.fill,
+                      borderWidth: 1,
+                      borderColor: POINTS_PAGE_BAND.edge,
                     }
                   : inCard
                   ? {
@@ -1351,13 +1679,17 @@ function CapsuleInfo({
             >
               <Text
                 numberOfLines={1}
-                adjustsFontSizeToFit
+                // Points in their band have a set size (below); shrinking
+                // to fit the band is what made them tiny.
+                adjustsFontSizeToFit={!(inCard && pointsChip)}
                 minimumFontScale={0.7}
                 maxFontSizeMultiplier={inCard ? 1 : MAX_FONT_MULTIPLIER}
                 style={{
                   // Fixture: ink for its difficulty chip. Points keep their
                   // gold/red; a price stays quiet.
-                  color: inCard && isFixture && current
+                  color: inCard && pointsChip
+                    ? pointsBand.ink
+                    : inCard && isFixture && current
                     ? DIFFICULTY_TONE[current.difficulty].ink
                     : inCard && (isFixture || showPrice)
                     ? "#eef4f0"
@@ -1367,7 +1699,10 @@ function CapsuleInfo({
                         ? "#c3d5cb"
                         : tone.ink,
                   fontSize:
-                    emphasis && !inCard
+                    inCard && pointsChip
+                      ? // Points page: large, most of the band's height.
+                        Math.round(pointsBandRoom(inCardHeight ?? 0) * 0.82)
+                      : emphasis && !inCard
                       ? infoFont + 1.5
                       : inCard
                         ? // Points (digits only, no descenders) can fill the
@@ -1379,12 +1714,30 @@ function CapsuleInfo({
                         : compactLine
                         ? Math.max(7, infoFont - 2.5)
                         : Math.max(8, infoFont - 1),
-                  fontWeight: emphasis ? "900" : inCard ? "800" : "700",
+                  // Points in their band: firm but a step lighter than black.
+                  fontWeight: inCard && pointsChip ? "800" : emphasis ? "900" : inCard ? "800" : "700",
                   letterSpacing: inCard ? 0.2 : 0,
                   // Centred on its own line box, so it sits mid-footer.
-                  lineHeight: inCard ? Math.floor(cardLine) : undefined,
+                  lineHeight: inCard && pointsChip
+                    ? pointsBandHeight(inCardHeight ?? 0)
+                    : inCard
+                      ? Math.floor(cardLine)
+                      : undefined,
                   includeFontPadding: !inCard,
                   textAlignVertical: "center",
+                  // Measured on a phone: the line leaves the digits a little
+                  // low in the band, so they're lifted to its middle.
+                  // A soft dark edge, so gold reads on the light glass.
+                  ...(inCard && pointsChip
+                    ? { textShadowColor: "rgba(0, 0, 0, 0.6)", textShadowRadius: 2, textShadowOffset: { width: 0, height: 0.5 } }
+                    : null),
+                  ...(inCard && pointsChip
+                    ? {
+                        transform: [
+                          { translateY: Math.round(pointsBandRoom(inCardHeight ?? 0) * 0.82 * DIGIT_DROP * 2) / 2 },
+                        ],
+                      }
+                    : null),
                 }}
               >
                 {text}
@@ -1469,7 +1822,7 @@ function PlayerCard({
   const isBenched = r.pos > 11;
   const isBenchedGK = isBenched && r.type === 1;
   const pitchMetrics = useContext(PitchMetricsContext);
-  const { cardWidth, benchWidth, scale } = pitchMetrics;
+  const { cardWidth, scale } = pitchMetrics;
   const nameFont = Math.max(9, Math.round(10 * scale * 2) / 2);
   const flag = availability(r.status, r.chance);
   const infoFont = Math.max(8.5, Math.round(9.5 * scale * 2) / 2);
@@ -1505,7 +1858,7 @@ function PlayerCard({
       style={({ pressed }) => ({
         alignItems: "center",
         alignSelf: "center",
-        width: isBenched ? benchWidth : cardWidth,
+        width: shieldSize(pitchMetrics, compact, isBenched).width,
         borderRadius: 14,
         backgroundColor: "transparent",
         transform: [{ scale: pressed ? 0.90 : selected ? 1.05 : 1 }],
@@ -1521,7 +1874,7 @@ function PlayerCard({
           <>
             <View
               style={{
-                width: cardWidth - 6,
+                width: shieldSize(pitchMetrics, compact, isBenched).width,
                 height: avatarBoxHeight(pitchMetrics, compact, isBenched),
                 alignItems: "center",
                 justifyContent: "center",
@@ -1549,6 +1902,10 @@ function PlayerCard({
                     elite: !pointsView && Number(r.form) >= ELITE_FORM,
                     hero: pointsView && ownPoints >= ELITE_POINTS,
                     large: pointsView,
+                    // Same rule as the footer's text (CapsuleInfo): before
+                    // his match, a player without minutes shows the opponent.
+                    // Every card, every page: the footer is a band in the card.
+                    bandFooter: true,
                     stats,
                     // The price change is now a figure the user can choose
                     // ("Price change" in Card info), not shown by default.
@@ -1562,6 +1919,7 @@ function PlayerCard({
                         // Same footer on every screen: the line (fixture, price
                         // or points) and the difficulty bars.
                         bars
+                        band={!pointsView}
                         emphasis={pointsView}
                         r={r}
                         width={cardWidth}
@@ -1616,9 +1974,8 @@ function PlayerCard({
                   style={{
                     position: "absolute",
                     top: Math.round(armCard.face * 0.53 - armbandHeight / 2),
-                    left: Math.round(
-                      (cardWidth - 6 - armCard.width) / 2 + armCard.width * 0.17 - armband / 2,
-                    ),
+                    // The box is now exactly the card, so measure from its edge.
+                    left: Math.round(armCard.width * 0.17 - armband / 2),
                     width: armband,
                     height: armbandHeight,
                     borderRadius: 6,
@@ -1839,13 +2196,16 @@ function PitchRow({
   onTransfer?: (r: Row) => void;
   benched?: boolean;
 }) {
-  const { cardWidth, benchWidth, pitchWidth } = useContext(PitchMetricsContext);
-  const slotWidth = benched ? benchWidth : cardWidth;
+  const metrics = useContext(PitchMetricsContext);
+  const { pitchWidth } = metrics;
+  // Each card takes exactly its own width; the gap is the only space.
+  const slotWidth = shieldSize(metrics, !!compact, !!benched).width;
   // Bench sits in an inset tray (4pt margin + 6pt padding + border each side).
   const rowWidth = pitchWidth - ROW_PADDING * 2 - (benched ? 22 : 0);
-  // The bench is a fixed set of four, so it may spread wider than pitch lines.
-  const maxGap = cardWidth * (benched ? 0.6 : 0.45);
-  const gap = rowGap(rows.length, slotWidth, rowWidth, maxGap);
+  // One gap for every row and the bench, on every pitch (Home, Transfers,
+  // Points).
+  // The bench, four in their own tray, is spaced a little more openly.
+  const gap = rowGap(rows.length, slotWidth, rowWidth, benched ? BENCH_GAP : MIN_GAP);
 
   return (
     <View
@@ -1941,6 +2301,21 @@ export function Pitch({
   const [pitchHeight, setPitchHeight] = useState<number | null>(
     remembered?.pitchHeight ?? null,
   );
+  // Home and Transfers share this pitch (it isn't rebuilt between them), and
+  // each page has a different amount of room. On a switch, start from the new
+  // page's own remembered size at once (while rendering), instead of drawing
+  // the cards at the old page's size and resizing them a moment later.
+  const [sizedFor, setSizedFor] = useState(layoutKey);
+  if (sizedFor !== layoutKey) {
+    setSizedFor(layoutKey);
+    // Not seen yet: keep the current measurements (real ones) until the new
+    // page's arrive.
+    if (remembered) {
+      setMeasuredWidth(remembered.width);
+      setStartersHeight(remembered.startersHeight);
+      setPitchHeight(remembered.pitchHeight);
+    }
+  }
   useEffect(() => {
     if (measuredWidth != null && (startersHeight != null || pitchHeight != null)) {
       lastLayout.set(layoutKey, { width: measuredWidth, startersHeight, pitchHeight });
@@ -1957,12 +2332,13 @@ export function Pitch({
   // starters and the bench (five cards high) after the fixed spacing, so
   // every row and the bench always fit. Fixed spacing: pitch border and
   // padding (19), starters padding, row margins (4 x 4), bench tray margin,
-  // padding and border (17), at least ROW_GAP between the rows of starters
-  // and before the bench, and a little slack (6).
+  // padding and border (17), the bench's "Substitutes" label, at least
+  // ROW_GAP between the rows of starters and before the bench, and a little
+  // slack (6).
   const shieldRow =
     pitchHeight == null
       ? null
-      : (pitchHeight - 19 - startersPadding - 16 - 17 - ROW_GAP * 4 - 6) / 5;
+      : (pitchHeight - 19 - startersPadding - 16 - 17 - BENCH_LABEL_HEIGHT - ROW_GAP * 4 - 6) / 5;
   const metrics = computeMetrics(
     measuredWidth ?? windowWidth - 16,
     shieldRow,
@@ -2012,11 +2388,35 @@ export function Pitch({
     const timer = setTimeout(showSquad, REVEAL_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, [showSquad]);
+  // Switched to a page whose size isn't known yet (its first visit): hide the
+  // players (before paint) while the page measures itself, then show them at
+  // their final size, rather than showing them and resizing them.
+  const shownFor = useRef(layoutKey);
+  useLayoutEffect(() => {
+    if (shownFor.current === layoutKey) return;
+    shownFor.current = layoutKey;
+    // A page already measured: its size is right at once. (If a quick switch
+    // away and back cut short a hidden wait, show the players now.)
+    if (lastLayout.get(layoutKey)?.pitchHeight != null) {
+      showSquad();
+      return;
+    }
+    revealed.current = false;
+    reveal.setValue(0);
+    // The new measurement comes within a frame or two (if the size changed
+    // at all); always show the players again shortly after.
+    const timer = setTimeout(showSquad, 300);
+    return () => clearTimeout(timer);
+  }, [layoutKey, reveal, showSquad]);
   // The size has just been measured: show the squad if it was only waiting
   // for that.
   useEffect(() => {
     if (measured && waitingForSize.current) showSquad();
   }, [measured, showSquad]);
+
+  // The squad's names, measured for their size (NameMeasurer).
+  const namesKey = picks.map((p) => p.name).join("|");
+  const [widestName, setWidestName] = useState<{ key: string; width: number } | null>(null);
 
   const starters = picks.filter((p) => p.pos <= 11);
   const bench = picks.filter((p) => p.pos > 11).sort((a, b) => a.pos - b.pos);
@@ -2036,6 +2436,15 @@ export function Pitch({
 
   return (
     <PitchMetricsContext.Provider value={metrics}>
+      <NameFontContext.Provider
+        value={nameFontFor(
+          layoutKey,
+          picks,
+          metrics,
+          isCompactAvatar,
+          widestName?.key === namesKey ? widestName.width : null,
+        )}
+      >
       <CardStatsContext.Provider value={cardStats}>
       <AvatarSettledContext.Provider value={onAvatarSettled}>
       <Pressable
@@ -2146,14 +2555,41 @@ export function Pitch({
               backgroundColor: "rgba(255, 255, 255, 0.35)",
             }}
           />
+          {/* What the tray is: a small, quiet label over the four. */}
+          <Text
+            accessibilityRole="header"
+            allowFontScaling={false}
+            style={{
+              height: BENCH_LABEL_HEIGHT,
+              lineHeight: BENCH_LABEL_HEIGHT,
+              textAlign: "center",
+              color: "rgba(255, 255, 255, 0.62)",
+              fontSize: 9,
+              fontWeight: "700",
+              letterSpacing: 1.6,
+              includeFontPadding: false,
+            }}
+          >
+            SUBSTITUTES
+          </Text>
           <Animated.View style={{ opacity: reveal }}>
             <PitchRow rows={bench} {...rowProps} benched />
           </Animated.View>
         </View>
         </View>
+        <NameMeasurer
+          key={namesKey}
+          names={picks.map((p) => p.name)}
+          onWidest={(width) =>
+            setWidestName((current) =>
+              current?.key === namesKey && current.width === width ? current : { key: namesKey, width },
+            )
+          }
+        />
       </Pressable>
       </AvatarSettledContext.Provider>
       </CardStatsContext.Provider>
+      </NameFontContext.Provider>
     </PitchMetricsContext.Provider>
   );
 }

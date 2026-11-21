@@ -30,6 +30,9 @@ export type Row = {
   autoSub?: "in" | "out";
   // Points view, live gameweek: bonus from matches still in play.
   provisionalBonus?: number;
+  // Points view: his team's match this gameweek has kicked off (from the
+  // gameweek's live match data, not the season fixture list).
+  matchStarted?: boolean;
   // FPL's expected points for the next gameweek (ep_next), and the season total.
   epNext?: number | null;
   totalPoints?: number;
@@ -150,6 +153,10 @@ export type FplLeague = {
   // First gameweek that counts towards this league's table.
   start_event?: number;
   has_cup?: boolean;
+  // Classic leagues with a cup: the cup's own (head-to-head) league, once
+  // FPL has drawn it, and whether this manager made it into the cup.
+  cup_league?: number | null;
+  cup_qualified?: boolean | null;
   entry_can_invite?: boolean;
 };
 

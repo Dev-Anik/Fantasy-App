@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import type { ScrollViewInstance } from "react-native";
 import { leagueCategory } from "./fpl";
 import type {
@@ -13,14 +13,15 @@ import type {
 } from "./fpl";
 import { AppSymbol } from "./AppSymbol";
 import { LeagueCard } from "./LeagueCard";
-import { LeagueDetails } from "./LeagueDetails";
+import { LeagueDetails, LeagueDetailsHeader } from "./LeagueDetails";
 import { FadeIn } from "./FadeIn";
+import { FplCupCard } from "./FplCupCard";
 import { THEME } from "./theme";
 import { Button, Divider, Field, Group, LEAGUE_UI as UI } from "./leagueUi";
 
 const LEAGUE_SECTIONS: { category: LeagueCategory; title: string; hint: string }[] = [
   { category: "classic", title: "Classic", hint: "Ranked by total points" },
-  { category: "h2h", title: "Head-to-head", hint: "A match against another manager each gameweek" },
+  { category: "h2h", title: "Head-to-Head", hint: "A match against another manager each gameweek" },
   { category: "general", title: "General", hint: "Overall, country, club and gameweek leagues" },
 ];
 
@@ -54,6 +55,11 @@ type Props = {
   onGetInviteCode: (league: FplLeague) => void;
   onViewMember: (entry: number, event: number, teamName?: string, managerName?: string) => void;
   successSignal?: number;
+  // Pull down to refresh the leagues and the open league.
+  refreshing?: boolean;
+  onRefresh?: () => void;
+  // Bumped on each pull: the live tables reload too.
+  refreshSignal?: number;
 };
 
 const KNOCKOUT_OPTIONS = [
@@ -186,6 +192,9 @@ export function LeagueHub({
   onGetInviteCode,
   onViewMember,
   successSignal,
+  refreshing = false,
+  onRefresh,
+  refreshSignal = 0,
 }: Props) {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -235,6 +244,10 @@ export function LeagueHub({
     return () => clearTimeout(timer);
   }, [standingsLeagueId, standingsPage]);
 
+  const closeDetails = () => {
+    setShowLeagueDetails(false);
+    onCloseLeague();
+  };
   const openLeague = (league: FplLeague) => {
     setShowLeagueDetails(true);
     onSelectLeague(league);
@@ -253,27 +266,131 @@ export function LeagueHub({
 
   return (
     <View style={{ flex: 1 }}>
+      {/* Fixed at the top of the league list: Join / Create and the league
+          type tabs stay put while the leagues scroll under them. */}
+      {!detailsReady && (
+        <View style={{ paddingHorizontal: 16, paddingTop: 14 }}>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Button
+              label="Join a league"
+              active={actionModal === "join"}
+              onPress={() => setActionModal(actionModal === "join" ? "none" : "join")}
+            />
+            <Button
+              label="Create a league"
+              active={actionModal === "create"}
+              onPress={() => setActionModal(actionModal === "create" ? "none" : "create")}
+            />
+          </View>
+          {leagues.length > 0 && (
+            <>
+              {/* One type of league at a time; the tabs switch between them. */}
+              <View
+                accessibilityRole="tablist"
+                style={{ flexDirection: "row", marginTop: 22, borderBottomWidth: 1, borderBottomColor: UI.line }}
+              >
+                {LEAGUE_SECTIONS.map((section) => {
+                  const active = section.category === shownCategory;
+                  const count = counts[section.category];
+                  return (
+                    <Pressable
+                      key={section.category}
+                      onPress={() => setCategory(section.category)}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={`${section.title}, ${count} ${count === 1 ? "league" : "leagues"}`}
+                      hitSlop={{ top: 8, bottom: 4 }}
+                      style={{ marginRight: 20, paddingBottom: 10 }}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <Text style={{ color: active ? UI.ink : UI.muted, fontSize: 14, fontWeight: active ? "700" : "500" }}>
+                          {section.title}
+                        </Text>
+                        <View
+                          style={{
+                            minWidth: 18,
+                            height: 18,
+                            paddingHorizontal: 5,
+                            borderRadius: 9,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            backgroundColor: active ? THEME.accentSoft : "rgba(255, 255, 255, 0.06)",
+                            borderWidth: 1,
+                            borderColor: active ? THEME.accentLine : "rgba(255, 255, 255, 0.08)",
+                          }}
+                        >
+                          <Text
+                            style={{
+                              color: active ? THEME.accent : UI.muted,
+                              fontSize: 10.5,
+                              fontWeight: "700",
+                              fontVariant: ["tabular-nums"],
+                            }}
+                          >
+                            {count}
+                          </Text>
+                        </View>
+                      </View>
+                      <View
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          right: 0,
+                          bottom: -1,
+                          height: 2,
+                          backgroundColor: active ? UI.ink : "transparent",
+                        }}
+                      />
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={{ color: UI.muted, fontSize: 12, lineHeight: 17, marginTop: 10, marginBottom: 10 }}>
+                {activeSection.hint}
+              </Text>
+            </>
+          )}
+        </View>
+      )}
+      {/* A league open: its back link and name stay fixed at the top while
+          the tabs, your stats, standings and matches scroll under them. */}
+      {selectedLeague && detailsReady && (
+        // A hairline under the name, so the table scrolling up meets a clean
+        // edge instead of running into the title.
+        <View
+          style={{
+            paddingHorizontal: 16,
+            paddingTop: 14,
+            marginBottom: 10,
+            borderBottomWidth: 1,
+            borderBottomColor: UI.line,
+          }}
+        >
+          <LeagueDetailsHeader
+            name={standings?.league?.name ?? selectedLeague.name}
+            onBack={closeDetails}
+          />
+        </View>
+      )}
       <ScrollView
         ref={scrollViewRef}
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 80 }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 2, paddingBottom: 80 }}
         keyboardShouldPersistTaps="handled"
+        refreshControl={
+          onRefresh ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[THEME.accent]}
+              tintColor={THEME.accent}
+              progressBackgroundColor={THEME.surfaceRaised}
+            />
+          ) : undefined
+        }
       >
         {!detailsReady && (
           <>
-            <View style={{ flexDirection: "row", gap: 8 }}>
-              <Button
-                label="Join a league"
-                active={actionModal === "join"}
-                onPress={() => setActionModal(actionModal === "join" ? "none" : "join")}
-              />
-              <Button
-                label="Create a league"
-                active={actionModal === "create"}
-                onPress={() => setActionModal(actionModal === "create" ? "none" : "create")}
-              />
-            </View>
-
             {actionModal === "join" && (
               <View style={{ marginTop: 12, padding: 16, borderRadius: 12, backgroundColor: UI.surface }}>
                 <Field
@@ -300,7 +417,7 @@ export function LeagueHub({
                 <Text style={{ color: UI.soft, fontSize: 12.5, fontWeight: "600", marginBottom: 6 }}>Type</Text>
                 <View style={{ flexDirection: "row", gap: 8, marginBottom: 6 }}>
                   <Button label="Classic" active={leagueType === "classic"} onPress={() => setLeagueType("classic")} />
-                  <Button label="Head-to-head" active={leagueType === "h2h"} onPress={() => setLeagueType("h2h")} />
+                  <Button label="Head-to-Head" active={leagueType === "h2h"} onPress={() => setLeagueType("h2h")} />
                 </View>
                 <Text style={{ color: UI.muted, fontSize: 11.5, lineHeight: 16, marginBottom: 14 }}>
                   {leagueType === "classic"
@@ -377,70 +494,6 @@ export function LeagueHub({
               </Text>
             ) : (
               <>
-                {/* One type of league at a time; the tabs switch between them. */}
-                <View
-                  accessibilityRole="tablist"
-                  style={{ flexDirection: "row", marginTop: 22, borderBottomWidth: 1, borderBottomColor: UI.line }}
-                >
-                  {LEAGUE_SECTIONS.map((section) => {
-                    const active = section.category === shownCategory;
-                    const count = counts[section.category];
-                    return (
-                      <Pressable
-                        key={section.category}
-                        onPress={() => setCategory(section.category)}
-                        accessibilityRole="tab"
-                        accessibilityState={{ selected: active }}
-                        accessibilityLabel={`${section.title}, ${count} ${count === 1 ? "league" : "leagues"}`}
-                        hitSlop={{ top: 8, bottom: 4 }}
-                        style={{ marginRight: 20, paddingBottom: 10 }}
-                      >
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                          <Text style={{ color: active ? UI.ink : UI.muted, fontSize: 14, fontWeight: active ? "700" : "500" }}>
-                            {section.title}
-                          </Text>
-                          <View
-                            style={{
-                              minWidth: 18,
-                              height: 18,
-                              paddingHorizontal: 5,
-                              borderRadius: 9,
-                              alignItems: "center",
-                              justifyContent: "center",
-                              backgroundColor: active ? THEME.accentSoft : "rgba(255, 255, 255, 0.06)",
-                              borderWidth: 1,
-                              borderColor: active ? THEME.accentLine : "rgba(255, 255, 255, 0.08)",
-                            }}
-                          >
-                            <Text
-                              style={{
-                                color: active ? THEME.accent : UI.muted,
-                                fontSize: 10.5,
-                                fontWeight: "700",
-                                fontVariant: ["tabular-nums"],
-                              }}
-                            >
-                              {count}
-                            </Text>
-                          </View>
-                        </View>
-                        <View
-                          style={{
-                            position: "absolute",
-                            left: 0,
-                            right: 0,
-                            bottom: -1,
-                            height: 2,
-                            backgroundColor: active ? UI.ink : "transparent",
-                          }}
-                        />
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <Text style={{ color: UI.muted, fontSize: 12, lineHeight: 17, marginTop: 10, marginBottom: 10 }}>
-                  {activeSection.hint}
-                </Text>
                 {shownLeagues.length === 0 ? (
                   <Text style={{ color: UI.muted, marginTop: 14, fontSize: 13, textAlign: "center" }}>
                     {`You aren't in any ${activeSection.title.toLowerCase()} leagues yet.`}
@@ -461,6 +514,10 @@ export function LeagueHub({
                   </FadeIn>
                 )}
               </>
+            )}
+            {/* General: the FPL Cup, the game-wide knockout, under the leagues. */}
+            {shownCategory === "general" && !!userEntryId && (
+              <FplCupCard entry={userEntryId} refreshSignal={refreshSignal} onViewMember={onViewMember} />
             )}
           </>
         )}
@@ -484,14 +541,12 @@ export function LeagueHub({
               loading={loading}
               error={error}
               inviteCode={inviteCode}
-              onBack={() => {
-                setShowLeagueDetails(false);
-                onCloseLeague();
-              }}
+              onBack={closeDetails}
               onPage={(page) => onSelectLeague(selectedLeague, page)}
               onGetInviteCode={() => onGetInviteCode(selectedLeague)}
               onSelectH2hEvent={(event) => onSelectH2hEvent(selectedLeague, event)}
               onViewMember={onViewMember}
+              refreshSignal={refreshSignal}
             />
           </FadeIn>
         )}

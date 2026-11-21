@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1053343753682",
+    "project_id": "skippr-551a6",
+    "storage_bucket": "skippr-551a6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1053343753682:android:bde238249a479e00a5540b",
+        "android_client_info": {
+          "package_name": "com.devauni.skippr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCrJi-deBTVqvFF0tfc_OMZHPwLJ_a_El8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

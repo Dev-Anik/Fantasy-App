@@ -1,5 +1,5 @@
 // Live mini-league: every manager on a league page scored live, with the same
-// engine as the points page (provisional bonus, auto-subs, armband), and
+// engine as the points page (auto-subs, armband; confirmed bonus only), and
 // re-ranked. Reads FPL's public data directly, like My season.
 //
 // Totals: FPL's league tables update late during a gameweek, so the live
@@ -66,6 +66,9 @@ export type LiveEntry = {
   teamName: string;
   managerName: string;
   officialRank: number;
+  // Rank at the end of the last gameweek (0 if new): what the movement
+  // arrow compares the live rank with, as FPL's own arrows do.
+  lastRank: number;
   liveRank: number;
   // Gameweek score so far, before hits (as FPL shows it).
   gwPoints: number;
@@ -93,18 +96,67 @@ export async function loadLiveLeague(
     teamName: row.entry_name || row.player_name,
     managerName: row.player_name,
     officialRank: row.rank,
+    lastRank: row.last_rank ?? 0,
   }));
   if (extra && !people.some((person) => person.entry === extra.entry)) {
-    people.push({ ...extra, officialRank: 0 });
+    people.push({ ...extra, officialRank: 0, lastRank: 0 });
   }
 
+  const { info, stats, fixtures } = await loadEventData(event);
+
+  const scored = await inBatches(people, 6, async (person) => {
+    const score = await scoreEntry(person.entry, event, info, stats, fixtures);
+    return score ? ({ ...person, liveRank: 0, ...score } satisfies LiveEntry) : null;
+  });
+
+  const entries = scored.filter((entry): entry is LiveEntry => entry !== null);
+  // Live ranks among the league's teams (the extra manager, if not in these
+  // rows, isn't ranked).
+  const ranked = entries
+    .filter((entry) => entry.officialRank > 0)
+    .sort((a, b) => b.liveTotal - a.liveTotal || a.officialRank - b.officialRank);
+  // Teams level on live points share a rank (1, 2, 2, 4) and keep FPL's
+  // order between them. (FPL's own tie-breaks only apply once it updates its
+  // table; the official Standings show those.)
+  ranked.forEach((entry, index) => {
+    const previous = ranked[index - 1];
+    entry.liveRank = previous && previous.liveTotal === entry.liveTotal ? previous.liveRank : index + 1;
+  });
+  // A page further down the table starts at its first official rank.
+  const offset = rows.length ? Math.max(0, Math.min(...rows.map((row) => row.rank)) - 1) : 0;
+  ranked.forEach((entry) => {
+    entry.liveRank += offset;
+  });
+  return { event, entries, updatedAt: Date.now() };
+}
+
+// Live head-to-head scores: each team's gameweek points so far with any
+// transfer hit taken off, as FPL counts a head-to-head match. FPL's own match
+// scores only move every so often during a gameweek. Teams that couldn't be
+// read are left out (the caller keeps FPL's number for them).
+export type LiveScore = { points: number; stillToPlay: number };
+export async function loadLiveScores(entries: number[], event: number): Promise<Map<number, LiveScore>> {
+  const { info, stats, fixtures } = await loadEventData(event);
+  const scores = new Map<number, LiveScore>();
+  await inBatches([...new Set(entries)], 6, async (entry) => {
+    const score = await scoreEntry(entry, event, info, stats, fixtures);
+    if (score) scores.set(entry, { points: score.gwPoints - score.hits, stillToPlay: score.stillToPlay });
+  });
+  return scores;
+}
+
+type PlayerStats = { total_points: number; minutes: number; bonus: number };
+type PlayerInfoMap = Awaited<ReturnType<typeof loadFplBasics>>["players"];
+
+// The gameweek's live player numbers and matches, shared by every team scored.
+async function loadEventData(event: number) {
   const [info, live, fixturesRaw] = await Promise.all([
     loadFplBasics().then((basics) => basics.players),
     getJson(`event/${event}/live/`, true),
     getJson(`fixtures/?event=${event}`, true),
   ]);
-  const stats = new Map<number, { total_points: number; minutes: number; bonus: number }>(
-    (live.elements ?? []).map((e: { id: number; stats: { total_points: number; minutes: number; bonus: number } }) => [e.id, e.stats]),
+  const stats = new Map<number, PlayerStats>(
+    (live.elements ?? []).map((e: { id: number; stats: PlayerStats }) => [e.id, e.stats]),
   );
   const fixtures: LiveFixture[] = (fixturesRaw ?? []).map(
     (f: {
@@ -128,76 +180,62 @@ export async function loadLiveLeague(
       };
     },
   );
+  return { info, stats, fixtures };
+}
 
-  const scored = await inBatches(people, 6, async (person) => {
-    const raw = await loadPicks(person.entry, event);
-    if (!raw) return null;
-    const picks: MemberPick[] = raw.picks.map((pick) => {
-      const player = info.get(pick.element);
-      const stat = stats.get(pick.element);
-      return {
-        id: pick.element,
-        position: pick.position,
-        name: player?.name ?? "?",
-        team: player?.team ?? "",
-        teamId: player?.teamId ?? 0,
-        elementType: player?.type ?? 0,
-        captain: pick.is_captain,
-        viceCaptain: pick.is_vice_captain,
-        multiplier: pick.multiplier,
-        points: stat?.total_points ?? 0,
-        minutes: stat?.minutes ?? 0,
-        goals: 0,
-        assists: 0,
-        cleanSheets: 0,
-        bonus: stat?.bonus ?? 0,
-      };
-    });
-    const result = computeLive(picks, fixtures, raw.active_chip);
-    const history = raw.entry_history;
-    const counted = result.picks
-      .filter((pick) => pick.effectiveMultiplier > 0)
-      .map((pick) => ({
-        id: pick.id,
-        name: pick.name,
-        team: pick.team,
-        points: pick.livePoints,
-        multiplier: pick.effectiveMultiplier,
-      }));
-    const captain = result.picks.find((pick) => pick.effectiveMultiplier >= 2);
+// One team scored live with the points page's engine.
+async function scoreEntry(
+  entry: number,
+  event: number,
+  info: PlayerInfoMap,
+  stats: Map<number, PlayerStats>,
+  fixtures: LiveFixture[],
+) {
+  const raw = await loadPicks(entry, event);
+  if (!raw) return null;
+  const picks: MemberPick[] = raw.picks.map((pick) => {
+    const player = info.get(pick.element);
+    const stat = stats.get(pick.element);
     return {
-      ...person,
-      liveRank: 0,
-      gwPoints: result.total,
-      hits: history.event_transfers_cost ?? 0,
-      // Season total before this gameweek, hits already off, plus live points.
-      liveTotal: history.total_points - history.points + result.total,
-      captain: captain?.name ?? null,
-      chip: raw.active_chip,
-      stillToPlay: result.stillToPlay,
-      counted,
-    } satisfies LiveEntry;
+      id: pick.element,
+      position: pick.position,
+      name: player?.name ?? "?",
+      team: player?.team ?? "",
+      teamId: player?.teamId ?? 0,
+      elementType: player?.type ?? 0,
+      captain: pick.is_captain,
+      viceCaptain: pick.is_vice_captain,
+      multiplier: pick.multiplier,
+      points: stat?.total_points ?? 0,
+      minutes: stat?.minutes ?? 0,
+      goals: 0,
+      assists: 0,
+      cleanSheets: 0,
+      bonus: stat?.bonus ?? 0,
+    };
   });
-
-  const entries = scored.filter((entry): entry is LiveEntry => entry !== null);
-  // Live ranks among the league's teams (the extra manager, if not in these
-  // rows, isn't ranked).
-  const ranked = entries
-    .filter((entry) => entry.officialRank > 0)
-    .sort((a, b) => b.liveTotal - a.liveTotal || a.officialRank - b.officialRank);
-  // Teams level on live points share a rank (1, 2, 2, 4) and keep FPL's
-  // order between them. (FPL's own tie-breaks only apply once it updates its
-  // table; the official Standings show those.)
-  ranked.forEach((entry, index) => {
-    const previous = ranked[index - 1];
-    entry.liveRank = previous && previous.liveTotal === entry.liveTotal ? previous.liveRank : index + 1;
-  });
-  // A page further down the table starts at its first official rank.
-  const offset = rows.length ? Math.max(0, Math.min(...rows.map((row) => row.rank)) - 1) : 0;
-  ranked.forEach((entry) => {
-    entry.liveRank += offset;
-  });
-  return { event, entries, updatedAt: Date.now() };
+  const result = computeLive(picks, fixtures, raw.active_chip);
+  const history = raw.entry_history;
+  const counted = result.picks
+    .filter((pick) => pick.effectiveMultiplier > 0)
+    .map((pick) => ({
+      id: pick.id,
+      name: pick.name,
+      team: pick.team,
+      points: pick.livePoints,
+      multiplier: pick.effectiveMultiplier,
+    }));
+  const captain = result.picks.find((pick) => pick.effectiveMultiplier >= 2);
+  return {
+    gwPoints: result.total,
+    hits: history.event_transfers_cost ?? 0,
+    // Season total before this gameweek, hits already off, plus live points.
+    liveTotal: history.total_points - history.points + result.total,
+    captain: captain?.name ?? null,
+    chip: raw.active_chip,
+    stillToPlay: result.stillToPlay,
+    counted,
+  };
 }
 
 // What separates two teams this gameweek: for each player, how many more

@@ -3,10 +3,10 @@
 // (node scripts/build-legal-pages.mjs). When this changes, rebuild that page
 // and update the date below.
 
-export const PRIVACY_UPDATED = "19 November 2026";
+export const PRIVACY_UPDATED = "20 November 2026";
 
 export const PRIVACY_INTRO =
-  "Skippr is an independent app for managing your Fantasy Premier League (FPL) team. It is not affiliated with or endorsed by the Premier League. This policy explains what information the app handles and where it goes. In short: Skippr has no servers of its own, shows no ads, uses no analytics or tracking, and does not sell or share your data.";
+  "Skippr is an independent app for managing your Fantasy Premier League (FPL) team. It is not affiliated with or endorsed by the Premier League. This policy explains what information the app handles and where it goes. In short: Skippr shows no ads, uses no analytics or tracking, and does not sell or share your data. Its only server sends live match alerts, and keeps just what that needs.";
 
 export const PRIVACY_SECTIONS: { title: string; body: string[] }[] = [
   {
@@ -27,27 +27,28 @@ export const PRIVACY_SECTIONS: { title: string; body: string[] }[] = [
   {
     title: "Notifications",
     body: [
-      "Deadline reminders and squad news alerts are created on your device. To check for injury and suspension news, the app occasionally reads public player data from FPL in the background. No notification service or server of ours is involved. You can turn each type off in More, or turn notifications off in your phone's settings.",
+      "Deadline reminders and squad news alerts are created on your device. To check for injury and suspension news, the app occasionally reads public player data from FPL in the background. You can turn each type off in More, or turn notifications off in your phone's settings.",
+      "Live match alerts (your players starting, scoring, getting booked, and full-time scores) come from Skippr's server. For them, the app sends the server only your FPL team ID, your phone's push notification token (an anonymous address for notifications, from Expo, Google or Apple) and which live alerts you want. The server reads your team's public picks from FPL with the team ID. It never receives your password, email, name or FPL sign-in. The alerts are delivered through Expo's push service and Google's or Apple's notification services. The server is hosted by Supabase in the European Union.",
     ],
   },
   {
     title: "What Skippr does not do",
     body: [
       "No advertising, analytics, crash reporting or tracking of any kind.",
-      "No accounts or servers of our own: nothing about you is sent to us.",
+      "No accounts of our own. The only thing our server keeps is what live match alerts need (above): no password, email or name.",
       "No selling, renting or sharing of your information with anyone.",
     ],
   },
   {
     title: "Third parties",
     body: [
-      "Your data is handled by the Premier League when the app talks to FPL, under the Premier League's own privacy policy and terms (premierleague.com). If you sign in with Google, Apple, Facebook or X, that provider's policy also applies.",
+      "Your data is handled by the Premier League when the app talks to FPL, under the Premier League's own privacy policy and terms (premierleague.com). If you sign in with Google, Apple, Facebook or X, that provider's policy also applies. Live match alerts use Supabase (hosting), Expo (push delivery) and Google or Apple (notifications).",
     ],
   },
   {
     title: "Deleting your data",
     body: [
-      "Logging out removes your sign-in token, your saved team and scheduled notifications from the device. A login saved with \"Remember me\" stays on the device to fill in the sign-in form, but is no longer used to sign in by itself; to remove it, sign in once with \"Remember me\" unticked, or uninstall the app. Uninstalling the app removes everything it stored. Your FPL account itself is managed by the Premier League: to change or delete it, use the Premier League's website.",
+      "Logging out removes your sign-in token, your saved team and scheduled notifications from the device. A login saved with \"Remember me\" stays on the device to fill in the sign-in form, but is no longer used to sign in by itself; to remove it, sign in once with \"Remember me\" unticked, or uninstall the app. Logging out, or turning off every live alert, also removes your phone from the live alerts server, along with your team ID. Uninstalling the app removes everything it stored on the device; the server forgets a phone once the app is gone. Your FPL account itself is managed by the Premier League: to change or delete it, use the Premier League's website.",
     ],
   },
   {

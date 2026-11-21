@@ -1,6 +1,7 @@
 import { Pressable, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
 import { THEME } from "./theme";
+import { LiveDot } from "./LiveDot";
 
 const GREEN = THEME.accent;
 const MUTED = THEME.muted;
@@ -17,29 +18,35 @@ type Props = {
   // null when there's nothing to compare with.
   rankChange?: number | null;
   onOpenPoints: () => void;
+  // Slim, for the screen's top row (as tall as the logo row), with shorter
+  // labels.
+  compact?: boolean;
 };
 
 const formatNumber = (value: number) =>
   String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
-// Short form for the movement beside the rank: 950, 12.3K, 1.2M.
+// Short form for the movement beside the rank: 950, 12.3k, 1.2m.
 const shortNumber = (value: number) =>
   value >= 1_000_000
-    ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+    ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`
     : value >= 10_000
-      ? `${Math.round(value / 1000)}K`
+      ? `${Math.round(value / 1000)}k`
       : value >= 1000
-        ? `${(value / 1000).toFixed(1).replace(/\.0$/, "")}K`
+        ? `${(value / 1000).toFixed(1).replace(/\.0$/, "")}k`
         : String(value);
 
-function Label({ children, color = MUTED }: { children: string; color?: string }) {
+// The overall rank, easy to take in: 1.8m, 523k; below 10,000 in full.
+const shortRank = (rank: number) => (rank >= 10_000 ? shortNumber(rank) : formatNumber(rank));
+
+function Label({ children, color = MUTED, compact = false }: { children: string; color?: string; compact?: boolean }) {
   return (
     <Text
       numberOfLines={1}
       maxFontSizeMultiplier={1.15}
       style={{
         color,
-        fontSize: 8,
+        fontSize: compact ? 7 : 8,
         fontWeight: "800",
         letterSpacing: 0.5,
         includeFontPadding: false,
@@ -50,7 +57,7 @@ function Label({ children, color = MUTED }: { children: string; color?: string }
   );
 }
 
-function Value({ children, color = "#ffffff" }: { children: string; color?: string }) {
+function Value({ children, color = "#ffffff", compact = false }: { children: string; color?: string; compact?: boolean }) {
   return (
     <Text
       numberOfLines={1}
@@ -59,8 +66,8 @@ function Value({ children, color = "#ffffff" }: { children: string; color?: stri
       maxFontSizeMultiplier={1.15}
       style={{
         color,
-        fontSize: 14,
-        lineHeight: 18,
+        fontSize: compact ? 12.5 : 14,
+        lineHeight: compact ? 14 : 18,
         fontWeight: "900",
         includeFontPadding: false,
       }}
@@ -70,8 +77,8 @@ function Value({ children, color = "#ffffff" }: { children: string; color?: stri
   );
 }
 
-const Divider = () => (
-  <View style={{ width: 1, marginVertical: 8, backgroundColor: "rgba(255, 255, 255, 0.12)" }} />
+const Divider = ({ compact = false }: { compact?: boolean }) => (
+  <View style={{ width: 1, marginVertical: compact ? 5 : 8, backgroundColor: "rgba(255, 255, 255, 0.12)" }} />
 );
 
 // Manager's headline numbers under the team name on the home screen.
@@ -85,18 +92,20 @@ export function SquadSummaryBar({
   overallRank,
   rankChange = null,
   onOpenPoints,
+  compact = false,
 }: Props) {
   const moved = rankChange != null && rankChange !== 0 && !!overallRank;
   const up = moved && rankChange > 0;
-  const gwLabel = gameweek ? `GW ${gameweek} POINTS` : "GW POINTS";
+  const gwLabel = gameweek ? `GW ${gameweek} ${compact ? "PTS" : "POINTS"}` : compact ? "GW PTS" : "GW POINTS";
+  const cellPadding = compact ? { paddingHorizontal: 8, paddingVertical: 1 } : { paddingHorizontal: 10, paddingVertical: 5 };
 
   return (
     <View
       style={{
         flexDirection: "row",
         alignItems: "stretch",
-        minHeight: 42,
-        borderRadius: 12,
+        ...(compact ? { height: 28 } : { minHeight: 42 }),
+        borderRadius: compact ? 10 : 12,
         backgroundColor: THEME.surface,
         borderWidth: 1,
         borderColor: THEME.line,
@@ -114,8 +123,7 @@ export function SquadSummaryBar({
           flex: 1.15,
           flexDirection: "row",
           alignItems: "center",
-          paddingHorizontal: 10,
-          paddingVertical: 5,
+          ...cellPadding,
           backgroundColor: pressed ? "rgba(255, 255, 255, 0.05)" : "transparent",
           borderRightWidth: 1,
           borderRightColor: THEME.line,
@@ -124,31 +132,33 @@ export function SquadSummaryBar({
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
             {live && (
-              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: GREEN }} />
+              <LiveDot color={GREEN} />
             )}
-            <Label color={GREEN}>{live ? "LIVE POINTS" : gwLabel}</Label>
+            <Label color={GREEN} compact={compact}>
+              {live ? (compact ? "LIVE PTS" : "LIVE POINTS") : gwLabel}
+            </Label>
           </View>
-          <Value color={gameweekPoints != null && gameweekPoints < 0 ? RED : "#ffffff"}>
+          <Value compact={compact} color={gameweekPoints != null && gameweekPoints < 0 ? RED : "#ffffff"}>
             {gameweekPoints == null ? "—" : formatNumber(gameweekPoints)}
           </Value>
         </View>
         <AppSymbol
           name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
           color={GREEN}
-          size={16}
+          size={compact ? 13 : 16}
         />
       </Pressable>
 
       <View
         accessible
         accessibilityLabel={`Season ${season} total: ${totalPoints ?? "no"} points`}
-        style={{ flex: 1, justifyContent: "center", paddingHorizontal: 10, paddingVertical: 5 }}
+        style={{ flex: 1, justifyContent: "center", ...cellPadding }}
       >
-        <Label>{`SEASON ${season}`}</Label>
-        <Value>{totalPoints == null ? "—" : formatNumber(totalPoints)}</Value>
+        <Label compact={compact}>{compact ? "SEASON" : `SEASON ${season}`}</Label>
+        <Value compact={compact}>{totalPoints == null ? "—" : formatNumber(totalPoints)}</Value>
       </View>
 
-      <Divider />
+      <Divider compact={compact} />
 
       <View
         accessible
@@ -159,12 +169,12 @@ export function SquadSummaryBar({
               }`
             : "Overall rank not available yet"
         }
-        style={{ flex: 1.1, justifyContent: "center", paddingHorizontal: 10, paddingVertical: 5 }}
+        style={{ flex: 1.1, justifyContent: "center", ...cellPadding }}
       >
-        <Label>OVERALL RANK</Label>
+        <Label compact={compact}>{compact ? "RANK" : "OVERALL RANK"}</Label>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
           <View style={{ flexShrink: 1 }}>
-            <Value>{overallRank ? formatNumber(overallRank) : "—"}</Value>
+            <Value compact={compact}>{overallRank ? shortRank(overallRank) : "—"}</Value>
           </View>
           {/* Up or down since the last gameweek, as in the league tables. */}
           {moved && (

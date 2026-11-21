@@ -1,5 +1,6 @@
 import { Text, View } from "react-native";
 import { PITCH_PANEL, THEME } from "./theme";
+import { LiveDot } from "./LiveDot";
 
 type Props = {
   points: number | null;
@@ -10,6 +11,9 @@ type Props = {
   season?: string;
   // At least this size, to match a card beside it (content stays centred).
   minSize?: { width: number; height: number } | null;
+  // Pulse the live dot (a match of this team's players is under way).
+  // Unset: follows the signed-in manager's squad.
+  blink?: boolean;
 };
 
 const formatPoints = (value: number) =>
@@ -17,7 +21,7 @@ const formatPoints = (value: number) =>
 
 // Points total shown in the top-right corner of the pitch: a quiet navy card
 // with a spaced-capitals label, the number, and a short accent line.
-export function PointsBadge({ points, gameweek, live = false, season, minSize }: Props) {
+export function PointsBadge({ points, gameweek, live = false, season, minSize, blink }: Props) {
   const negative = points != null && points < 0;
   const label = season ? `SEASON ${season}` : live ? "LIVE" : `GW ${gameweek ?? ""}`.trim();
   const caption = season ? "TOTAL PTS" : "POINTS";
@@ -33,12 +37,13 @@ export function PointsBadge({ points, gameweek, live = false, season, minSize }:
         points == null ? `${subject}: points not available` : `${subject}: ${points} points`
       }
       style={{
-        minWidth: Math.max(64, minSize?.width ?? 0),
+        // Compact, so it doesn't crowd the pitch.
+        minWidth: Math.max(44, minSize?.width ?? 0),
         minHeight: minSize?.height,
-        paddingHorizontal: 11,
-        paddingTop: 8,
-        paddingBottom: 9,
-        borderRadius: 14,
+        paddingHorizontal: 7,
+        paddingTop: 7,
+        paddingBottom: 7,
+        borderRadius: 10,
         alignItems: "center",
         justifyContent: "center",
         ...PITCH_PANEL,
@@ -51,15 +56,15 @@ export function PointsBadge({ points, gameweek, live = false, season, minSize }:
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
         {showLiveDot && (
-          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: THEME.bad }} />
+          <LiveDot blink={blink} />
         )}
         <Text
           maxFontSizeMultiplier={1.2}
           style={{
             color: showLiveDot ? THEME.ink : THEME.accent,
-            fontSize: 8.5,
+            fontSize: 7,
             fontWeight: "600",
-            letterSpacing: 1.8,
+            letterSpacing: 1.4,
             includeFontPadding: false,
           }}
         >
@@ -70,11 +75,12 @@ export function PointsBadge({ points, gameweek, live = false, season, minSize }:
       <Text
         maxFontSizeMultiplier={1.2}
         style={{
-          color: negative ? THEME.bad : THEME.ink,
-          fontSize: 23,
-          lineHeight: 27,
+          // Gold, like the points on the players' cards (red below zero).
+          color: negative ? THEME.bad : "#ffd400",
+          fontSize: 18,
+          lineHeight: 21,
           fontWeight: "700",
-          marginTop: 2,
+          marginTop: 1,
           fontVariant: ["tabular-nums"],
           includeFontPadding: false,
         }}
@@ -82,16 +88,16 @@ export function PointsBadge({ points, gameweek, live = false, season, minSize }:
         {points == null ? "—" : formatPoints(points)}
       </Text>
 
-      <View style={{ width: 14, height: 2, borderRadius: 1, backgroundColor: THEME.accent, marginTop: 3 }} />
+      <View style={{ width: 12, height: 2, borderRadius: 1, backgroundColor: THEME.accent, marginTop: 2 }} />
 
       <Text
         maxFontSizeMultiplier={1.2}
         style={{
           color: THEME.muted,
-          fontSize: 7.5,
+          fontSize: 6.5,
           fontWeight: "500",
-          letterSpacing: 1.6,
-          marginTop: 3,
+          letterSpacing: 1.3,
+          marginTop: 2,
           includeFontPadding: false,
         }}
       >

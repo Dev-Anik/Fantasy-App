@@ -23,6 +23,7 @@ const STORAGE_NEWS_SNAPSHOT = "profpl_news_snapshot";
 
 const CHANNEL_DEADLINES = "deadlines";
 const CHANNEL_NEWS = "news";
+const CHANNEL_LIVE = "live";
 const DEADLINE_PREFIX = "deadline-";
 // Deadlines scheduled ahead; iOS allows 64 pending notifications in total.
 const DEADLINES_AHEAD = 4;
@@ -31,14 +32,35 @@ export type NotificationSettings = {
   deadline24h: boolean;
   deadline1h: boolean;
   news: boolean;
+  // Live match alerts, sent by the Skippr server (see liveAlerts.ts and
+  // supabase/): a player starts; goals and assists; cards; full time; and
+  // whether bench players count too.
+  liveStarted: boolean;
+  liveGoals: boolean;
+  liveCards: boolean;
+  liveFulltime: boolean;
+  liveBench: boolean;
 };
 
 export const DEFAULT_SETTINGS: NotificationSettings = {
   deadline24h: true,
   deadline1h: true,
   news: true,
+  liveStarted: true,
+  liveGoals: true,
+  liveCards: true,
+  liveFulltime: true,
+  liveBench: false,
 };
 
+// Any live alert on (the bench switch alone doesn't count: it only widens
+// the others).
+export const anyLiveEnabled = (settings: NotificationSettings) =>
+  settings.liveStarted || settings.liveGoals || settings.liveCards || settings.liveFulltime;
+
+// Any alert the phone produces itself (deadlines, squad news): decides
+// whether the background check runs. Live alerts come from the server and
+// don't need it.
 export const anyEnabled = (settings: NotificationSettings) =>
   settings.deadline24h || settings.deadline1h || settings.news;
 
@@ -77,6 +99,13 @@ async function ensureChannels() {
     name: "Squad news",
     description: "Injury, suspension and availability news about your players",
     importance: Notifications.AndroidImportance.DEFAULT,
+    lightColor: "#00d982",
+  });
+  // The server sends live alerts on this channel (channelId "live").
+  await Notifications.setNotificationChannelAsync(CHANNEL_LIVE, {
+    name: "Live match alerts",
+    description: "Your players starting, scoring, getting booked, and full-time scores",
+    importance: Notifications.AndroidImportance.HIGH,
     lightColor: "#00d982",
   });
 }

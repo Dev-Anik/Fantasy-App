@@ -8,6 +8,7 @@ import {
   Linking,
   Modal,
   Pressable,
+  RefreshControl,
   StatusBar,
   Text,
   View,
@@ -71,6 +72,11 @@ import { APP_VERSION } from "../appInfo";
 import { FOOTER_HEIGHT, ScreenBackground, THEME, Wordmark } from "../theme";
 import { isTemporary, MESSAGES, userMessage } from "../errors";
 import { EmailSignIn } from "../EmailSignIn";
+import { SilentSignIn } from "../SilentSignIn";
+import { loadManagerGameweekDirect } from "../managerDirect";
+import { runLeagueActionDirect } from "../leagueDirect";
+import type { DirectLeagueAction } from "../leagueDirect";
+import { clubsPlaying, setSquadPlaying } from "../squadPlaying";
 import { loadRememberedLogin, pauseAutoSignIn } from "../rememberedLogin";
 import { AnimatedScreen, LoadingVeil } from "../AnimatedScreen";
 import { Pitch, preloadAvatars } from "../Pitch";
@@ -88,6 +94,8 @@ import {
   STORAGE_SQUAD,
 } from "../notifications";
 import type { NotificationSettings, PermissionState } from "../notifications";
+import { stopLiveAlerts, syncLiveAlerts } from "../liveAlerts";
+import { addNotificationResponseReceivedListener, getLastNotificationResponse } from "expo-notifications";
 import { stopBackgroundTask, syncBackgroundTask } from "../backgroundTasks";
 import type { FplElement } from "../PlayerProfile";
 import { SquadSummaryBar } from "../SquadSummaryBar";
@@ -140,49 +148,16 @@ const CHIP_SYMBOLS: Record<PlayableChip, SymbolViewProps["name"]> = {
   },
 };
 
+// A notification from the live alerts server (it opens the points page).
+const isLiveAlert = (data: unknown) =>
+  !!data && typeof data === "object" && (data as { screen?: unknown }).screen === "points";
+
 // The accent colour (green); see theme.tsx.
 const GREEN = THEME.accent;
 // Transfers beyond the free ones cost points (a "hit"), as on FPL. The
 // confirmation shows the cost before anything is sent.
 const ALLOW_HITS = true;
 
-function Feature({
-  icon,
-  text,
-  detail,
-}: {
-  icon: SymbolViewProps["name"];
-  text: string;
-  detail?: string;
-}) {
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", marginTop: 16 }}>
-      <View
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 12,
-          backgroundColor: "rgba(255, 255, 255, 0.06)",
-          borderWidth: 1,
-          borderColor: "rgba(255, 255, 255, 0.08)",
-          alignItems: "center",
-          justifyContent: "center",
-          marginRight: 14,
-        }}
-      >
-        <AppSymbol name={icon} color={GREEN} size={19} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={{ color: "#ffffff", fontSize: 15, fontWeight: "800" }}>{text}</Text>
-        {!!detail && (
-          <Text style={{ color: "#8fa198", fontSize: 12.5, marginTop: 1, lineHeight: 17 }}>
-            {detail}
-          </Text>
-        )}
-      </View>
-    </View>
-  );
-}
 
 function BottomTab({
   icon,
@@ -350,6 +325,9 @@ export default function Index() {
   // A problem loading the team while it is on screen (shown as a strip).
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  // Pull-to-refresh spinners for Leagues and the Points page.
+  const [leaguesRefreshing, setLeaguesRefreshing] = useState(false);
+  const [pointsRefreshing, setPointsRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   // A moment of "Lineup saved" after FPL accepts a lineup change.
   const [savedFlash, setSavedFlash] = useState(false);
@@ -425,6 +403,9 @@ export default function Index() {
       }
       await syncBackgroundTask();
       checkSquadNews().catch(() => {});
+      // Live match alerts: sign this phone up (or keep it up to date) with
+      // the server, for this team and the saved choices.
+      syncLiveAlerts(signedInEntry, await loadSettings(), await getPermission());
     })();
     const subscription = AppState.addEventListener("change", (state) => {
       if (state !== "active") return;
@@ -455,6 +436,8 @@ export default function Index() {
     setNotifSettings(next);
     await saveSettings(next);
     await syncBackgroundTask();
+    // Tell the server about the new live alert choices.
+    if (squad?.entry) syncLiveAlerts(squad.entry, next, await getPermission());
     // Reschedule reminders for the new settings, without re-alerting news.
     checkSquadNews({ notify: false }).catch(() => {});
   };
@@ -691,14 +674,10 @@ export default function Index() {
   // Set up further down (it needs state declared there); see clearAccountViews.
   const clearAccountViewsRef = useRef<() => void>(() => {});
 
-  // The session can no longer be renewed: the user has to sign in again.
-  const sessionLost = () => {
-    if (signedOut.current) return;
-    signedOut.current = true;
-    sessionRetried.current = false;
+  // The session is gone and can't be renewed by itself: the sign-in screen.
+  const showSignInAgain = () => {
+    setRefreshing(false);
     clearAccountViewsRef.current();
-    signOut();
-    AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
     if (stageRef.current === "squad" || awaitingSquad.current) {
       finishLogin("Your FPL session has expired. Please sign in again.");
       setStage("login");
@@ -707,6 +686,36 @@ export default function Index() {
         setStage((s) => (s === "checking" ? (remembered?.auto ? "login" : "welcome") : s)),
       );
     }
+  };
+
+  // The session can no longer be renewed: the user has to sign in again.
+  // FPL ends sessions now and then (typically after a day or so). With the
+  // team on screen and a login saved under Remember me, sign in again out of
+  // sight (SilentSignIn) instead of showing the sign-in page; only if that
+  // fails does the user see it.
+  const [silentLogin, setSilentLogin] = useState<{ email: string; password: string } | null>(null);
+  const sessionLost = () => {
+    if (signedOut.current) return;
+    signedOut.current = true;
+    sessionRetried.current = false;
+    signOut();
+    AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
+    if (stageRef.current === "squad" && !awaitingSquad.current) {
+      setRefreshing(true);
+      loadRememberedLogin().then(
+        (remembered) => {
+          if (!signedOut.current || stageRef.current !== "squad") return;
+          if (remembered?.auto) {
+            setSilentLogin({ email: remembered.email, password: remembered.password });
+          } else {
+            showSignInAgain();
+          }
+        },
+        () => showSignInAgain(),
+      );
+      return;
+    }
+    showSignInAgain();
   };
 
   // Runs a script in the FPL WebView with the user's access token attached,
@@ -858,6 +867,37 @@ export default function Index() {
     );
   };
 
+  // SilentSignIn got through: swap the code for tokens and reload the team,
+  // which stays on screen all along.
+  const finishSilentSignIn = (redirectUrl: string) => {
+    const pending = pendingSignIn.current;
+    pendingSignIn.current = null;
+    setSilentLogin(null);
+    if (!pending || stageRef.current !== "squad") {
+      if (stageRef.current === "squad") showSignInAgain();
+      return;
+    }
+    completeSignIn(redirectUrl, pending).then(
+      () => {
+        if (stageRef.current !== "squad") return;
+        signedOut.current = false;
+        sessionRetried.current = false;
+        authRetried.current = false;
+        quietRetries.current = 0;
+        check();
+      },
+      () => showSignInAgain(),
+    );
+  };
+  // SilentSignIn couldn't sign in: the sign-in screen after all. If the page
+  // refused the saved details (a changed password), don't retry them there.
+  const silentSignInFailed = async (rejected: boolean) => {
+    setSilentLogin(null);
+    pendingSignIn.current = null;
+    if (rejected) await pauseAutoSignIn();
+    if (signedOut.current && stageRef.current === "squad") showSignInAgain();
+  };
+
   const onWebLoadEnd = () => {
     webReady.current = true;
     const queued = queuedScripts.current;
@@ -894,11 +934,15 @@ export default function Index() {
             signedOut.current = true;
             sessionRetried.current = false;
             queuedScripts.current = [];
+            setSilentLogin(null);
+            setRefreshing(false);
             finishLogin();
             signOut();
             // Keep a remembered login for the form, but don't sign straight back in.
             pauseAutoSignIn();
             clearNotifications();
+            // No more live alerts for this phone once signed out.
+            stopLiveAlerts();
             stopBackgroundTask();
             AsyncStorage.removeItem(STORAGE_SQUAD).catch(() => {});
             AsyncStorage.setItem(STORAGE_LOGGED_IN, "false").catch(() => {});
@@ -985,6 +1029,7 @@ export default function Index() {
     setManagerLoading(false);
     setManagerError("");
     setOwnLive(null);
+    gameweekCache.current.clear();
     setShowLeagues(false);
     setShowPlanner(false);
     setShowHelper(false);
@@ -1075,7 +1120,53 @@ export default function Index() {
       setLeagueError("");
       setLeagueLoading(true);
     }
+    if (action.action === "manager-gameweek") {
+      requestManagerGameweek(action);
+      return;
+    }
+    if (action.action === "standings" || action.action === "invite-code" || action.action === "h2h-matches") {
+      runLeagueRead(action);
+      return;
+    }
     runInWeb(buildLeagueActionJs(action));
+  };
+
+  // Reading leagues: straight from FPL with the access token first, then,
+  // if that doesn't work, the web page route (leagueDirect.ts says why).
+  // Either way the answer arrives through onMessage.
+  const runLeagueRead = (action: DirectLeagueAction) => {
+    getAccessToken()
+      .catch(() => null)
+      .then((token) => runLeagueActionDirect(action, token))
+      .then(
+        (message) => handleWebMessage.current?.({ nativeEvent: { data: JSON.stringify(message) } }),
+        () => runInWeb(buildLeagueActionJs(action)),
+      );
+  };
+
+  // A team's gameweek: straight from FPL's public data first (quick), then,
+  // if that doesn't work, the web page route, which also explains private or
+  // missing picks. Either way the answer arrives through onMessage. The last
+  // reading of each team's gameweek is kept, so reopening it is instant.
+  const gameweekCache = useRef(new Map<string, MemberSquad>());
+  const requestManagerGameweek = (
+    action: Extract<LeagueAction, { action: "manager-gameweek" }>,
+  ) => {
+    loadManagerGameweekDirect(action.entry, action.event).then(
+      (data) => {
+        handleWebMessage.current?.({
+          nativeEvent: {
+            data: JSON.stringify({
+              leagueAction: "manager-gameweek",
+              silent: !!action.silent,
+              target: action.target ?? null,
+              data,
+            }),
+          },
+        });
+      },
+      () => runInWeb(buildLeagueActionJs(action)),
+    );
   };
 
   // Live points while a gameweek is in play: the home summary bar shows the
@@ -1086,6 +1177,10 @@ export default function Index() {
     squad?.gameweeks?.find((gw) => gw.isCurrent && !gw.finished)?.id ?? null;
   const viewingEntry = activeMember?.entry ?? null;
   const homeVisible = stage === "squad" && mode === "lineup" && !viewingEntry;
+  // No gameweek in play (or nobody signed in): nothing is live.
+  useEffect(() => {
+    if (!squadEntry || !liveGwId) setSquadPlaying(false);
+  }, [squadEntry, liveGwId]);
   useEffect(() => {
     if (!squadEntry || !liveGwId) return;
     const watchingMember = viewingEntry !== null && activeMemberEvent === liveGwId;
@@ -1095,24 +1190,20 @@ export default function Index() {
       if (AppState.currentState !== "active") return;
       if (watchingMember) {
         managerRequest.current = { entry: viewingEntry, event: liveGwId };
-        runInWeb(
-          buildLeagueActionJs({
-            action: "manager-gameweek",
-            entry: viewingEntry,
-            event: liveGwId,
-            silent: true,
-          }),
-        );
+        requestManagerGameweek({
+          action: "manager-gameweek",
+          entry: viewingEntry,
+          event: liveGwId,
+          silent: true,
+        });
       } else {
-        runInWeb(
-          buildLeagueActionJs({
-            action: "manager-gameweek",
-            entry: squadEntry,
-            event: liveGwId,
-            silent: true,
-            target: "home",
-          }),
-        );
+        requestManagerGameweek({
+          action: "manager-gameweek",
+          entry: squadEntry,
+          event: liveGwId,
+          silent: true,
+          target: "home",
+        });
       }
     };
 
@@ -1141,29 +1232,23 @@ export default function Index() {
 
     const refreshLeagues = () => {
       if (AppState.currentState !== "active") return;
-      runInWeb(
-        buildLeagueActionJs({ action: "leagues", entry: squadEntry }),
-      );
+      runLeagueRead({ action: "leagues", entry: squadEntry });
       // Also refresh the league that is open, without spinners or scroll jumps.
       const view = leagueView.current;
       if (!view) return;
-      runInWeb(
-        buildLeagueActionJs({
-          action: "standings",
-          league: view.league,
-          page: view.page,
-          silent: true,
-        }),
-      );
+      runLeagueRead({
+        action: "standings",
+        league: view.league,
+        page: view.page,
+        silent: true,
+      });
       if (view.league.kind === "h2h" && view.h2hEvent) {
-        runInWeb(
-          buildLeagueActionJs({
-            action: "h2h-matches",
-            leagueId: view.league.id,
-            event: view.h2hEvent,
-            silent: true,
-          }),
-        );
+        runLeagueRead({
+          action: "h2h-matches",
+          leagueId: view.league.id,
+          event: view.h2hEvent,
+          silent: true,
+        });
       }
     };
 
@@ -1181,17 +1266,11 @@ export default function Index() {
   }, [mode, stage, squadEntry]);
 
   const loadH2hMatches = (league: FplLeague, event: number) => {
-    if (!webRef.current) {
-      setLeagueError("The FPL connection is not ready. Try again.");
-      return;
-    }
     if (leagueView.current) leagueView.current.h2hEvent = event;
     setH2hEvent(event);
     setH2hMatches([]);
     setH2hLoading(true);
-    runInWeb(
-      buildLeagueActionJs({ action: "h2h-matches", leagueId: league.id, event }),
-    );
+    runLeagueRead({ action: "h2h-matches", leagueId: league.id, event });
   };
 
   const loadLeague = (league: FplLeague, page = 1) => {
@@ -1236,6 +1315,16 @@ export default function Index() {
 
   const loadManagerGameweek = (entry: number, event: number) => {
     managerRequest.current = { entry, event };
+    // Seen before this session: show that at once; the fresh reading below
+    // replaces it quietly.
+    const cached = gameweekCache.current.get(`${entry}-${event}`);
+    if (cached) {
+      setMemberSquad(cached);
+      setManagerError("");
+      setManagerLoading(false);
+      requestManagerGameweek({ action: "manager-gameweek", entry, event, silent: true });
+      return;
+    }
     // The previous squad stays in state: a new manager's page waits for its
     // own data before opening, and a gameweek change keeps the old pitch on
     // screen until the new one is ready.
@@ -1314,6 +1403,28 @@ export default function Index() {
     setActiveMemberEvent(targetGw);
     loadManagerGameweek(squad.entry, targetGw);
   };
+
+  // Tapping a live match alert opens the live points page, once the team is
+  // on screen: whether the app was running or opened by the tap itself.
+  const [alertTaps, setAlertTaps] = useState(() =>
+    isLiveAlert(getLastNotificationResponse()?.notification.request.content.data) ? 1 : 0,
+  );
+  const handledAlertTaps = useRef(0);
+  useEffect(() => {
+    const subscription = addNotificationResponseReceivedListener((response) => {
+      if (isLiveAlert(response.notification.request.content.data)) setAlertTaps((n) => n + 1);
+    });
+    return () => subscription.remove();
+  }, []);
+  useEffect(() => {
+    if (alertTaps === handledAlertTaps.current || stage !== "squad" || !squad) return;
+    handledAlertTaps.current = alertTaps;
+    openOwnHistory();
+    // Runs when a tap arrives or the team becomes ready; openOwnHistory is
+    // remade each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertTaps, stage, squad]);
+
 
 
   const joinLeague = (code: string) => {
@@ -1538,6 +1649,7 @@ export default function Index() {
       // Background league refresh: update ranks in place, never touch the
       // loading/error state owned by user-initiated league actions.
       if (msg.leagueAction === "leagues") {
+        setLeaguesRefreshing(false);
         const leagues: FplLeague[] = Array.isArray(msg.leagues) ? msg.leagues : [];
         if (squad && squad.entry === msg.entry) {
           // The same response carries fresh totals, so the summary strip and
@@ -1555,6 +1667,7 @@ export default function Index() {
         );
         return;
       }
+      if (msg.leagueAction === "error" && msg.action === "leagues") setLeaguesRefreshing(false);
       if (msg.leagueAction === "error" && (msg.action === "leagues" || msg.silent)) return;
 
       if (msg.leagueAction === "standings") {
@@ -1591,6 +1704,15 @@ export default function Index() {
         }
         return;
       }
+      if (msg.leagueAction === "manager-gameweek" && msg.data?.entry && msg.data?.event) {
+        gameweekCache.current.set(`${msg.data.entry}-${msg.data.event}`, msg.data as MemberSquad);
+        // Any fresh reading of the user's own live gameweek (home or points
+        // page) keeps the live dots in step.
+        if (msg.data.entry === squad?.entry && msg.data.event === liveGwId) {
+          const own = msg.data as MemberSquad;
+          setSquadPlaying(clubsPlaying(own.picks.map((pick) => pick.teamId), own.fixtures ?? []));
+        }
+      }
       if (msg.leagueAction === "manager-gameweek" && msg.target === "home") {
         const data = msg.data as MemberSquad | undefined;
         if (!data || data.entry !== squad?.entry) return;
@@ -1611,6 +1733,7 @@ export default function Index() {
         return;
       }
       if (msg.leagueAction === "manager-gameweek") {
+        setPointsRefreshing(false);
         const request = managerRequest.current;
         if (
           request &&
@@ -1627,6 +1750,7 @@ export default function Index() {
         msg.leagueAction === "error" &&
         msg.action === "manager-gameweek"
       ) {
+        setPointsRefreshing(false);
         const request = managerRequest.current;
         if (
           request &&
@@ -1770,6 +1894,51 @@ export default function Index() {
     setError("");
     setRefreshing(true);
     check();
+  };
+
+  // Pull down to refresh. Home, Transfers and More reload the team (as the
+  // refresh button does); Leagues reload the leagues and the open league;
+  // the Points page reloads its gameweek. The spinner always stops, even if
+  // an answer never comes.
+  const pullTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopPullSpinnersLater = () => {
+    if (pullTimer.current) clearTimeout(pullTimer.current);
+    pullTimer.current = setTimeout(() => {
+      pullTimer.current = null;
+      setRefreshing(false);
+      setLeaguesRefreshing(false);
+      setPointsRefreshing(false);
+    }, 20_000);
+  };
+  useEffect(() => () => {
+    if (pullTimer.current) clearTimeout(pullTimer.current);
+  }, []);
+  const pullRefresh = () => {
+    refresh();
+    stopPullSpinnersLater();
+  };
+  // Bumped on each pull in Leagues, so the live tables reload too.
+  const [leagueRefreshSignal, setLeagueRefreshSignal] = useState(0);
+  const pullRefreshLeagues = () => {
+    if (!squad) return;
+    setLeaguesRefreshing(true);
+    setLeagueRefreshSignal((n) => n + 1);
+    runLeagueRead({ action: "leagues", entry: squad.entry });
+    const view = leagueView.current;
+    if (view) {
+      runLeagueRead({ action: "standings", league: view.league, page: view.page, silent: true });
+      if (view.league.kind === "h2h" && view.h2hEvent) {
+        runLeagueRead({ action: "h2h-matches", leagueId: view.league.id, event: view.h2hEvent, silent: true });
+      }
+    }
+    stopPullSpinnersLater();
+  };
+  const pullRefreshPoints = () => {
+    if (!activeMember) return;
+    setPointsRefreshing(true);
+    managerRequest.current = { entry: activeMember.entry, event: activeMemberEvent };
+    requestManagerGameweek({ action: "manager-gameweek", entry: activeMember.entry, event: activeMemberEvent, silent: true });
+    stopPullSpinnersLater();
   };
 
   const locked = !!squad?.chip;
@@ -2027,6 +2196,42 @@ export default function Index() {
 
   // Something to review or reset on the transfer page (shown in the header).
   const transfersPending = pending.length > 0 || pendingChip === "wildcard" || pendingChip === "freehit";
+
+  // Home's headline numbers: gameweek points (which open the breakdown),
+  // season total and overall rank.
+  const renderHomeSummary = () => {
+    if (!squad) return null;
+    const eventId = squad.eventId ?? squad.currentGw;
+    const eventGw = squad.gameweeks.find((gw) => gw.id === eventId);
+    const liveNow =
+      ownLive && ownLive.entry === squad.entry && ownLive.event === eventId ? ownLive : null;
+    const shownRank = liveNow?.overallRank ?? squad.overallRank ?? null;
+    // The rank's latest move: against the most recent earlier gameweek whose
+    // rank differs. While a gameweek is in play FPL keeps showing the rank
+    // from the end of the last one, so comparing with that gameweek alone
+    // gave no change and the arrow vanished; this shows the move that rank
+    // came from. Looks back two gameweeks at most, so a rank that truly
+    // didn't move shows no arrow.
+    const before =
+      shownRank && rankHistory?.entry === squad.entry && eventId != null
+        ? rankHistory.points
+            .filter((point) => point.event <= eventId && point.event >= eventId - 2 && point.rank !== shownRank)
+            .sort((a, b) => a.event - b.event)
+            .pop()
+        : undefined;
+    return (
+      <SquadSummaryBar
+        rankChange={before && shownRank ? before.rank - shownRank : null}
+        gameweek={eventId ?? null}
+        gameweekPoints={liveNow ? liveNow.total : (squad.eventPoints ?? null)}
+        live={Boolean(eventGw?.isCurrent && !eventGw.finished)}
+        season={seasonLabel(squad.gameweeks)}
+        totalPoints={liveNow?.seasonTotal ?? squad.totalPoints ?? null}
+        overallRank={shownRank}
+        onOpenPoints={() => openOwnHistory()}
+      />
+    );
+  };
 
   const freeLeft = squad?.freeTransfers ?? null;
   const extra =freeLeft == null ? 0 : Math.max(pending.length - freeLeft, 0);
@@ -2399,99 +2604,45 @@ export default function Index() {
       )}
 
       {stage === "welcome" && (
+        // The start screen: the mark, one line, one button. Nothing else.
         <View
           style={{
             flex: 1,
-            paddingTop: insets.top + 40,
-            paddingBottom: insets.bottom + 24,
+            paddingTop: insets.top + 24,
+            paddingBottom: insets.bottom + 20,
             paddingHorizontal: 28,
-            justifyContent: "space-between",
           }}
         >
-          <View>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <Image
-                source={require("../../assets/images/icon-small.png")}
-                accessible={false}
-                style={{ width: 52, height: 52, borderRadius: 14 }}
-              />
-              <Wordmark size={40} weight="900" />
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            <Image
+              source={require("../../assets/images/icon-small.png")}
+              accessible={false}
+              style={{ width: 76, height: 76, borderRadius: 20 }}
+            />
+            <View style={{ marginTop: 18 }}>
+              <Wordmark size={34} weight="900" />
             </View>
-            <Text style={{ color: THEME.soft, fontSize: 17, marginTop: 14, lineHeight: 24 }}>
-              Manage your Fantasy Premier League team with live points, smart
-              alerts and season insights.
-            </Text>
-            <View style={{ marginTop: 26 }}>
-              <Feature
-                icon={{ ios: "bolt.fill", android: "bolt", web: "bolt" }}
-                text="Live gameweek points"
-                detail="Bonus, auto-subs and captaincy as matches happen"
-              />
-              <Feature
-                icon={{
-                  ios: "arrow.left.arrow.right",
-                  android: "swap_horiz",
-                  web: "swap_horiz",
-                }}
-                text="Lineup, transfers and chips"
-                detail="Pick your team and send changes straight to FPL"
-              />
-              <Feature
-                icon={{ ios: "trophy.fill", android: "trophy", web: "trophy" }}
-                text="Leagues and rivals"
-                detail="Tables, rank changes and every manager's team"
-              />
-              <Feature
-                icon={{ ios: "bell.badge.fill", android: "notifications_active", web: "notifications_active" }}
-                text="Deadline and injury alerts"
-                detail="Reminders before each deadline and squad news"
-              />
-              <Feature
-                icon={{ ios: "chart.bar.fill", android: "insights", web: "insights" }}
-                text="Season insights"
-                detail="Your strengths, weak spots and form at a glance"
-              />
-            </View>
-          </View>
-          <View>
-            <Pressable
-              onPress={() => setStage("login")}
-              style={({ pressed }) => ({
-                backgroundColor: GREEN,
-                paddingVertical: 16,
-                borderRadius: 28,
-                alignItems: "center",
-                opacity: pressed ? 0.85 : 1,
-              })}
-            >
-              <Text style={{ color: THEME.onAccent, fontSize: 17, fontWeight: "900" }}>
-                Get started
-              </Text>
-            </Pressable>
-            <Text
-              style={{
-                color: "#8fa198",
-                fontSize: 12,
-                textAlign: "center",
-                marginTop: 12,
-                lineHeight: 17,
-              }}
-            >
-              Sign in with your FPL account. Your password goes only to the
-              Premier League and is never stored.
-            </Text>
-            <Text
-              style={{
-                color: THEME.muted,
-                fontSize: 11,
-                textAlign: "center",
-                marginTop: 8,
-                lineHeight: 15,
-              }}
-            >
-              Not affiliated with the Premier League. Version {APP_VERSION}
+            <Text style={{ color: THEME.muted, fontSize: 14, marginTop: 8, textAlign: "center" }}>
+              Your Fantasy Premier League team, live.
             </Text>
           </View>
+          <Pressable
+            onPress={() => setStage("login")}
+            accessibilityRole="button"
+            style={({ pressed }) => ({
+              height: 50,
+              borderRadius: 25,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: GREEN,
+              opacity: pressed ? 0.85 : 1,
+            })}
+          >
+            <Text style={{ color: THEME.onAccent, fontSize: 15.5, fontWeight: "800" }}>Get started</Text>
+          </Pressable>
+          <Text style={{ color: "rgba(255, 255, 255, 0.32)", fontSize: 10.5, textAlign: "center", marginTop: 14 }}>
+            {`Not affiliated with the Premier League · v${APP_VERSION}`}
+          </Text>
         </View>
       )}
 
@@ -2522,6 +2673,16 @@ export default function Index() {
         </View>
       )}
 
+      {silentLogin && stage === "squad" && (
+        <SilentSignIn
+          email={silentLogin.email}
+          password={silentLogin.password}
+          begin={beginPasswordSignIn}
+          onRedirect={finishSilentSignIn}
+          onFail={silentSignInFailed}
+        />
+      )}
+
       <View style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}>
         <WebView
           key={webKey}
@@ -2535,6 +2696,16 @@ export default function Index() {
           // changes its own address in place (e.g. "/" to "/en/"), with no
           // load-end after it, which would hold every request forever.
           onLoadEnd={onWebLoadEnd}
+          // This page only exists to make requests from the FPL site. The
+          // site sometimes sends a signed-in visitor off to the account page
+          // (its own "seamless login"); on that page every request fails as
+          // if offline. Keep the page on the FPL site: frames inside it (our
+          // own helper frame) are left alone.
+          onShouldStartLoadWithRequest={(request) =>
+            request.isTopFrame === false ||
+            /^https:\/\/fantasy\.premierleague\.com([/?#]|$)/.test(request.url) ||
+            request.url.startsWith("about:")
+          }
           onRenderProcessGone={restartWeb}
           onContentProcessDidTerminate={restartWeb}
           sharedCookiesEnabled
@@ -2647,40 +2818,7 @@ export default function Index() {
                 {/* The logo never shrinks: whatever sits on the right gives way. */}
                 <View style={{ flexDirection: "row", alignItems: "center", flexShrink: 0 }}>
                   <Wordmark size={16} weight="900" />
-                  {!showLeagues && (
-                    <Pressable
-                      onPress={refresh}
-                      disabled={refreshing}
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        refreshing ? "Refreshing squad" : "Refresh squad"
-                      }
-                      hitSlop={8}
-                      style={({ pressed }) => ({
-                        width: 26,
-                        height: 26,
-                        marginLeft: 6,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        borderRadius: 13,
-                        borderWidth: 1,
-                        borderColor: "rgba(255,255,255,0.5)",
-                        backgroundColor: "rgba(255,255,255,0.18)",
-                        opacity: pressed || refreshing ? 0.5 : 1,
-                        transform: [{ scale: pressed ? 0.92 : 1 }],
-                      })}
-                    >
-                      <AppSymbol
-                        name={{
-                          ios: "arrow.clockwise",
-                          android: "refresh",
-                          web: "refresh",
-                        }}
-                        color="#fff"
-                        size={13}
-                      />
-                    </Pressable>
-                  )}
+                  {/* (No refresh button: every page refreshes with a pull down.) */}
                 </View>
 
                 <View style={{ flex: 1 }} />
@@ -2774,24 +2912,37 @@ export default function Index() {
                       </Text>
                     </View>
                   ) : (
-                    // The lineup always edits the upcoming gameweek; past
-                    // gameweeks are browsed from the points page.
-                    <View
-                      accessible
-                      accessibilityLabel={`Picking team for gameweek ${squad.gw}`}
-                      style={{
-                        borderRadius: 16,
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                        borderWidth: 1,
-                        borderColor: "rgba(255,255,255,0.12)",
-                        backgroundColor: "rgba(21, 27, 44, 0.85)",
-                      }}
-                    >
-                      <Text style={{ color: THEME.soft, fontSize: 11, fontWeight: "800" }}>
-                        GW {squad.gw}
-                        {squad.chip ? ` · ${squad.chip}` : ""}
-                      </Text>
+                    // Home: the gameweek being picked (with any chip played),
+                    // then the team's name at the far right, as on Transfers
+                    // (it had a row of its own before; moved up here so the
+                    // pitch has more room). The lineup always edits the
+                    // upcoming gameweek; past ones are browsed from the points
+                    // page. A long team name ends in "…".
+                    <View style={{ flexDirection: "row", alignItems: "center", flexShrink: 1, minWidth: 0, marginLeft: 10, gap: 10 }}>
+                      <View
+                        accessible
+                        accessibilityLabel={`Picking team for gameweek ${squad.gw}${squad.chip ? `, ${squad.chip} played` : ""}`}
+                        style={{
+                          flexShrink: 0,
+                          borderRadius: 16,
+                          paddingHorizontal: 10,
+                          paddingVertical: 5,
+                          borderWidth: 1,
+                          borderColor: "rgba(255,255,255,0.12)",
+                          backgroundColor: "rgba(21, 27, 44, 0.85)",
+                        }}
+                      >
+                        <Text style={{ color: THEME.soft, fontSize: 11, fontWeight: "800" }}>
+                          GW {squad.gw}
+                          {squad.chip ? ` · ${squad.chip}` : ""}
+                        </Text>
+                      </View>
+                      <View style={{ flexDirection: "row", alignItems: "center", flexShrink: 1, minWidth: 0 }}>
+                        <View style={{ width: 3, height: 14, backgroundColor: GREEN, borderRadius: 2, marginRight: 6 }} />
+                        <Text numberOfLines={1} style={{ flexShrink: 1, color: "#fff", fontSize: 12, fontWeight: "500" }}>
+                          {squad.teamName || "Your team"}
+                        </Text>
+                      </View>
                     </View>
                   )
                 )}
@@ -2800,8 +2951,13 @@ export default function Index() {
               {/* The page's own header rows fade out and in with the page, so
                   they leave the moment a different tab is tapped. */}
               <Animated.View style={{ opacity: modeTransitionOpacity }}>
+              {/* Home: gameweek points (opens the breakdown) | season total |
+                  overall rank, full size, right under the top row. */}
+              {!showLeagues && mode === "lineup" && (
+                <View style={{ marginTop: 4, marginHorizontal: 2 }}>{renderHomeSummary()}</View>
+              )}
               {/* Row 2: Team Name with Green Accent Bar (left) and Points Button (right) */}
-              {!showLeagues && mode !== "transfers" && mode !== "more" && (
+              {!showLeagues && mode !== "transfers" && mode !== "more" && mode !== "lineup" && (
                 <View
                   style={{
                     marginHorizontal: 2,
@@ -2837,36 +2993,6 @@ export default function Index() {
                 </View>
               )}
 
-              {/* Row 3: Gameweek points (opens breakdown) | Season total | Overall rank */}
-              {!showLeagues && mode === "lineup" && (() => {
-                const eventId = squad.eventId ?? squad.currentGw;
-                const eventGw = squad.gameweeks.find((gw) => gw.id === eventId);
-                const liveNow =
-                  ownLive && ownLive.entry === squad.entry && ownLive.event === eventId
-                    ? ownLive
-                    : null;
-                return (
-                  <View style={{ marginTop: 4, marginHorizontal: 2 }}>
-                    <SquadSummaryBar
-                      rankChange={(() => {
-                        // This gameweek's rank against the one before it (the
-                        // last gameweek played before this one).
-                        const shown = liveNow?.overallRank ?? squad.overallRank ?? null;
-                        if (!shown || rankHistory?.entry !== squad.entry || eventId == null) return null;
-                        const before = rankHistory.points.filter((point) => point.event < eventId).pop();
-                        return before ? before.rank - shown : null;
-                      })()}
-                      gameweek={eventId ?? null}
-                      gameweekPoints={liveNow ? liveNow.total : (squad.eventPoints ?? null)}
-                      live={Boolean(eventGw?.isCurrent && !eventGw.finished)}
-                      season={seasonLabel(squad.gameweeks)}
-                      totalPoints={liveNow?.seasonTotal ?? squad.totalPoints ?? null}
-                      overallRank={liveNow?.overallRank ?? squad.overallRank ?? null}
-                      onOpenPoints={() => openOwnHistory()}
-                    />
-                  </View>
-                );
-              })()}
               </Animated.View>
             </View>
           </View>
@@ -2939,11 +3065,34 @@ export default function Index() {
               // area, whose height differs between devices.
               marginBottom: insets.bottom + 56,
             }}
-            scrollEnabled={mode === "leagues" || mode === "more"}
+            // Leagues scrolls inside itself, under its fixed Join / Create and
+            // type tabs, so this outer view stays still there.
+            // Home and Transfers fit the screen, so they don't scroll, but a
+            // pull down still refreshes them. Not while transfers or a chip
+            // are planned but not yet sent: reloading the team resets those
+            // edits, and a pull is too easy to make by accident.
+            scrollEnabled={mode !== "leagues"}
+            refreshControl={
+              // Leagues has its own; More has nothing to reload.
+              mode === "leagues" || mode === "more" ? undefined : (
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={pullRefresh}
+                  enabled={!transfersPending && !pendingChip}
+                  colors={[GREEN]}
+                  tintColor={GREEN}
+                  progressBackgroundColor={THEME.surfaceRaised}
+                />
+              )
+            }
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{
               flexGrow: 1,
               width: "100%",
+              // Leagues: exactly the visible height, so the league screen's own
+              // list has a fixed height to scroll within (content that is
+              // only allowed to grow never scrolls inside itself).
+              ...(mode === "leagues" ? { flex: 1 } : null),
             }}
           >
             {mode === "leagues" ? (
@@ -2962,6 +3111,9 @@ export default function Index() {
                 loading={leagueLoading}
                 error={leagueError}
                 successSignal={leagueActionNonce}
+                refreshing={leaguesRefreshing}
+                onRefresh={pullRefreshLeagues}
+                refreshSignal={leagueRefreshSignal}
                 gameweeks={squad.gameweeks.filter(
                   (gameweek) => gameweek.finished || gameweek.isCurrent,
                 )}
@@ -3562,6 +3714,8 @@ export default function Index() {
             fixturesByTeam={squad.fixturesByTeam}
             onBack={closeActiveMember}
             onViewEntry={openTopEntry}
+            refreshing={pointsRefreshing}
+            onRefresh={pullRefreshPoints}
             onSelectEvent={(event) => {
               setActiveMemberEvent(event);
               loadManagerGameweek(activeMember.entry, event);

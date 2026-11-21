@@ -26,7 +26,6 @@ import {
 } from "react-native";
 import type { TextInputProps } from "react-native";
 import type { SymbolViewProps } from "expo-symbols";
-import { Image } from "expo-image";
 import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppSymbol } from "./AppSymbol";
@@ -51,15 +50,15 @@ const EDGE = "rgba(255, 255, 255, 0.12)";
 const RED = "#ff6b81";
 const STORAGE_EMAIL = "profpl_last_email";
 // The page usually answers within a few seconds; give slow networks room.
-const ATTEMPT_TIMEOUT_MS = 40_000;
-const USER_AGENT =
+export const ATTEMPT_TIMEOUT_MS = 40_000;
+export const USER_AGENT =
   "Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
 type Phase = "idle" | "working" | "finish";
 
 // Runs in the sign-in page: fills the form once it is drawn, submits it, then
 // reports an error, or that the page wants something from the user.
-function signInScript(attempt: string, email: string, password: string) {
+export function signInScript(attempt: string, email: string, password: string) {
   return `
 (function () {
   if (window.__profplSignIn) return;
@@ -91,6 +90,15 @@ function signInScript(attempt: string, email: string, password: string) {
   try { submitted = sessionStorage.getItem(KEY) === A; } catch (e) {}
   var since = Date.now();
   var timer = setInterval(function () {
+    // The account service's own error page (e.g. "INVALID_REQUEST ...
+    // parameter name is 'nonce'"): a broken sign-in session on its side.
+    // Report it, so the app starts a fresh attempt instead of showing it.
+    var body = document.body ? document.body.innerText || "" : "";
+    if (/\\bINVALID_[A-Z_]+\\b/.test(body) && !shown(document.getElementById("username"))) {
+      clearInterval(timer);
+      post("pageError", body.slice(0, 300));
+      return;
+    }
     var error = document.querySelector(".ping-sso__error");
     var user = document.getElementById("username");
     var pass = document.getElementById("password");
@@ -249,6 +257,8 @@ export function EmailSignIn({
   // The details of the attempt in progress, saved once the page accepts them.
   const attemptLogin = useRef<{ email: string; password: string; remember: boolean; auto: boolean } | null>(null);
   const autoTried = useRef(false);
+  // One automatic fresh start per sign-in after the service's error page.
+  const pageRetried = useRef(false);
 
 
   const stopTimer = () => {
@@ -290,10 +300,16 @@ export function EmailSignIn({
     setLocalError("");
     if (squadLoadFailed) onDismissSquadFailure();
     AsyncStorage.setItem(STORAGE_EMAIL, address).catch(() => {});
-    attemptLogin.current = { email: address, password: secret, remember: saved ? true : remember, auto: !!saved };
+    pageRetried.current = false;
+    restart({ email: address, password: secret, remember: saved ? true : remember, auto: !!saved });
+  };
+
+  // Loads the sign-in page afresh and fills it in with these details.
+  const restart = (login: { email: string; password: string; remember: boolean; auto: boolean }) => {
+    attemptLogin.current = login;
     finished.current = false;
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    setAttempt({ id, url: begin(), script: signInScript(id, address, secret) });
+    setAttempt({ id, url: begin(), script: signInScript(id, login.email, login.password) });
     setPhase("working");
     stopTimer();
     timer.current = setTimeout(() => {
@@ -347,7 +363,18 @@ export function EmailSignIn({
       return;
     }
     if (!message || !attempt || message.profplSignIn !== attempt.id) return;
-    if (message.type === "error") {
+    if (message.type === "pageError") {
+      // The account service showed its own error page: start over once with
+      // a fresh sign-in (same details), then give a plain message, never
+      // that page.
+      const login = attemptLogin.current;
+      if (login && !pageRetried.current) {
+        pageRetried.current = true;
+        restart(login);
+      } else {
+        endAttempt("Couldn't sign you in just now. Please try again.");
+      }
+    } else if (message.type === "error") {
       // With text, the page showed an error (wrong details); without, it
       // just never answered.
       endAttempt(friendlyError(message.message ?? ""), !!message.message);
@@ -389,18 +416,11 @@ export function EmailSignIn({
             />
           </Pressable>
 
-          <View style={{ marginTop: 10, marginBottom: 20 }}>
-            <Image
-              source={require("../assets/images/icon-small.png")}
-              accessible={false}
-              style={{ width: 40, height: 40, borderRadius: 11 }}
-            />
-            <Text style={{ color: "#ffffff", fontSize: 23, fontWeight: "800", marginTop: 14 }}>
+          <View style={{ marginTop: 18, marginBottom: 24 }}>
+            <Text accessibilityRole="header" style={{ color: THEME.ink, fontSize: 24, fontWeight: "800" }}>
               Sign in
             </Text>
-            <Text style={{ color: MUTED, fontSize: 13.5, marginTop: 4, lineHeight: 19 }}>
-              Use the email and password of your Fantasy Premier League account.
-            </Text>
+            <Text style={{ color: MUTED, fontSize: 13.5, marginTop: 4 }}>Use your FPL account.</Text>
           </View>
 
           {!!shownError && (
@@ -594,88 +614,39 @@ export function EmailSignIn({
                 </Text>
               </Pressable>
 
-              <View style={{ flexDirection: "row", alignItems: "center", marginVertical: 18 }}>
-                <View style={{ flex: 1, height: 1, backgroundColor: EDGE }} />
-                <Text style={{ color: THEME.muted, fontSize: 11, fontWeight: "700", marginHorizontal: 12 }}>
-                  OR
-                </Text>
-                <View style={{ flex: 1, height: 1, backgroundColor: EDGE }} />
-              </View>
-
+              {/* Google, Apple, Facebook or X: a quiet link, not a second form. */}
               <Pressable
                 onPress={onOtherMethods}
                 disabled={busy}
                 accessibilityRole="button"
                 accessibilityLabel="Other ways to sign in: Google, Apple, Facebook or X"
                 accessibilityHint="Opens the Premier League sign-in page"
+                hitSlop={8}
                 style={({ pressed }) => ({
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 10,
-                  minHeight: 52,
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                  borderRadius: 14,
-                  backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
-                  borderWidth: 1,
-                  borderColor: "rgba(255, 255, 255, 0.08)",
-                  opacity: busy ? 0.5 : 1,
+                  alignSelf: "center",
+                  marginTop: 18,
+                  paddingVertical: 6,
+                  opacity: busy ? 0.5 : pressed ? 0.6 : 1,
                 })}
               >
-                <View
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: "rgba(255, 255, 255, 0.07)",
-                  }}
-                >
-                  <AppSymbol
-                    name={{ ios: "person.crop.circle.badge.checkmark", android: "account_circle", web: "account_circle" }}
-                    color={THEME.soft}
-                    size={17}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: THEME.ink, fontSize: 13.5, fontWeight: "600" }}>Other ways to sign in</Text>
-                  <Text style={{ color: MUTED, fontSize: 11.5, marginTop: 1 }}>Google, Apple, Facebook or X</Text>
-                </View>
-                <AppSymbol
-                  name={{ ios: "chevron.right", android: "chevron_right", web: "chevron_right" }}
-                  color={MUTED}
-                  size={16}
-                />
+                <Text style={{ color: THEME.soft, fontSize: 13, fontWeight: "600" }}>Other sign-in options</Text>
               </Pressable>
             </>
           )}
 
           <View style={{ flex: 1, minHeight: 24 }} />
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 }}>
-            <AppSymbol
-              name={{ ios: "lock.fill", android: "lock", web: "lock" }}
-              color={THEME.muted}
-              size={12}
-            />
-            <Text style={{ color: THEME.muted, fontSize: 11, textAlign: "center", lineHeight: 15, flexShrink: 1 }}>
-              {remember
-                ? "Sent securely to the Premier League. Saved encrypted on this device only."
-                : "Sent securely to the Premier League. Not saved on this device."}
-            </Text>
-          </View>
-          <View style={{ flexDirection: "row", alignSelf: "center", alignItems: "center", gap: 10, marginTop: 8 }}>
-            <Pressable onPress={onOpenPrivacy} accessibilityRole="link" hitSlop={8}>
-              <Text style={{ color: MUTED, fontSize: 11, textDecorationLine: "underline" }}>Privacy policy</Text>
+          {/* One small footer line. */}
+          <View style={{ flexDirection: "row", alignSelf: "center", alignItems: "center", gap: 8 }}>
+            <Pressable onPress={onOpenPrivacy} accessibilityRole="link" accessibilityLabel="Privacy policy" hitSlop={8}>
+              <Text style={{ color: MUTED, fontSize: 11 }}>Privacy</Text>
             </Pressable>
-            <Text style={{ color: MUTED, fontSize: 11 }}>·</Text>
-            <Pressable onPress={onOpenTerms} accessibilityRole="link" hitSlop={8}>
-              <Text style={{ color: MUTED, fontSize: 11, textDecorationLine: "underline" }}>Terms and conditions</Text>
+            <Text style={{ color: "rgba(255, 255, 255, 0.25)", fontSize: 11 }}>·</Text>
+            <Pressable onPress={onOpenTerms} accessibilityRole="link" accessibilityLabel="Terms and conditions" hitSlop={8}>
+              <Text style={{ color: MUTED, fontSize: 11 }}>Terms</Text>
             </Pressable>
+            <Text style={{ color: "rgba(255, 255, 255, 0.25)", fontSize: 11 }}>·</Text>
+            <Text style={{ color: "rgba(255, 255, 255, 0.32)", fontSize: 11 }}>{`v${version}`}</Text>
           </View>
-          <Text style={{ color: "rgba(255, 255, 255, 0.32)", fontSize: 10.5, textAlign: "center", marginTop: 5 }}>
-            Not affiliated with the Premier League. Version {version}
-          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
 

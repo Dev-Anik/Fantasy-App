@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Gameweek, MemberSquad, PlayerFixture, Row } from "./fpl";
 import { AppSymbol } from "./AppSymbol";
 import { GameweekPicker } from "./GameweekPicker";
 import { computeLive } from "./live";
+import { clubsPlaying } from "./squadPlaying";
 import { Pitch } from "./Pitch";
 import { PointsBadge } from "./PointsBadge";
 import { PlayerMatchSheet } from "./PlayerMatchSheet";
@@ -27,20 +28,26 @@ type Props = {
   onSelectEvent: (event: number) => void;
   // Opens another team's page (the gameweek's highest scorer).
   onViewEntry?: (entry: number, event: number) => void;
+  // Pull down to reload this gameweek.
+  refreshing?: boolean;
+  onRefresh?: () => void;
 };
 
 const GREEN = THEME.accent;
 const DARK_GREEN = THEME.bg;
 
 // Small status lines under the points badge.
+// Between the points card and the lines under it.
+const STATUS_GAP = 4;
+
 const STATUS_TEXT = {
   color: THEME.soft,
-  fontSize: 10,
+  fontSize: 8.5,
   fontWeight: "800" as const,
   backgroundColor: "rgba(11, 16, 32, 0.88)",
-  borderRadius: 8,
-  paddingHorizontal: 7,
-  paddingVertical: 2,
+  borderRadius: 7,
+  paddingHorizontal: 6,
+  paddingVertical: 1.5,
   overflow: "hidden" as const,
 };
 
@@ -73,6 +80,8 @@ export function ManagerHistory({
   onBack,
   onSelectEvent,
   onViewEntry,
+  refreshing = false,
+  onRefresh,
 }: Props) {
   const insets = useSafeAreaInsets();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -80,10 +89,9 @@ export function ManagerHistory({
   // then take the larger width and height, so they match and neither clips.
   const [badgeSize, setBadgeSize] = useState<Size | null>(null);
   const [statsSize, setStatsSize] = useState<Size | null>(null);
-  const sharedSize =
-    badgeSize && statsSize
-      ? { width: Math.max(badgeSize.width, statsSize.width), height: Math.max(badgeSize.height, statsSize.height) }
-      : null;
+  const [statusHeight, setStatusHeight] = useState(0);
+  // The right-hand column's height as drawn (card and the lines under it).
+  const [columnDrawn, setColumnDrawn] = useState<number | null>(null);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   // The player whose match is open (tapped on the pitch).
   const [openPlayer, setOpenPlayer] = useState<PlayerMatchTarget | null>(null);
@@ -95,11 +103,30 @@ export function ManagerHistory({
   const shownEvent = currentData?.event ?? selectedEvent;
   const selectedGwData = gameweeks.find((gw) => gw.id === shownEvent);
   const isLive = Boolean(selectedGwData?.isCurrent && !selectedGwData.finished);
-  // Provisional bonus, projected auto-subs and the armband, as FPL will
+  // Projected auto-subs and the armband, as FPL will
   // settle them. For a finished gameweek these match what FPL applied.
   const live = currentData
     ? computeLive(currentData.picks, currentData.fixtures ?? [], currentData.chip)
     : null;
+  // The right-hand column is the points card plus the "still to play" / hit
+  // lines under it; together they stand exactly as tall as the average and
+  // highest card on the left, and both cards share one width.
+  const statusShown = !!currentData && (isLive || (currentData.history.transferCost ?? 0) > 0);
+  // What the lines under the card actually take, gap included: the whole
+  // right-hand column as drawn, less the card (measured, not added up, so
+  // margins and rounding can't leave a gap under the lines).
+  const statusSpace =
+    statusShown && statusHeight > 0
+      ? columnDrawn != null && badgeSize && columnDrawn > badgeSize.height
+        ? columnDrawn - badgeSize.height
+        : statusHeight + STATUS_GAP
+      : 0;
+  const columnHeight =
+    badgeSize && statsSize ? Math.max(statsSize.height, badgeSize.height + statusSpace) : null;
+  const sharedSize =
+    badgeSize && statsSize && columnHeight != null
+      ? { width: Math.max(badgeSize.width, statsSize.width), height: columnHeight }
+      : null;
   const picks: Row[] =
     live?.picks.map((pick) => {
       // Bench players show their own points; only counted ones are multiplied.
@@ -122,6 +149,9 @@ export function ManagerHistory({
         fixtures: fixturesByTeam?.[pick.teamId] ?? [],
         autoSub: pick.autoSub,
         provisionalBonus: pick.provisionalBonus,
+        matchStarted: (currentData?.fixtures ?? []).some(
+          (fixture) => fixture.started && (fixture.teamH === pick.teamId || fixture.teamA === pick.teamId),
+        ),
       };
     }) ?? [];
   // For finished gameweeks FPL's own figure is authoritative; while one is in
@@ -317,15 +347,30 @@ export function ManagerHistory({
         onClose={() => setPickerOpen(false)}
       />
 
-      {/* Main Pitch View with Top-Right Points Overlay or Empty State */}
-      <View
-        style={{
-          flex: 1,
+      {/* Main Pitch View with Top-Right Points Overlay or Empty State. It
+          fits the screen and doesn't scroll, but a pull down reloads it. */}
+      <ScrollView
+        style={{ flex: 1 }}
+        scrollEnabled={!!onRefresh}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          flexGrow: 1,
           width: "100%",
           paddingBottom: insets.bottom + 62,
           justifyContent: !loading && !currentData && !showBlankSquad ? "center" : "flex-start",
           position: "relative",
         }}
+        refreshControl={
+          onRefresh ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[GREEN]}
+              tintColor={GREEN}
+              progressBackgroundColor={THEME.surfaceRaised}
+            />
+          ) : undefined
+        }
       >
         {loading && !currentData && (
           <ActivityIndicator color={GREEN} style={{ marginTop: 28 }} />
@@ -355,7 +400,14 @@ export function ManagerHistory({
             }
             overlay={
               <>
-                <View pointerEvents="none" style={{ position: "absolute", top: 8, right: 8, zIndex: 10 }}>
+                <View
+                  pointerEvents="none"
+                  onLayout={(event) => {
+                    const height = Math.ceil(event.nativeEvent.layout.height);
+                    setColumnDrawn((current) => (current === height ? current : height));
+                  }}
+                  style={{ position: "absolute", top: 8, right: 8, zIndex: 10 }}
+                >
                   {/* Measured, so the average/highest card can match its size. */}
                   <View
                     onLayout={(event) => {
@@ -364,16 +416,22 @@ export function ManagerHistory({
                     }}
                   >
                   <PointsBadge
-                    minSize={sharedSize}
+                    minSize={sharedSize ? { width: sharedSize.width, height: sharedSize.height - statusSpace } : null}
                     gameweek={shownEvent}
                     points={currentData ? totalPts : null}
                     live={isLive}
+                    // Pulses only while one of this team's players has a match on.
+                    blink={!!currentData && clubsPlaying(picks.map((pick) => pick.teamId), currentData.fixtures ?? [])}
                   />
                   </View>
                   {currentData && (isLive || (currentData.history.transferCost ?? 0) > 0) && (
                     <View
+                      onLayout={(event) => {
+                        const height = Math.ceil(event.nativeEvent.layout.height);
+                        setStatusHeight((current) => (current === height ? current : height));
+                      }}
                       style={{
-                        marginTop: 4,
+                        marginTop: STATUS_GAP,
                         alignSelf: "flex-end",
                         alignItems: "flex-end",
                         gap: 2,
@@ -452,7 +510,7 @@ export function ManagerHistory({
             </Text>
           </View>
         ) : null}
-      </View>
+      </ScrollView>
 
       {snapshotOpen && currentData && (
         <SquadSnapshot
@@ -492,16 +550,16 @@ function GameweekStats({
   const canOpen = !!onOpenHighest && top !== "—";
   const label = {
     color: THEME.muted,
-    fontSize: 7.5,
-    lineHeight: 9,
+    fontSize: 6.5,
+    lineHeight: 8,
     fontWeight: "500" as const,
-    letterSpacing: 1.4,
+    letterSpacing: 1.2,
     includeFontPadding: false,
   };
   const value = {
     color: THEME.ink,
-    fontSize: 14,
-    lineHeight: 16,
+    fontSize: 12,
+    lineHeight: 13,
     fontWeight: "700" as const,
     fontVariant: ["tabular-nums" as const],
     includeFontPadding: false,
@@ -512,7 +570,7 @@ function GameweekStats({
     flexGrow: 1,
     alignItems: "center" as const,
     justifyContent: "center" as const,
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     paddingVertical: 6,
   };
   return (
@@ -520,9 +578,9 @@ function GameweekStats({
       onLayout={(event) => onMeasure(event.nativeEvent.layout)}
       style={{
         // At least the points card's size: both cards grow to the larger.
-        minWidth: Math.max(64, size?.width ?? 0),
+        minWidth: Math.max(44, size?.width ?? 0),
         minHeight: size?.height,
-        borderRadius: 14,
+        borderRadius: 10,
         overflow: "hidden",
         ...PITCH_PANEL,
         shadowColor: "#000",

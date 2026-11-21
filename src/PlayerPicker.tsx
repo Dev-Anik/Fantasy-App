@@ -395,7 +395,30 @@ export function PlayerPicker({
                   opacity: inSquad ? 0.5 : blocked ? 0.6 : 1,
                 })}
               >
-                <PlayerArt team={item.team} size={40} goalkeeper={item.type === 1} />
+                {/* The avatar, with the position as a small tag on its lower
+                    edge (kept out of the text line, so nothing is cut off). */}
+                <View style={{ width: 40, alignItems: "center" }}>
+                  <PlayerArt team={item.team} size={40} goalkeeper={item.type === 1} />
+                  <View
+                    style={{
+                      position: "absolute",
+                      bottom: -3,
+                      paddingHorizontal: 4,
+                      paddingVertical: 0.5,
+                      borderRadius: 4,
+                      backgroundColor: THEME.surfaceRaised,
+                      borderWidth: 0.5,
+                      borderColor: "rgba(255, 255, 255, 0.16)",
+                    }}
+                  >
+                    <Text
+                      allowFontScaling={false}
+                      style={{ color: SOFT, fontSize: 8, fontWeight: "700", letterSpacing: 0.4, includeFontPadding: false }}
+                    >
+                      {POS[item.type]}
+                    </Text>
+                  </View>
+                </View>
 
                 <View style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -410,8 +433,10 @@ export function PlayerPicker({
                       </View>
                     )}
                   </View>
+                  {/* Club and ownership: short enough to fit in full on any
+                      phone (the position is on the avatar). */}
                   <Text numberOfLines={1} style={{ color: MUTED, fontSize: 11.5, marginTop: 2 }}>
-                    {`${item.team} · ${POS[item.type]} · ${item.ownership}% owned`}
+                    {`${item.team} · ${item.ownership}% owned`}
                   </Text>
                   {note && (
                     <Text numberOfLines={1} style={{ color: note.color, fontSize: 11, fontWeight: "600", marginTop: 2 }}>

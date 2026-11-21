@@ -1,6 +1,7 @@
 // A bottom sheet for choosing up to two extra figures to show on the home
 // pitch's player cards. The choice is saved by the caller.
-import { Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Animated, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { useSwipeToClose } from "./useSwipeToClose";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "./AppSymbol";
 import { CARD_STAT_OPTIONS, MAX_CARD_STATS } from "./cardStats";
@@ -23,6 +24,7 @@ export function CardInfoSheet({
 }) {
   const insets = useSafeAreaInsets();
   const full = selected.length >= MAX_CARD_STATS;
+  const swipe = useSwipeToClose(onClose, visible);
 
   const toggle = (key: CardStatKey) => {
     if (selected.includes(key)) onChange(selected.filter((k) => k !== key));
@@ -32,6 +34,7 @@ export function CardInfoSheet({
   };
 
   return (
+    // Drag the sheet down to close it.
     <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: "flex-end" }}>
         <Pressable
@@ -40,9 +43,11 @@ export function CardInfoSheet({
           onPress={onClose}
           style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(4, 7, 16, 0.7)" }}
         />
-        <View
+        <Animated.View
           accessibilityViewIsModal
+          {...swipe.panHandlers}
           style={{
+            transform: swipe.transform,
             maxHeight: "75%",
             borderTopLeftRadius: 20,
             borderTopRightRadius: 20,
@@ -81,7 +86,13 @@ export function CardInfoSheet({
             </Pressable>
           </View>
 
-          <ScrollView style={{ marginTop: 8 }} contentContainerStyle={{ paddingHorizontal: 8 }}>
+          <ScrollView
+            onScroll={swipe.onScroll}
+            {...swipe.listTouch}
+            scrollEventThrottle={16}
+            style={{ marginTop: 8 }}
+            contentContainerStyle={{ paddingHorizontal: 8 }}
+          >
             {/* None: clears every choice, so the cards show nothing extra. */}
             <Pressable
               onPress={() => onChange([])}
@@ -177,7 +188,7 @@ export function CardInfoSheet({
                 : "Nothing extra is shown. Your choice is saved on this phone."}
             </Text>
           </View>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );

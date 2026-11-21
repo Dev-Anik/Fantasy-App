@@ -1,12 +1,17 @@
-// Live gameweek scoring: provisional bonus and projected automatic
-// substitutions, worked out the way FPL will once the gameweek is processed.
+// Live gameweek scoring: projected automatic substitutions and the armband,
+// worked out the way FPL will once the gameweek is processed. Points are
+// FPL's own live figures, as the official app shows them: bonus counts only
+// once FPL has confirmed and added it; until then it is worked out
+// separately (provisionalBonus) and only shown as a hint, never added.
 // Pure functions, so they can be checked without the app.
 import type { LiveFixture, MemberPick } from "./fpl";
 
 export type LivePick = MemberPick & {
-  // Points shown for the player, including provisional bonus. Not multiplied.
+  // Points shown for the player: FPL's live figure, confirmed bonus
+  // included, provisional bonus not. Not multiplied.
   livePoints: number;
-  // Bonus from matches still in play, not yet added by FPL.
+  // Bonus the bonus points system would give in matches still in play. Not
+  // yet added by FPL, so not part of livePoints or any total.
   provisionalBonus: number;
   // What the player's points count for after subs and the armband: 0 = not
   // counted, 1, 2 (captain) or 3 (triple captain).
@@ -23,7 +28,7 @@ export type LiveResult = {
   picks: LivePick[];
   // Gameweek points before transfer hits, as FPL shows them.
   total: number;
-  // Players in the counting eleven whose matches are not over yet.
+  // Players in the counting eleven with a match not kicked off yet.
   stillToPlay: number;
 };
 
@@ -52,6 +57,14 @@ export function provisionalBonus(fixtures: LiveFixture[]) {
       });
     });
   return totals;
+}
+
+// A match of his team hasn't kicked off yet. Someone playing right now is
+// not "still to play"; in a double gameweek, a second match still counts.
+function teamWaiting(teamId: number, fixtures: LiveFixture[]) {
+  return fixtures.some(
+    (fixture) => (fixture.teamH === teamId || fixture.teamA === teamId) && !fixture.started,
+  );
 }
 
 function teamDone(teamId: number, fixtures: LiveFixture[]) {
@@ -85,7 +98,7 @@ export function computeLive(
       return {
         ...pick,
         provisionalBonus: provisional,
-        livePoints: (pick.points ?? 0) + provisional,
+        livePoints: pick.points ?? 0,
         effectiveMultiplier: pick.position <= 11 || benchBoost ? 1 : 0,
         done: teamDone(pick.teamId, fixtures),
       };
@@ -139,6 +152,6 @@ export function computeLive(
   return {
     picks: live,
     total: counting.reduce((sum, p) => sum + p.livePoints * p.effectiveMultiplier, 0),
-    stillToPlay: counting.filter((p) => !p.done).length,
+    stillToPlay: counting.filter((p) => teamWaiting(p.teamId, fixtures)).length,
   };
 }

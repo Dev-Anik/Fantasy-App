@@ -2,10 +2,13 @@
 // details. Plain settings-style lists, matching the My season page.
 import { Linking, Platform, Pressable, ScrollView, Switch, Text, View } from "react-native";
 import * as Device from "expo-device";
+import * as Clipboard from "expo-clipboard";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AppSymbol } from "./AppSymbol";
 import type { NotificationSettings, PermissionState } from "./notifications";
 import { SUPPORT_EMAIL } from "./appInfo";
+import { liveAlertsAvailable } from "./liveAlerts";
 import { THEME } from "./theme";
 
 const SURFACE = THEME.surface;
@@ -17,10 +20,72 @@ const SOFT = THEME.soft;
 const GOOD = THEME.accent;
 const DANGER = THEME.bad;
 
-const NOTIFICATIONS: { key: keyof NotificationSettings; title: string; detail: string }[] = [
+// Copies the manager's team ID (to join leagues, share with friends or use
+// on other FPL sites). Shows a tick and "Copied" for a moment after.
+function CopyIdButton({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+  const copy = () => {
+    Clipboard.setStringAsync(id)
+      .then(() => {
+        setCopied(true);
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => setCopied(false), 1600);
+      })
+      // Couldn't reach the clipboard: nothing to say, the user can retry.
+      .catch(() => {});
+  };
+  return (
+    <Pressable
+      onPress={copy}
+      accessibilityRole="button"
+      accessibilityLabel={copied ? "Team ID copied" : `Copy team ID ${id}`}
+      accessibilityLiveRegion="polite"
+      hitSlop={10}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 3,
+        marginLeft: 6,
+        paddingHorizontal: 4,
+        paddingVertical: 2,
+        borderRadius: 6,
+        backgroundColor: pressed ? "rgba(255, 255, 255, 0.08)" : "transparent",
+      })}
+    >
+      <AppSymbol
+        name={
+          copied
+            ? { ios: "checkmark", android: "check", web: "check" }
+            : { ios: "doc.on.doc", android: "content_copy", web: "content_copy" }
+        }
+        color={copied ? GOOD : SOFT}
+        size={14}
+      />
+      {copied && <Text style={{ color: GOOD, fontSize: 11.5, fontWeight: "600" }}>Copied</Text>}
+    </Pressable>
+  );
+}
+
+const NOTIFICATIONS:{ key: keyof NotificationSettings; title: string; detail: string }[] = [
   { key: "deadline24h", title: "24 hours before the deadline", detail: "Time to plan transfers" },
   { key: "deadline1h", title: "1 hour before the deadline", detail: "A last reminder, naming any flagged starters" },
   { key: "news", title: "Squad news", detail: "Injuries, suspensions and returns for your players" },
+];
+
+// Sent by the Skippr server while matches are played (see liveAlerts.ts).
+const LIVE_ALERTS: { key: keyof NotificationSettings; title: string; detail: string }[] = [
+  { key: "liveStarted", title: "Players starting", detail: "When your players come on" },
+  { key: "liveGoals", title: "Goals and assists", detail: "Goals, assists and penalty saves, with points" },
+  { key: "liveCards", title: "Cards and mistakes", detail: "Bookings, red cards, own goals, missed penalties" },
+  { key: "liveFulltime", title: "Full time", detail: "The score and your players' points" },
+  { key: "liveBench", title: "Include bench players", detail: "Also tell me about players on my bench" },
 ];
 
 function Heading({ children }: { children: string }) {
@@ -154,11 +219,7 @@ export function MorePage({
       showsVerticalScrollIndicator={false}
     >
       {/* Account */}
-      <View
-        accessible
-        accessibilityLabel={`${teamName}, managed by ${managerName}, team ID ${entry}`}
-        style={{ flexDirection: "row", alignItems: "center", gap: 14 }}
-      >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
         <View
           style={{
             width: 48,
@@ -173,13 +234,17 @@ export function MorePage({
         >
           <Text style={{ color: SOFT, fontSize: 16, fontWeight: "700" }}>{initials(teamName)}</Text>
         </View>
+        {/* Not grouped for screen readers, so the copy button stays reachable. */}
         <View style={{ flex: 1 }}>
           <Text numberOfLines={1} style={{ color: INK, fontSize: 19, fontWeight: "700" }}>
             {teamName}
           </Text>
-          <Text numberOfLines={1} style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>
-            {`${managerName} · ID ${entry}`}
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2 }}>
+            <Text numberOfLines={1} style={{ flexShrink: 1, color: MUTED, fontSize: 13 }}>
+              {`${managerName} · ID ${entry}`}
+            </Text>
+            <CopyIdButton id={String(entry)} />
+          </View>
         </View>
       </View>
 
@@ -251,6 +316,39 @@ export function MorePage({
           );
         })}
       </Group>
+
+      {liveAlertsAvailable && (
+        <>
+          <Heading>Live match alerts</Heading>
+          <Group>
+            {LIVE_ALERTS.map((row, index) => {
+              const on = notifSettings[row.key] && notifPermission === "granted";
+              return (
+                <View key={row.key}>
+                  {index > 0 && <Divider />}
+                  <Item
+                    title={row.title}
+                    detail={row.detail}
+                    right={
+                      <Switch
+                        value={on}
+                        onValueChange={() => onToggleNotification(row.key)}
+                        accessibilityLabel={row.title}
+                        trackColor={{ false: "rgba(255, 255, 255, 0.16)", true: GOOD }}
+                        thumbColor="#ffffff"
+                        ios_backgroundColor="rgba(255, 255, 255, 0.16)"
+                      />
+                    }
+                  />
+                </View>
+              );
+            })}
+          </Group>
+          <Text style={{ color: MUTED, fontSize: 11.5, lineHeight: 16, marginTop: 6, marginLeft: 2 }}>
+            Sent while matches are played, a minute or two after FPL updates.
+          </Text>
+        </>
+      )}
 
       <Heading>Support</Heading>
       <Group>
