@@ -248,8 +248,8 @@ export function PlayerDetailsSheet({
                   contentFit="contain"
                   cachePolicy="memory-disk"
                   accessible={false}
-                  // Keeper art is drawn further out: enlarge it to match (head 67 vs 78).
-                  style={player.type === 1 ? { width: 70, height: 77, marginTop: 3 } : { width: 60, height: 66, marginTop: 4 }}
+                  // Every avatar shares one frame (360x400), keepers included.
+                  style={{ width: 59, height: 66, marginTop: 4 }}
                 />
               </View>
               <View style={{ flex: 1, paddingRight: 12 }}>

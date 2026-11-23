@@ -51,8 +51,8 @@ export const TEAM_AVATARS: Record<string, any> = {
   TOT: require("../assets/images/avatar-sm/Tot.png"),
 };
 
-// Goalkeepers wear their club's keeper kit (made from assets/images/gk-avatar
-// by scripts/make-gk-avatars.js).
+// Goalkeepers wear their club's keeper kit. Every avatar in avatar-sm is made
+// by scripts/make-card-avatars.js (from final-avatar and gk-avatar).
 export const GK_AVATARS: Record<string, any> = {
   ARS: require("../assets/images/avatar-sm/Ars-gk.png"),
   AVL: require("../assets/images/avatar-sm/Avl-gk.png"),
@@ -79,38 +79,20 @@ export const GK_AVATARS: Record<string, any> = {
 const NO_CLUB_AVATAR = require("../assets/images/avatar-sm/no-club.png");
 const SHIELD_CARD = require("../assets/images/card-shield.png");
 
-// The avatar images are all 320px tall but come in different widths, and the
-// player is drawn at a different size in each. Measured per file: image width
-// and the head's width in pixels. Used to show every player at the same size.
-const AVATAR_ART: Record<string, [width: number, head: number]> = {
-  CRY: [340, 74],
-  EVE: [320, 74],
-  FUL: [320, 74],
-  HUL: [320, 74],
-  LEE: [320, 70],
-  LIV: [287, 77],
-  MUN: [320, 70],
-  NEW: [287, 73],
-  NFO: [255, 69],
-  SUN: [287, 73],
-  TOT: [320, 70],
-};
-// Most avatars (ARS, AVL, BHA, BOU, BRE, CHE, COV, IPS, MCI) share this.
-const AVATAR_ART_STANDARD: [number, number] = [287, 78];
-const AVATAR_ART_NO_CLUB: [number, number] = [255, 71];
-// Every keeper avatar: drawn a little further out than the outfield ones.
-const AVATAR_ART_GK: [number, number] = [287, 67];
+// Every avatar shares one frame (360x400, the head the same size and in the
+// same place; see scripts/make-card-avatars.js), so one size fits them all.
+const AVATAR_ASPECT = 360 / 400;
 
-// Image size that draws the player as a standard avatar would be drawn at
-// `baseHeight`: same head size and same height for everyone.
-function avatarArtSize(team: string, baseHeight: number, goalkeeper = false) {
-  const [width, head] =
-    goalkeeper && team && GK_AVATARS[team]
-      ? AVATAR_ART_GK
-      : (AVATAR_ART[team] ?? (team && TEAM_AVATARS[team] ? AVATAR_ART_STANDARD : AVATAR_ART_NO_CLUB));
-  const height = Math.round(baseHeight * (AVATAR_ART_STANDARD[1] / head));
-  return { width: Math.round((height * width) / 320), height };
+// Image size for an avatar `height` tall.
+function avatarArtSize(height: number) {
+  return { width: Math.round(height * AVATAR_ASPECT), height: Math.round(height) };
 }
+// Card art: the avatar's height as a share of the card's width, and how far
+// it is shifted from the top of its area (a share of the card's face; the
+// image has a little empty space above the head). Larger scale = bigger head,
+// less shirt above the name plate.
+const CARD_AVATAR_SCALE = 1.12;
+const CARD_AVATAR_OFFSET = -0.045;
 const SHIELD_FADE = require("../assets/images/card-shield-fade.png");
 const ELITE_PATTERN = require("../assets/images/card-shield-elite-pattern.png");
 // Normal cards: the same texture in soft white (no gold, sparkles or shimmer).
@@ -194,9 +176,8 @@ export function preloadAvatars() {
 // The kit avatar in a round frame, for lists outside the pitch (the
 // transfer picker), matching the player details sheet.
 export function PlayerArt({ team, size, goalkeeper = false }: { team: string; size: number; goalkeeper?: boolean }) {
-  // Same per-club normalisation as the cards, so every club's avatar shows
-  // at the same scale: head and shoulders, cut off at the frame's bottom.
-  const art = avatarArtSize(team, size * 1.05, goalkeeper);
+  // Head and shoulders, cut off at the frame's bottom.
+  const art = avatarArtSize(size * 1.05);
   return (
     <View
       style={{
@@ -587,6 +568,9 @@ function PlayerAvatar({
   const clubFont = Math.max(7.5, Math.round(width * 0.105 * 2) / 2);
   const clubLine = Math.round(clubFont * 1.2);
   const clubTop = Math.round(face * 0.035);
+  // The club itself sits a little lower than the position, clear of the
+  // card's top edge (the stat under it moves down with it).
+  const clubDrop = Math.round(face * 0.04);
   // The name plate is the same dark strip with white lettering on every
   // card (the selection colour when selected).
   const plate = {
@@ -658,12 +642,11 @@ function PlayerAvatar({
             onLoad={reportSettled}
             onError={reportSettled}
             style={{
-              // Larger than the card, so head and shoulders fill it;
-              // centred, with the small rating tucked in the corner.
-              ...avatarArtSize(team, width * 1.52, goalkeeper),
-              // Raised (the image has empty space above the head) so more
-              // of the shirt shows before the fade.
-              marginTop: -Math.round(face * 0.07),
+              // About the card's width, so the whole shirt (sleeves
+              // included) shows and the kit, not the head, gives the card
+              // its identity. The head sits just under the card's top edge.
+              ...avatarArtSize(width * CARD_AVATAR_SCALE),
+              marginTop: Math.round(face * CARD_AVATAR_OFFSET),
               flexShrink: 0,
             }}
           />
@@ -784,7 +767,7 @@ function PlayerAvatar({
                   position: "absolute",
                   // Just under the position (left) or the club (right), which
                   // share a size and top edge.
-                  top: clubTop + clubLine + 3,
+                  top: clubTop + clubLine + 3 + (index === 1 ? clubDrop : 0),
                   opacity: SECONDARY_OPACITY,
                   ...(index === 0 ? { left: Math.round(width * 0.08) } : { right: Math.round(width * 0.08) }),
                   alignItems: index === 0 ? "flex-start" : "flex-end",
@@ -875,7 +858,7 @@ function PlayerAvatar({
                 allowFontScaling={false}
                 style={{
                   position: "absolute",
-                  top: clubTop,
+                  top: clubTop + clubDrop,
                   right: Math.round(width * 0.06),
                   textAlign: "right",
                   color: epic?.ink ?? "#ffffff",
