@@ -131,6 +131,10 @@ const POINTS_BAND_BOTTOM = 4;
 // a phone); this lifts them to the middle.
 const DIGIT_DROP = -0.04;
 // Points page: the band under every name, in one look (see CapsuleInfo).
+// The dark strip behind each player's name on the cards; the Points page's
+// points number sits on the same strip.
+const NAME_PLATE = { fill: "rgba(0, 0, 0, 0.62)", edge: "rgba(255, 255, 255, 0.14)" };
+
 const POINTS_PAGE_BAND = {
   fill: "rgba(255, 255, 255, 0.22)",
   ink: "#ffffff",
@@ -219,7 +223,7 @@ const BENCH_LABEL_HEIGHT = 13;
 // The gap between neighbouring cards: one fixed value for every row (a row
 // of five, a row of three, the bench), so the spacing always matches. Card
 // widths are worked out with it, so a row of five still fits.
-const MIN_GAP = 7;
+const MIN_GAP = 12;
 // Between the four bench cards.
 const BENCH_GAP = 20;
 // Stops pitch text from blowing out the layout at very large system font sizes.
@@ -327,6 +331,12 @@ function avatarBoxHeight(metrics: PitchMetrics, compact: boolean, benched: boole
 }
 
 const PitchMetricsContext = createContext<PitchMetrics>(computeMetrics(360));
+
+// Bench Boost is on for this gameweek (played, or chosen and not yet saved):
+// the bench counts, so its cards aren't dimmed (see PlayerCard).
+const BenchBoostContext = createContext(false);
+// Bench cards that don't count this gameweek are drawn at this opacity.
+const BENCH_OPACITY = 0.55;
 
 // Name plates: one font size for the whole pitch, bench included, so every
 // name is the same size, chosen so the longest name fits its card in full
@@ -574,8 +584,8 @@ function PlayerAvatar({
   // The name plate is the same dark strip with white lettering on every
   // card (the selection colour when selected).
   const plate = {
-    fill: "rgba(0, 0, 0, 0.62)",
-    edge: card?.highlight ?? "rgba(255, 255, 255, 0.14)",
+    fill: NAME_PLATE.fill,
+    edge: card?.highlight ?? NAME_PLATE.edge,
     ink: card?.highlight ?? "#ffffff",
   };
   const footerLayout = cardFooterLayout(footer);
@@ -987,15 +997,48 @@ function AvailabilityFlag({ flag }: { flag: Availability }) {
 }
 
 // Live gameweek: a projected automatic substitution.
+// A small up or down arrow made of two shapes (see AutoSubBadge).
+function DrawnArrow({ up, color }: { up: boolean; color: string }) {
+  // A triangle from borders: transparent sides, the coloured edge as its base.
+  const head = {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 4,
+    borderRightWidth: 4,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    ...(up ? { borderBottomWidth: 5, borderBottomColor: color } : { borderTopWidth: 5, borderTopColor: color }),
+  };
+  const stem = { width: 2, height: 5, backgroundColor: color };
+  return (
+    <View style={{ width: 8, height: 10, alignItems: "center" }}>
+      {up ? (
+        <>
+          <View style={head} />
+          <View style={stem} />
+        </>
+      ) : (
+        <>
+          <View style={stem} />
+          <View style={head} />
+        </>
+      )}
+    </View>
+  );
+}
+
 function AutoSubBadge({ kind }: { kind: "in" | "out" }) {
   const coming = kind === "in";
   return (
     <View
       accessible
       accessibilityLabel={coming ? "Coming on as an automatic substitute" : "Substituted out automatically"}
+      // Even sizes throughout (18 across, 16 inside the 1pt edge, a 12pt
+      // arrow: 2pt either side) and a radius of exactly half, so the arrow
+      // lands dead centre once sizes are rounded to the screen's pixels.
       style={{
-        width: 17,
-        height: 17,
+        width: 18,
+        height: 18,
         borderRadius: 9,
         alignItems: "center",
         justifyContent: "center",
@@ -1005,15 +1048,11 @@ function AutoSubBadge({ kind }: { kind: "in" | "out" }) {
         elevation: 3,
       }}
     >
-      <AppSymbol
-        name={
-          coming
-            ? { ios: "arrow.up", android: "arrow_upward", web: "arrow_upward" }
-            : { ios: "arrow.down", android: "arrow_downward", web: "arrow_downward" }
-        }
-        color={coming ? "#04210f" : "#ffffff"}
-        size={11}
-      />
+      {/* The arrow is drawn, not an icon: font arrows carry uneven space
+          around them, so they sit off centre whatever their box. A triangle
+          head (8 wide, 5 tall) and a stem (2 wide, 5 tall): 10 tall in the
+          16 inside, 3pt above and below, symmetric left to right. */}
+      <DrawnArrow up={coming} color={coming ? "#04210f" : "#ffffff"} />
     </View>
   );
 }
@@ -1390,11 +1429,13 @@ function CapsuleInfo({
     const pointsTone = { fill: dark.fill, ink: points < 0 ? "#ff7a90" : "#ffd400" };
     const fixtureText = current ? `${current.opponent} (${current.venue})` : "";
     if (r.minutes !== undefined) {
-      // Points view: points once he has played, or once his match is under
-      // way (0 until he scores; FPL's minutes lag the match), the opponent
-      // before kick-off, a dash if his match is over and he didn't play.
-      const matchOver = !!r.matchStarted && !!current?.finished;
-      if ((r.minutes ?? 0) > 0 || (r.matchStarted && !matchOver)) {
+      // Points view: his points once he has played; the opponent before
+      // kick-off; otherwise a dash, not 0: a player who doesn't get a minute
+      // scores nothing (a blank), whether his match is still on or over.
+      // FPL's minutes can lag a live match, but anyone who plays has points
+      // (at least 1 for appearing), so points other than 0 count as played.
+      const played = (r.minutes ?? 0) > 0 || points !== 0;
+      if (played) {
         // Just the number: the gold already says these are points.
         text = `${points}`;
         tone = pointsTone;
@@ -1630,15 +1671,15 @@ function CapsuleInfo({
                   : inCard && pointsChip
                   ? {
                       // Points page: the band under the name, the points
-                      // centred in it (colour: pointsBand above).
+                      // centred in it, on the same dark strip as the name
+                      // (square ends, thin edge); gold or red lettering.
                       flex: 1,
                       alignItems: "center",
                       justifyContent: "center",
-                      // Rounded like the name plate above it.
-                      borderRadius: 5,
-                      backgroundColor: pointsBand.fill,
-                      borderWidth: 1,
-                      borderColor: POINTS_PAGE_BAND.edge,
+                      borderRadius: 0,
+                      backgroundColor: NAME_PLATE.fill,
+                      borderWidth: 0.5,
+                      borderColor: NAME_PLATE.edge,
                     }
                   : inCard
                   ? {
@@ -1803,6 +1844,14 @@ function PlayerCard({
   const ownPoints = (r.displayPoints ?? 0) / Math.max(1, r.multiplier ?? 1);
   const isStarted = Boolean(currentFx?.started || currentFx?.finished);
   const isBenched = r.pos > 11;
+  // Home and Points: a bench player's card is dimmed, as his points don't
+  // count, unless Bench Boost is on or he counts anyway (FPL's multiplier
+  // above 0, as with Bench Boost on the Points page, or coming on as an
+  // automatic substitute for a starter who didn't play). Transfers keeps
+  // every card full, as any of them can be sold.
+  const benchBoost = useContext(BenchBoostContext);
+  const benchCounts = benchBoost || (r.multiplier ?? 0) > 0 || r.autoSub === "in";
+  const benchDimmed = isBenched && !showPrice && !benchCounts;
   const isBenchedGK = isBenched && r.type === 1;
   const pitchMetrics = useContext(PitchMetricsContext);
   const { cardWidth, scale } = pitchMetrics;
@@ -1863,7 +1912,14 @@ function PlayerCard({
                 justifyContent: "center",
               }}
             >
-              <View style={{ opacity: r.autoSub === "out" ? 0.45 : 1 }}>
+              <View
+                style={{
+                  // A starter coming off for a substitute fades most; a
+                  // bench player who doesn't count is dimmed (full while
+                  // selected, so a substitution still reads clearly).
+                  opacity: r.autoSub === "out" ? 0.45 : benchDimmed && !isHighlight ? BENCH_OPACITY : 1,
+                }}
+              >
                 <PlayerAvatar
                   team={r.team}
                   benched={isBenched}
@@ -2246,6 +2302,7 @@ export function Pitch({
   onBackgroundPress,
   overlay,
   layoutId,
+  benchBoost = false,
   cardStats = NO_STATS,
 }: {
   picks: Row[];
@@ -2265,6 +2322,8 @@ export function Pitch({
   // Which screen this pitch is on, so its measured size is remembered apart
   // from other screens (default: "lineup", or "transfers" with prices).
   layoutId?: string;
+  // Bench Boost is on for this gameweek: bench cards aren't dimmed.
+  benchBoost?: boolean;
   // Home: the extra figures shown on each card (see cardStats.ts).
   cardStats?: CardStatKey[];
 }) {
@@ -2430,6 +2489,7 @@ export function Pitch({
       >
       <CardStatsContext.Provider value={cardStats}>
       <AvatarSettledContext.Provider value={onAvatarSettled}>
+      <BenchBoostContext.Provider value={benchBoost}>
       <Pressable
         onPress={onBackgroundPress}
         onLayout={(event) => {
@@ -2570,6 +2630,7 @@ export function Pitch({
           }
         />
       </Pressable>
+      </BenchBoostContext.Provider>
       </AvatarSettledContext.Provider>
       </CardStatsContext.Provider>
       </NameFontContext.Provider>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Gameweek, MemberSquad, PlayerFixture, Row } from "./fpl";
@@ -12,6 +12,8 @@ import { PlayerMatchSheet } from "./PlayerMatchSheet";
 import { CameraIcon, SquadSnapshot } from "./SquadSnapshot";
 import type { PlayerMatchTarget } from "./PlayerMatchSheet";
 import { PITCH_PANEL, ScreenBackground, THEME } from "./theme";
+import { loadEstimateSnapshot } from "./estimateSnapshots";
+import { rebuildEstimates } from "./estimateRebuild";
 
 type Props = {
   title: string;
@@ -31,7 +33,49 @@ type Props = {
   // Pull down to reload this gameweek.
   refreshing?: boolean;
   onRefresh?: () => void;
+  // The signed-in user's team: on its own page, a line compares the
+  // estimates saved before the deadline with the points scored.
+  ownEntry?: number;
 };
+
+// How accurate Skippr's estimates were for the players who counted: the
+// share whose points came within 2 of the estimate (each player checked on
+// his own, so one big miss can't hide behind another's surprise). Uses the
+// estimates saved before the deadline, or rebuilt ones. Shown once the
+// gameweek is over, and only when most of the players have an estimate.
+function EstimateCheck({
+  counted,
+  estimates,
+  finished,
+}: {
+  counted: { id: number; points: number }[];
+  estimates: Record<number, number>;
+  finished: boolean;
+}) {
+  const matched = counted.filter((pick) => estimates[pick.id] != null);
+  if (!finished || matched.length < 8) return null;
+  const close = matched.filter((pick) => Math.abs(estimates[pick.id] - pick.points) <= 2).length;
+  const percent = Math.round((100 * close) / matched.length);
+  return (
+    <View
+      accessible
+      accessibilityLabel={`Skippr's estimates were ${percent}% accurate this gameweek: within 2 points for ${close} of your ${matched.length} players.`}
+      style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 }}
+    >
+      <AppSymbol name={{ ios: "sparkles", android: "auto_awesome", web: "auto_awesome" }} color="#f2c14e" size={12} />
+      <Text numberOfLines={1} style={{ flexShrink: 1, color: THEME.muted, fontSize: 11 }}>
+        {"Skippr's estimates were "}
+        <Text style={{ color: THEME.ink, fontWeight: "700" }}>{`${percent}% accurate`}</Text>
+        {" this gameweek"}
+      </Text>
+    </View>
+  );
+}
+
+// The estimate accuracy line on the user's own Points page (EstimateCheck).
+// Hidden for now, to be revealed later: set to true to show it again. The
+// estimates keep being saved before each deadline (index.tsx) meanwhile.
+const SHOW_ESTIMATE_ACCURACY = false;
 
 const GREEN = THEME.accent;
 const DARK_GREEN = THEME.bg;
@@ -82,6 +126,7 @@ export function ManagerHistory({
   onViewEntry,
   refreshing = false,
   onRefresh,
+  ownEntry,
 }: Props) {
   const insets = useSafeAreaInsets();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -96,6 +141,7 @@ export function ManagerHistory({
   // The player whose match is open (tapped on the pitch).
   const [openPlayer, setOpenPlayer] = useState<PlayerMatchTarget | null>(null);
   const ownData = data?.entry === entry ? data : null;
+  const [estimates, setEstimates] = useState<{ key: string; est: Record<number, number> | null } | null>(null);
   // While another gameweek loads, keep the previous one on screen (dimmed)
   // instead of blanking the pitch and popping the new one in.
   const stale = !!ownData && ownData.event !== selectedEvent;
@@ -103,6 +149,39 @@ export function ManagerHistory({
   const shownEvent = currentData?.event ?? selectedEvent;
   const selectedGwData = gameweeks.find((gw) => gw.id === shownEvent);
   const isLive = Boolean(selectedGwData?.isCurrent && !selectedGwData.finished);
+  const isOwnTeam = ownEntry != null && ownEntry === entry;
+  const estimateKey = `${entry}:${shownEvent}`;
+  // The estimates saved before the deadline; for a gameweek without them
+  // (played before saving began, or the app wasn't opened in time), rebuilt
+  // from the players' match histories as they stood at the deadline.
+  const deadline = selectedGwData?.deadlineTime ?? null;
+  const squadPlayers = currentData && currentData.event === shownEvent ? currentData.picks : null;
+  const squadKey = squadPlayers?.map((pick) => pick.id).join(",") ?? "";
+  useEffect(() => {
+    if (!SHOW_ESTIMATE_ACCURACY || !isOwnTeam || !squadPlayers) return;
+    let active = true;
+    loadEstimateSnapshot(entry, shownEvent)
+      .then((saved) =>
+        saved ??
+        (deadline
+          ? rebuildEstimates(
+              squadPlayers.map((pick) => ({ id: pick.id, type: pick.elementType, teamId: pick.teamId })),
+              shownEvent,
+              deadline,
+              fixturesByTeam ?? {},
+            )
+          : null),
+      )
+      .then((est) => {
+        if (active) setEstimates({ key: estimateKey, est });
+      });
+    return () => {
+      active = false;
+    };
+    // `squadKey` stands for `squadPlayers`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOwnTeam, entry, shownEvent, estimateKey, squadKey, deadline, fixturesByTeam]);
+  const shownEstimates = isOwnTeam && estimates?.key === estimateKey ? estimates.est : null;
   // Projected auto-subs and the armband, as FPL will
   // settle them. For a finished gameweek these match what FPL applied.
   const live = currentData
@@ -335,6 +414,15 @@ export function ManagerHistory({
             </View>
           )}
         </View>
+        {SHOW_ESTIMATE_ACCURACY && !!shownEstimates && !!live && !stale && (
+          <EstimateCheck
+            counted={live.picks
+              .filter((pick) => pick.effectiveMultiplier > 0)
+              .map((pick) => ({ id: pick.id, points: pick.livePoints }))}
+            estimates={shownEstimates}
+            finished={Boolean(selectedGwData?.finished)}
+          />
+        )}
       </View>
 
       <PlayerMatchSheet player={openPlayer} event={shownEvent} onClose={() => setOpenPlayer(null)} />

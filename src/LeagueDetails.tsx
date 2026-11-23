@@ -361,8 +361,8 @@ export function LeagueDetails({
                           <Text
                             style={{
                               minWidth: 18,
-                              color: UI.ink,
-                              fontSize: 14,
+                              color: isUser ? UI.ink : UI.dim,
+                              fontSize: TABLE.rank,
                               fontWeight: isUser ? "800" : "500",
                               fontVariant: ["tabular-nums"],
                             }}
@@ -376,7 +376,7 @@ export function LeagueDetails({
                             {row.entry_name || row.player_name}
                           </Text>
                           {!!row.player_name && (
-                            <Text numberOfLines={1} style={TABLE.sub}>
+                            <Text numberOfLines={1} style={isUser ? { ...TABLE.sub, color: UI.soft } : TABLE.sub}>
                               {row.player_name}
                             </Text>
                           )}
@@ -388,7 +388,9 @@ export function LeagueDetails({
                             <Text style={cell(24, "center")}>{row.matches_lost ?? 0}</Text>
                             {/* Points scored in this league's matches (since it
                                 started): separates teams level on Pts. */}
-                            <Text style={cell(46)}>{row.points_for == null ? "—" : formatNumber(row.points_for)}</Text>
+                            <Text style={cell(46)}>
+                              {row.points_for == null ? "—" : formatNumber(row.points_for)}
+                            </Text>
                             <Text style={cell(40, "right", true)}>{row.total}</Text>
                           </>
                         ) : (
@@ -697,10 +699,26 @@ function H2hMatches({
                   <Text numberOfLines={1} style={{ ...TABLE.sub, textAlign: align }}>
                     {isAverage ? "League average" : managerName ? teamName : ""}
                   </Text>
-                  {/* While the gameweek is live: players with a match still to come. */}
-                  {toPlay != null && (
-                    <Text numberOfLines={1} style={{ color: UI.muted, fontSize: 11.5, marginTop: 2, textAlign: align }}>
-                      {toPlay > 0 ? `${toPlay} to play` : "All played"}
+                  {/* While the gameweek is live: players with a match still to
+                      come. The line is kept (blank) on every side from the
+                      start, so the cards don't grow when the live scores
+                      arrive a moment after the matches. */}
+                  {status === "live" && (
+                    <Text
+                      numberOfLines={1}
+                      style={{ color: UI.muted, fontSize: 10, lineHeight: 13, marginTop: 2, textAlign: align }}
+                    >
+                      {toPlay == null ? (
+                        " "
+                      ) : toPlay > 0 ? (
+                        <>
+                          {/* The count in yellow, so it stands out. */}
+                          <Text style={{ color: UI.gold, fontWeight: "700" }}>{toPlay}</Text>
+                          {" to play"}
+                        </>
+                      ) : (
+                        "All played"
+                      )}
                     </Text>
                   )}
                 </>
@@ -722,10 +740,10 @@ function H2hMatches({
             };
 
             const scoreText = (own: number, other: number) => ({
-              color: played && own > other ? UI.ink : played ? UI.soft : UI.muted,
-              fontSize: 17,
+              color: played && own >= other ? UI.ink : UI.muted,
+              fontSize: 14,
               fontWeight: "800" as const,
-              minWidth: 24,
+              minWidth: 22,
               textAlign: "center" as const,
               fontVariant: ["tabular-nums" as const],
             });
@@ -735,10 +753,10 @@ function H2hMatches({
                 key={match.id ?? `match-${index}`}
                 accessible={false}
                 style={{
-                  marginTop: index === 0 ? 0 : 10,
+                  marginTop: index === 0 ? 0 : 8,
                   paddingHorizontal: 12,
-                  paddingTop: 16,
-                  paddingBottom: 12,
+                  paddingTop: 12,
+                  paddingBottom: 9,
                   borderRadius: 16,
                   ...(isUserMatch ? MINE_BAND : { backgroundColor: UI.surface }),
                 }}
@@ -752,8 +770,8 @@ function H2hMatches({
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
-                      paddingHorizontal: 10,
-                      height: 38,
+                      paddingHorizontal: 8,
+                      height: 32,
                       borderRadius: 9,
                       backgroundColor: THEME.bg,
                       borderWidth: 1,
@@ -761,13 +779,13 @@ function H2hMatches({
                     }}
                   >
                     <Text style={scoreText(p1, p2)}>{played ? p1 : "–"}</Text>
-                    <View style={{ width: 1, height: 18, marginHorizontal: 8, backgroundColor: "rgba(255, 255, 255, 0.18)" }} />
+                    <View style={{ width: 1, height: 15, marginHorizontal: 7, backgroundColor: "rgba(255, 255, 255, 0.18)" }} />
                     <Text style={scoreText(p2, p1)}>{played ? p2 : "–"}</Text>
                   </View>
                   {side(match.entry_2_entry, match.entry_2_name, match.entry_2_player_name, "left")}
                 </View>
                 {/* Under the score: how the user's match stands, and knockouts. */}
-                <Text style={{ textAlign: "center", fontSize: 12, marginTop: 10, color: UI.muted }}>
+                <Text style={{ textAlign: "center", fontSize: 10.5, marginTop: 8, color: UI.muted }}>
                   {result ? <Text style={{ color: result.color, fontWeight: "700" }}>{result.text}</Text> : `Gameweek ${shownEvent}`}
                   {match.is_knockout && <Text style={{ color: UI.gold, fontWeight: "700" }}>{"  ·  Knockout"}</Text>}
                 </Text>

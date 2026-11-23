@@ -13,6 +13,9 @@ export const LEAGUE_UI = {
   ink: THEME.ink,
   soft: THEME.soft,
   muted: THEME.muted,
+  // Between soft and muted: supporting figures in tables (rank, GW points),
+  // readable but quieter than the team name and total.
+  dim: "#a3a9b9",
   good: THEME.good,
   bad: THEME.bad,
   accent: THEME.accent,
@@ -32,14 +35,20 @@ export const MINE_BAND = {
   borderColor: "rgba(0, 217, 130, 0.32)",
 } as const;
 
-// Table type scale, shared by every league table.
+// Table type scale, shared by every league table (classic, head-to-head,
+// live) and the head-to-head match cards. Kept small so long team names fit
+// and more rows show at once.
+// Emphasis: only the team name and the total are bright; the rank and other
+// figures are dimmer, the manager name dimmer still, so each row reads
+// name -> total at a glance. (The user's own row is brightened where drawn.)
 export const TABLE = {
-  header: { color: UI.muted, fontSize: 12, fontWeight: "600" as const },
-  name: { color: UI.ink, fontSize: 13.5, fontWeight: "700" as const },
-  sub: { color: UI.soft, fontSize: 12.5, marginTop: 2 },
-  figure: { color: UI.soft, fontSize: 13.5, fontVariant: ["tabular-nums" as const] },
-  total: { color: UI.ink, fontSize: 13.5, fontWeight: "800" as const, fontVariant: ["tabular-nums" as const] },
-  rowPaddingV: 13,
+  header: { color: UI.muted, fontSize: 10.5, fontWeight: "600" as const },
+  name: { color: UI.ink, fontSize: 12, fontWeight: "700" as const },
+  sub: { color: UI.muted, fontSize: 10.5, marginTop: 1 },
+  figure: { color: UI.dim, fontSize: 12, fontVariant: ["tabular-nums" as const] },
+  total: { color: UI.ink, fontSize: 12, fontWeight: "800" as const, fontVariant: ["tabular-nums" as const] },
+  rank: 12,
+  rowPaddingV: 10,
 };
 
 // Rank movement: a small round badge, ▲ green, ▼ red, or a dash.
@@ -227,13 +236,13 @@ export function Stats({
             borderLeftColor: UI.line,
           }}
         >
-          <Text style={{ color: UI.muted, fontSize: compact ? 10.5 : 11, fontWeight: "600" }}>{item.label}</Text>
+          <Text style={{ color: UI.muted, fontSize: compact ? 9.5 : 11, fontWeight: "600" }}>{item.label}</Text>
           <Text
             numberOfLines={1}
             adjustsFontSizeToFit
             style={{
               color: item.color ?? UI.ink,
-              fontSize: compact ? 15.5 : 19,
+              fontSize: compact ? 13.5 : 19,
               fontWeight: "700",
               marginTop: compact ? 2 : 3,
               fontVariant: ["tabular-nums"],
@@ -241,7 +250,9 @@ export function Stats({
           >
             {item.value}
           </Text>
-          {!!item.note && <Text style={{ color: item.noteColor ?? UI.muted, fontSize: 11, marginTop: 1 }}>{item.note}</Text>}
+          {!!item.note && (
+            <Text style={{ color: item.noteColor ?? UI.muted, fontSize: compact ? 10 : 11, marginTop: 1 }}>{item.note}</Text>
+          )}
         </View>
       ))}
     </View>

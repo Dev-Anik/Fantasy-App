@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "./AppSymbol";
-import { FOOTER_HEIGHT, ScreenBackground, THEME } from "./theme";
+import { FDR_COLORS, FOOTER_HEIGHT, ScreenBackground, THEME } from "./theme";
 
 const BG = THEME.bg;
 const SURFACE = THEME.surface;
@@ -15,14 +15,8 @@ const SOFT = THEME.soft;
 const MUTED = THEME.muted;
 const LAST_GAMEWEEK = 38;
 
-// FPL's own difficulty colours.
-const FDR: Record<number, { fill: string; ink: string; label: string }> = {
-  1: { fill: "#375523", ink: "#ffffff", label: "Very easy" },
-  2: { fill: "#01fc7a", ink: "#06200f", label: "Easy" },
-  3: { fill: "#e7e7e7", ink: "#1b1f1d", label: "Average" },
-  4: { fill: "#ff1751", ink: "#ffffff", label: "Hard" },
-  5: { fill: "#80072d", ink: "#ffffff", label: "Very hard" },
-};
+// FPL's own difficulty colours (shared with the Insights panel).
+const FDR = FDR_COLORS;
 
 const SPANS = [3, 5, 8] as const;
 const TEAM_COLUMN = 50;

@@ -81,6 +81,9 @@ import { loadRememberedLogin, pauseAutoSignIn } from "../rememberedLogin";
 import { AnimatedScreen, LoadingVeil } from "../AnimatedScreen";
 import { Pitch, preloadAvatars } from "../Pitch";
 import { PlayerDetailsSheet } from "../PlayerDetailsSheet";
+import { ScoutPanel } from "../ScoutPanel";
+import { estimatePoints, teamXgcFromElements, withCleanSheetData } from "../gameweekAdvice";
+import { saveEstimateSnapshot } from "../estimateSnapshots";
 import { PlayerPicker } from "../PlayerPicker";
 import { SeasonInsights } from "../SeasonInsights";
 import {
@@ -280,6 +283,9 @@ const formatDeadlineDate = (isoString?: string | null) => {
   }
 };
 
+// A crash while rendering shows a "Something went wrong / Try again" screen
+// instead of a blank one (Expo Router wraps the route in this boundary).
+export { ErrorScreen as ErrorBoundary } from "../ErrorScreen";
 
 export default function Index() {
   const insets = useSafeAreaInsets();
@@ -352,6 +358,8 @@ export default function Index() {
   // Extra figures on the home pitch's cards, chosen in "Card info" and saved.
   const [cardStats, setCardStats] = useState<CardStatKey[]>([]);
   const [showCardInfo, setShowCardInfo] = useState(false);
+  // The Insights panel on Home (slides in from the right; see ScoutPanel).
+  const [scoutOpen, setScoutOpen] = useState(false);
   // The manager's overall rank after each gameweek (public history), for the
   // movement beside the rank on the home screen. Read again when the rank
   // changes (a new gameweek, or FPL updating the live rank).
@@ -484,6 +492,28 @@ export default function Index() {
   // FPL's full player records and club short names, for the player profile.
   const [elements, setElements] = useState<Record<number, FplElement>>({});
   const [teamNames, setTeamNames] = useState<Record<number, string>>({});
+  // Each club's expected goals conceded per 90, for the clean sheet part of
+  // the points estimate (Home cards, Chips & captain, Insights).
+  const teamXgc = useMemo(
+    () => teamXgcFromElements(Object.values(elements) as Parameters<typeof teamXgcFromElements>[0]),
+    [elements],
+  );
+
+  // Before each deadline, keep the estimates for the saved squad on the
+  // phone, so the Points page can later show how close they came. Saved again
+  // whenever the squad or FPL's data changes, until the deadline passes.
+  useEffect(() => {
+    if (!squad || Object.keys(elements).length === 0) return;
+    const deadline = squad.gameweeks.find((gw) => gw.id === squad.gw)?.deadlineTime;
+    if (!deadline || Date.now() >= Date.parse(deadline)) return;
+    const est: Record<number, number> = {};
+    squad.picks.forEach((row) => {
+      const latest = playerStatus[row.id];
+      const full = withCleanSheetData(latest ? { ...row, ...latest } : row, elements, teamXgc);
+      est[row.id] = Math.round(estimatePoints(full, squad.gw) * 10) / 10;
+    });
+    saveEstimateSnapshot(squad.entry, squad.gw, est);
+  }, [squad, elements, teamXgc, playerStatus]);
   // The last read of FPL's player data failed (shown in the player sheet).
   const [elementsFailed, setElementsFailed] = useState(false);
   // Reads FPL's player data now; `force` skips the few-minutes throttle.
@@ -2176,9 +2206,9 @@ export default function Index() {
     });
     return base.map((row) => {
       const inn = incoming.get(row.id);
-      return inn ? { ...inn, pos: row.pos, cap: row.cap, vice: row.vice } : row;
+      return withCleanSheetData(inn ? { ...inn, pos: row.pos, cap: row.cap, vice: row.vice } : row, elements, teamXgc);
     });
-  }, [squad, draft, tdraft]);
+  }, [squad, draft, tdraft, elements, teamXgc]);
 
   // Squad value at today's prices: the 15 players' current prices added up
   // (the bank not included), with any pending transfers made. The same
@@ -2573,9 +2603,9 @@ export default function Index() {
     const rows = mode === "transfers" ? tdraft : draft;
     return rows.map((row) => {
       const latest = playerStatus[row.id];
-      return latest ? { ...row, ...latest } : row;
+      return withCleanSheetData(latest ? { ...row, ...latest } : row, elements, teamXgc);
     });
-  }, [mode, tdraft, draft, playerStatus]);
+  }, [mode, tdraft, draft, playerStatus, elements, teamXgc]);
   const selectedPlayer =
     selectedPos === null
       ? null
@@ -3189,6 +3219,8 @@ export default function Index() {
                     }}
                     onBackgroundPress={() => setSelectedPos(null)}
                     cardStats={shownCardStats}
+                    // Bench Boost played or chosen: the bench counts, so it isn't dimmed.
+                    benchBoost={(pendingChip ?? squad.chip) === "bboost"}
                     overlay={
                       <View
                         pointerEvents="box-none"
@@ -3269,6 +3301,46 @@ export default function Index() {
                         >
                           <CameraIcon color={THEME.ink} size={18} />
                         </Pressable>
+                        {/* Top right, left of card info (Home only): the
+                            Insights panel, which slides in from the right.
+                            Up here it stays clear of every player card. */}
+                        {mode === "lineup" && (
+                          <Pressable
+                            onPress={() => {
+                              setSelectedPos(null);
+                              setPlayerSheetOpen(false);
+                              setShowChipMenu(false);
+                              setScoutOpen(true);
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Insights: facts on the coming gameweek"
+                            style={({ pressed }) => ({
+                              position: "absolute",
+                              top: 8,
+                              right: 54,
+                              zIndex: 10,
+                              width: 38,
+                              height: 38,
+                              borderRadius: 19,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              borderWidth: 1,
+                              borderColor: "rgba(242, 193, 78, 0.5)",
+                              backgroundColor: pressed ? THEME.surfaceRaised : THEME.surface,
+                              elevation: 5,
+                              shadowColor: "#000",
+                              shadowOpacity: 0.3,
+                              shadowRadius: 6,
+                              shadowOffset: { width: 0, height: 2 },
+                            })}
+                          >
+                            <AppSymbol
+                              name={{ ios: "sparkles", android: "auto_awesome", web: "auto_awesome" }}
+                              color="#f2c14e"
+                              size={18}
+                            />
+                          </Pressable>
+                        )}
                         {/* Top Left Chip Button */}
                         <View
                           pointerEvents="box-none"
@@ -3561,6 +3633,18 @@ export default function Index() {
       )}
 
       {stage === "squad" && squad && (
+        <ScoutPanel
+          open={scoutOpen}
+          onClose={() => setScoutOpen(false)}
+          elements={elements}
+          teamNames={teamNames}
+          fixturesByTeam={squad.fixturesByTeam ?? {}}
+          squad={shownPicks}
+          event={squad.gw}
+        />
+      )}
+
+      {stage === "squad" && squad && (
         <View
           pointerEvents="box-none"
           style={{
@@ -3704,6 +3788,7 @@ export default function Index() {
             title={activeMember.teamName}
             managerName={activeMember.managerName}
             entry={activeMember.entry}
+            ownEntry={squad.entry}
             gameweeks={squad.gameweeks.filter(
               (gameweek) => gameweek.finished || gameweek.isCurrent,
             )}

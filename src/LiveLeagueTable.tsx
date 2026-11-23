@@ -129,7 +129,7 @@ export function LiveLeagueTable({
               >
                 <View style={{ width: 54, flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <Text
-                    style={{ minWidth: 18, color: UI.ink, fontSize: 14, fontWeight: isMe ? "800" : "500", fontVariant: ["tabular-nums"] }}
+                    style={{ minWidth: 18, color: isMe ? UI.ink : UI.dim, fontSize: TABLE.rank, fontWeight: isMe ? "800" : "500", fontVariant: ["tabular-nums"] }}
                   >
                     {formatNumber(entry.liveRank)}
                   </Text>
@@ -163,7 +163,7 @@ export function LiveLeagueTable({
                             C
                           </Text>
                         </View>
-                        <Text numberOfLines={1} style={{ ...TABLE.sub, marginTop: 0, flexShrink: 1 }}>
+                        <Text numberOfLines={1} style={{ ...TABLE.sub, ...(isMe ? { color: UI.soft } : null), marginTop: 0, flexShrink: 1 }}>
                           {entry.captain}
                         </Text>
                       </>
@@ -172,7 +172,7 @@ export function LiveLeagueTable({
                 </View>
                 <View style={{ width: 44, alignItems: "flex-end" }}>
                   <Text style={TABLE.figure}>{entry.gwPoints}</Text>
-                  {entry.hits > 0 && <Text style={{ color: UI.bad, fontSize: 11, fontVariant: ["tabular-nums"] }}>{`−${entry.hits}`}</Text>}
+                  {entry.hits > 0 && <Text style={{ color: UI.bad, fontSize: 10, fontVariant: ["tabular-nums"] }}>{`−${entry.hits}`}</Text>}
                 </View>
                 <Text style={{ width: 62, textAlign: "right", ...TABLE.total }}>{formatNumber(entry.liveTotal)}</Text>
               </Pressable>

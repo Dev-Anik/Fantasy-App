@@ -5,6 +5,8 @@ import * as Device from "expo-device";
 import * as Clipboard from "expo-clipboard";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import type { SymbolViewProps } from "expo-symbols";
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { AppSymbol } from "./AppSymbol";
 import type { NotificationSettings, PermissionState } from "./notifications";
 import { SUPPORT_EMAIL } from "./appInfo";
@@ -92,11 +94,13 @@ function Heading({ children }: { children: string }) {
   return (
     <Text
       accessibilityRole="header"
+      // Grey, not the accent: a label for the group, quieter than the rows
+      // (green is kept for meaning: on, good, yours).
       style={{
-        color: THEME.accent,
-        fontSize: 11.5,
-        fontWeight: "500",
-        letterSpacing: 2,
+        color: MUTED,
+        fontSize: 11,
+        fontWeight: "600",
+        letterSpacing: 1.4,
         textTransform: "uppercase",
         marginTop: 28,
         marginBottom: 8,
@@ -112,18 +116,44 @@ function Group({ children }: { children: ReactNode }) {
   return <View style={{ backgroundColor: SURFACE, borderRadius: 12, overflow: "hidden" }}>{children}</View>;
 }
 
-function Divider() {
-  return <View style={{ height: 1, marginLeft: 16, backgroundColor: LINE }} />;
+// Inset rows with an icon tile further, so the line starts under the text.
+function Divider({ inset = 16 }: { inset?: number }) {
+  return <View style={{ height: 1, marginLeft: inset, backgroundColor: LINE }} />;
+}
+const ICON_INSET = 16 + 34 + 12;
+
+// A coloured icon tile at the start of a row: marks the app's features
+// (Insights) apart from settings, and gives the eye something to find.
+type ItemIcon = { name: SymbolViewProps["name"]; tint: string };
+
+function IconTile({ icon }: { icon: ItemIcon }) {
+  return (
+    <View
+      style={{
+        width: 34,
+        height: 34,
+        borderRadius: 9,
+        marginRight: 12,
+        alignItems: "center",
+        justifyContent: "center",
+        // The tint at low strength behind the icon in full colour.
+        backgroundColor: `${icon.tint}26`,
+      }}
+    >
+      <AppSymbol name={icon.name} color={icon.tint} size={18} />
+    </View>
+  );
 }
 
-// One line of a list: a title, an optional line under it, and something on
-// the right (a chevron, a switch or a value).
+// One line of a list: an optional icon, a title, an optional line under it,
+// and something on the right (a chevron, a switch or a value).
 function Item({
   title,
   detail,
   right,
   onPress,
   color = INK,
+  icon,
   accessibilityLabel,
 }: {
   title: string;
@@ -131,13 +161,15 @@ function Item({
   right?: ReactNode;
   onPress?: () => void;
   color?: string;
+  icon?: ItemIcon;
   accessibilityLabel?: string;
 }) {
   const body = (
     <>
+      {!!icon && <IconTile icon={icon} />}
       <View style={{ flex: 1, paddingRight: 12 }}>
-        <Text style={{ color, fontSize: 15, fontWeight: "500" }}>{title}</Text>
-        {!!detail && <Text style={{ color: MUTED, fontSize: 12.5, marginTop: 2, lineHeight: 17 }}>{detail}</Text>}
+        <Text style={{ color, fontSize: 15, fontWeight: icon ? "600" : "500" }}>{title}</Text>
+        {!!detail && <Text style={{ color: MUTED, fontSize: 12, marginTop: 2, lineHeight: 16 }}>{detail}</Text>}
       </View>
       {right}
     </>
@@ -153,6 +185,148 @@ function Item({
     >
       {body}
     </Pressable>
+  );
+}
+
+type SwitchRow = { key: keyof NotificationSettings; title: string; detail: string };
+
+// Every notification switch (deadline reminders and live match alerts) in one
+// card that starts closed, showing only how many are on, so the More page
+// isn't a long list of switches. Blocked notifications are always shown.
+function NotificationsSection({
+  settings,
+  permission,
+  onToggle,
+  onOpenSettings,
+}: {
+  settings: NotificationSettings;
+  permission: PermissionState;
+  onToggle: (key: keyof NotificationSettings) => void;
+  onOpenSettings: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Opening and closing: the switches' height grows from 0 to their natural
+  // height (measured below) while they fade in, and the arrow turns over.
+  // Animating the height moves the sections below smoothly too.
+  const [bodyHeight, setBodyHeight] = useState(0);
+  const progress = useSharedValue(0);
+  useEffect(() => {
+    progress.value = withTiming(open ? 1 : 0, { duration: 260, easing: Easing.out(Easing.cubic) });
+  }, [open, progress]);
+  const bodyStyle = useAnimatedStyle(() => ({ height: progress.value * bodyHeight, opacity: progress.value }));
+  const arrowStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${progress.value * 180}deg` }] }));
+  const live = liveAlertsAvailable ? LIVE_ALERTS : [];
+  const isOn = (row: SwitchRow) => settings[row.key] && permission === "granted";
+  // "Include bench players" changes other alerts rather than being one.
+  const counted = [...NOTIFICATIONS, ...live].filter((row) => row.key !== "liveBench");
+  const onCount = counted.filter(isOn).length;
+  const summary =
+    permission === "denied"
+      ? "Blocked in your phone's settings"
+      : onCount === 0
+        ? "All off"
+        : `${onCount} of ${counted.length} on`;
+
+  const switchRow = (row: SwitchRow, index: number) => (
+    <View key={row.key}>
+      {index > 0 && <Divider />}
+      <Item
+        title={row.title}
+        detail={row.detail}
+        right={
+          <Switch
+            value={isOn(row)}
+            onValueChange={() => onToggle(row.key)}
+            accessibilityLabel={row.title}
+            trackColor={{ false: "rgba(255, 255, 255, 0.16)", true: GOOD }}
+            thumbColor="#ffffff"
+            ios_backgroundColor="rgba(255, 255, 255, 0.16)"
+          />
+        }
+      />
+    </View>
+  );
+
+  return (
+    <>
+      <Heading>Notifications</Heading>
+      <Group>
+        {permission === "denied" && (
+          <>
+            <Item
+              title="Notifications are blocked"
+              detail="Allow them for Skippr in your phone's settings."
+              color="#f2c14e"
+              right={<Chevron />}
+              onPress={onOpenSettings}
+            />
+            <Divider />
+          </>
+        )}
+        <Pressable
+          onPress={() => setOpen((value) => !value)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          accessibilityLabel={`Notification settings, ${summary}`}
+          style={({ pressed }) => ({
+            flexDirection: "row",
+            alignItems: "center",
+            paddingHorizontal: 16,
+            paddingVertical: 13,
+            backgroundColor: pressed ? "rgba(255, 255, 255, 0.04)" : "transparent",
+          })}
+        >
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={{ color: INK, fontSize: 15, fontWeight: "500" }}>Reminders and alerts</Text>
+            <Text style={{ color: MUTED, fontSize: 12, marginTop: 2, lineHeight: 16 }}>{summary}</Text>
+          </View>
+          <Animated.View style={arrowStyle}>
+            <AppSymbol name={{ ios: "chevron.down", android: "expand_more", web: "expand_more" }} color={MUTED} size={18} />
+          </Animated.View>
+        </Pressable>
+        <Animated.View
+          style={[{ overflow: "hidden" }, bodyStyle]}
+          // Closed: out of reach of taps and screen readers.
+          pointerEvents={open ? "auto" : "none"}
+          accessibilityElementsHidden={!open}
+          importantForAccessibility={open ? "auto" : "no-hide-descendants"}
+        >
+          {/* Laid out at full height whatever the box's current height, so
+              it can be measured for the animation. */}
+          <View
+            style={{ position: "absolute", top: 0, left: 0, right: 0 }}
+            onLayout={(event) => setBodyHeight(event.nativeEvent.layout.height)}
+          >
+            <Divider />
+            {NOTIFICATIONS.map(switchRow)}
+            {live.length > 0 && (
+              <>
+                <Divider />
+                <Text
+                  accessibilityRole="header"
+                  style={{
+                    color: MUTED,
+                    fontSize: 10.5,
+                    fontWeight: "600",
+                    letterSpacing: 1.2,
+                    textTransform: "uppercase",
+                    paddingHorizontal: 16,
+                    paddingTop: 14,
+                    paddingBottom: 2,
+                  }}
+                >
+                  Live match alerts
+                </Text>
+                {live.map(switchRow)}
+                <Text style={{ color: MUTED, fontSize: 11.5, lineHeight: 16, paddingHorizontal: 16, paddingBottom: 14 }}>
+                  Sent while matches are played, a minute or two after FPL updates.
+                </Text>
+              </>
+            )}
+          </View>
+        </Animated.View>
+      </Group>
+    </>
   );
 }
 
@@ -252,103 +426,43 @@ export function MorePage({
       <Group>
         <Item
           title="Chips & captain"
+          icon={{ name: { ios: "sparkles", android: "auto_awesome", web: "auto_awesome" }, tint: "#f2c14e" }}
           detail="Captain options and chip readings for this gameweek"
           right={<Chevron />}
           onPress={onOpenHelper}
         />
-        <Divider />
+        <Divider inset={ICON_INSET} />
         <Item
           title="Matches"
+          icon={{ name: { ios: "soccerball", android: "sports_soccer", web: "sports_soccer" }, tint: THEME.accent }}
           detail="Live scores, results and kick-off times"
           right={<Chevron />}
           onPress={onOpenMatches}
         />
-        <Divider />
+        <Divider inset={ICON_INSET} />
         <Item
           title="My season"
+          icon={{ name: { ios: "chart.bar.fill", android: "bar_chart", web: "bar_chart" }, tint: "#5b8cff" }}
           detail="Rank, squad review, decisions and history"
           right={<Chevron />}
           onPress={onOpenSeason}
         />
-        <Divider />
+        <Divider inset={ICON_INSET} />
         <Item
           title="Fixture planner"
+          icon={{ name: { ios: "calendar", android: "calendar_month", web: "calendar_month" }, tint: "#b48cff" }}
           detail="Every club's upcoming fixtures and difficulty"
           right={<Chevron />}
           onPress={onOpenPlanner}
         />
       </Group>
 
-      <Heading>Notifications</Heading>
-      <Group>
-        {notifPermission === "denied" && (
-          <>
-            <Item
-              title="Notifications are blocked"
-              detail="Allow them for Skippr in your phone's settings."
-              color="#f2c14e"
-              right={<Chevron />}
-              onPress={onOpenSettings}
-            />
-            <Divider />
-          </>
-        )}
-        {NOTIFICATIONS.map((row, index) => {
-          const on = notifSettings[row.key] && notifPermission === "granted";
-          return (
-            <View key={row.key}>
-              {index > 0 && <Divider />}
-              <Item
-                title={row.title}
-                detail={row.detail}
-                right={
-                  <Switch
-                    value={on}
-                    onValueChange={() => onToggleNotification(row.key)}
-                    accessibilityLabel={row.title}
-                    trackColor={{ false: "rgba(255, 255, 255, 0.16)", true: GOOD }}
-                    thumbColor="#ffffff"
-                    ios_backgroundColor="rgba(255, 255, 255, 0.16)"
-                  />
-                }
-              />
-            </View>
-          );
-        })}
-      </Group>
-
-      {liveAlertsAvailable && (
-        <>
-          <Heading>Live match alerts</Heading>
-          <Group>
-            {LIVE_ALERTS.map((row, index) => {
-              const on = notifSettings[row.key] && notifPermission === "granted";
-              return (
-                <View key={row.key}>
-                  {index > 0 && <Divider />}
-                  <Item
-                    title={row.title}
-                    detail={row.detail}
-                    right={
-                      <Switch
-                        value={on}
-                        onValueChange={() => onToggleNotification(row.key)}
-                        accessibilityLabel={row.title}
-                        trackColor={{ false: "rgba(255, 255, 255, 0.16)", true: GOOD }}
-                        thumbColor="#ffffff"
-                        ios_backgroundColor="rgba(255, 255, 255, 0.16)"
-                      />
-                    }
-                  />
-                </View>
-              );
-            })}
-          </Group>
-          <Text style={{ color: MUTED, fontSize: 11.5, lineHeight: 16, marginTop: 6, marginLeft: 2 }}>
-            Sent while matches are played, a minute or two after FPL updates.
-          </Text>
-        </>
-      )}
+      <NotificationsSection
+        settings={notifSettings}
+        permission={notifPermission}
+        onToggle={onToggleNotification}
+        onOpenSettings={onOpenSettings}
+      />
 
       <Heading>Support</Heading>
       <Group>

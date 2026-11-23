@@ -31,6 +31,21 @@ export const THEME = {
 // drawn under it leave this much room at the end of their scroll.
 export const FOOTER_HEIGHT = 56;
 
+// FPL's own fixture difficulty colours (1 easiest to 5 hardest), shared by
+// the Fixture planner and the Insights panel.
+export const FDR_COLORS: Record<number, { fill: string; ink: string; label: string }> = {
+  1: { fill: "#375523", ink: "#ffffff", label: "Very easy" },
+  2: { fill: "#01fc7a", ink: "#06200f", label: "Easy" },
+  3: { fill: "#e7e7e7", ink: "#1b1f1d", label: "Average" },
+  4: { fill: "#ff1751", ink: "#ffffff", label: "Hard" },
+  5: { fill: "#80072d", ink: "#ffffff", label: "Very hard" },
+};
+
+// The colour for a difficulty, rounding an average to the nearest step.
+export function fdrColor(fdr: number) {
+  return FDR_COLORS[Math.min(5, Math.max(1, Math.round(fdr)))];
+}
+
 const BACKGROUND = require("../assets/images/app-background.png");
 
 // The navy-to-black backdrop, filling its parent. Put it first in a screen.

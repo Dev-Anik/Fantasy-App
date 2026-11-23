@@ -39,6 +39,12 @@ export type Row = {
   // Season points per match, and expected goal involvements per 90 minutes.
   ppg?: number | null;
   xgi90?: number | null;
+  // For the clean sheet part of the points estimate (see estimatePoints):
+  // clean sheets and starts this season, and the club's expected goals
+  // conceded per 90 minutes. Added from FPL's player data when it's loaded.
+  cleanSheets?: number;
+  starts?: number;
+  teamXgc?: number | null;
 };
 
 export type PlayerFixture = {

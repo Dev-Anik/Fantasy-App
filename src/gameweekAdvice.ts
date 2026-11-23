@@ -58,23 +58,87 @@ function ruledOut(row: Row) {
   return !!row.status && UNAVAILABLE.has(row.status) && row.chance == null;
 }
 
+// Points for a clean sheet by position (FPL: keepers and defenders 4,
+// midfielders 1, forwards none).
+const CLEAN_SHEET_POINTS: Record<number, number> = { 1: 4, 2: 4, 3: 1, 4: 0 };
+
+// Chance of a clean sheet in one match for a club conceding `teamXgc`
+// expected goals per 90: goals against follow a Poisson spread, so the
+// chance of none is e^-(expected goals against). The opponent's difficulty
+// scales it (rating 3 counts as average: 1 is 60%, 5 is 140%).
+export function cleanSheetChance(teamXgc: number, fixture: PlayerFixture) {
+  return Math.exp(-teamXgc * (0.4 + 0.2 * (fixture.fdr ?? 3)));
+}
+
+// Each club's expected goals conceded per 90 minutes, read from its
+// most-played keeper (on the pitch for nearly every goal against), from
+// FPL's player records. Keepers with under `minMinutes` are passed over.
+export function teamXgcFromElements(
+  elements: Iterable<{
+    element_type: number;
+    team: number;
+    minutes: number;
+    expected_goals_conceded_per_90?: number | string | null;
+  }>,
+  minMinutes = 270,
+) {
+  const keepers = new Map<number, { minutes: number; xgc: number }>();
+  for (const el of elements) {
+    if (el.element_type !== 1 || el.minutes < minMinutes) continue;
+    const xgc = Number(el.expected_goals_conceded_per_90);
+    if (!Number.isFinite(xgc) || xgc <= 0) continue;
+    const current = keepers.get(el.team);
+    if (!current || el.minutes > current.minutes) keepers.set(el.team, { minutes: el.minutes, xgc });
+  }
+  return new Map([...keepers].map(([team, keeper]) => [team, keeper.xgc]));
+}
+
 // Estimated points for the gameweek: the average of recent form and the
 // season's points per match, for each match (difficulty 1 counts 120%, 5 counts
-// 80%; home 105%, away 95%). Defenders and keepers count 85%: their big scores
-// rest on clean sheets, which repeat less reliably. Doubtful players are
-// scaled by their chance of playing; no match or ruled out is 0.
+// 80%; home 105%, away 95%). Doubtful players are scaled by their chance of
+// playing; no match or ruled out is 0.
+//
+// Clean sheets: when the club's expected goals conceded is known (teamXgc),
+// the player's past clean sheet points per start are taken out of that
+// average and this match's likely clean sheet points (its chance times 4 for
+// keepers and defenders, 1 for midfielders) added back, so a good defence
+// against a weak attack counts. Without it, keepers and defenders count 85%
+// instead: their big scores rest on clean sheets, which repeat less reliably.
 function expectedPoints(row: Row, event: number) {
   const fixtures = fixturesIn(row, event);
   if (!fixtures.length || ruledOut(row)) return 0;
   const form = parseFloat(row.form ?? "") || 0;
   const base = row.ppg != null && Number.isFinite(row.ppg) ? (form + row.ppg) / 2 : form;
-  const perMatch = fixtures.reduce(
-    (sum, f) => sum + (1.3 - 0.1 * (f.fdr ?? 3)) * (f.venue === "H" ? 1.05 : 0.95),
-    0,
-  );
-  const position = row.type === 1 || row.type === 2 ? 0.85 : 1;
+  const fixtureScale = (f: PlayerFixture) => (1.3 - 0.1 * (f.fdr ?? 3)) * (f.venue === "H" ? 1.05 : 0.95);
   const chance = row.status === "d" ? (row.chance ?? 50) / 100 : 1;
+
+  const csPoints = CLEAN_SHEET_POINTS[row.type] ?? 0;
+  if (csPoints > 0 && row.teamXgc != null && row.cleanSheets != null && row.starts != null) {
+    const pastCleanSheets = row.starts > 0 ? (csPoints * row.cleanSheets) / row.starts : 0;
+    const rest = Math.max(0, base - pastCleanSheets);
+    const teamXgc = row.teamXgc;
+    const total = fixtures.reduce(
+      (sum, f) => sum + rest * fixtureScale(f) + csPoints * cleanSheetChance(teamXgc, f),
+      0,
+    );
+    return total * chance;
+  }
+
+  const perMatch = fixtures.reduce((sum, f) => sum + fixtureScale(f), 0);
+  const position = row.type === 1 || row.type === 2 ? 0.85 : 1;
   return base * perMatch * position * chance;
+}
+
+// Adds the clean sheet data the estimate reads (see expectedPoints) to a
+// squad row, from FPL's player records and each club's xGC.
+export function withCleanSheetData(
+  row: Row,
+  players: Record<number, { clean_sheets: number; starts: number } | undefined>,
+  teamXgc: Map<number, number>,
+): Row {
+  const player = players[row.id];
+  if (!player) return row;
+  return { ...row, cleanSheets: player.clean_sheets, starts: player.starts, teamXgc: teamXgc.get(row.teamId) ?? null };
 }
 
 // The same estimate, for the player cards on the home pitch.
@@ -108,7 +172,14 @@ function captainReasons(row: Row, fixtures: PlayerFixture[]) {
   if ((row.type === 3 || row.type === 4) && row.xgi90 != null && row.xgi90 > 0) {
     reasons.push(`${row.xgi90.toFixed(2)} expected goals + assists per 90 minutes`);
   }
-  if (row.type === 1 || row.type === 2) reasons.push("Defender or keeper: big scores need a clean sheet");
+  if ((row.type === 1 || row.type === 2) && fixtures.length) {
+    const xgc = row.teamXgc;
+    reasons.push(
+      xgc != null
+        ? `Clean sheet chance ${fixtures.map((f) => `${Math.round(cleanSheetChance(xgc, f) * 100)}%`).join(" and ")}`
+        : "Defender or keeper: big scores need a clean sheet",
+    );
+  }
   if (row.status === "d" && row.chance != null) reasons.push(`${row.chance}% chance of playing`);
   if (ruledOut(row)) reasons.push(row.news || "Ruled out");
   const owned = parseFloat(row.ownership ?? "");
