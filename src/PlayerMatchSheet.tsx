@@ -9,13 +9,13 @@ import { PlayerArt } from "./Pitch";
 import { THEME } from "./theme";
 import { LiveDot } from "./LiveDot";
 import { useSwipeToClose } from "./useSwipeToClose";
-import { loadFplBasics } from "./fplPublic";
+import { loadFplBasics, peekFplBasics } from "./fplPublic";
+import { FRESH, fplJson, peekFpl } from "./fplCache";
 import type { FplBasics } from "./fplPublic";
 import { matchBonus } from "./live";
 import { MatchDetails, Scorers, dayLabel, isLive, status } from "./MatchCentre";
 import type { Fixture } from "./MatchCentre";
 
-const API = "https://fantasy.premierleague.com/api/";
 const LIVE_REFRESH_MS = 30_000;
 const POS = ["", "GKP", "DEF", "MID", "FWD"];
 const INK = THEME.ink;
@@ -78,10 +78,23 @@ type MatchData = { key: string; fixtures: Fixture[]; live: LiveElement | null; b
 // The player's matches this gameweek and his live figures.
 async function fetchMatch(player: PlayerMatchTarget, event: number): Promise<MatchData> {
   const [fixtures, live, basics] = await Promise.all([
-    fetch(`${API}fixtures/?event=${event}`).then((r) => (r.ok ? r.json() : Promise.reject())),
-    fetch(`${API}event/${event}/live/`).then((r) => (r.ok ? r.json() : Promise.reject())),
+    fplJson(`fixtures/?event=${event}`, FRESH.live),
+    fplJson(`event/${event}/live/`, FRESH.live),
     loadFplBasics(),
   ]);
+  return matchFrom(player, event, fixtures, live, basics);
+}
+
+// The match from what's already been read (the points page reads the same
+// gameweek), so the sheet can open complete; null if something is missing.
+function peekMatch(player: PlayerMatchTarget, event: number): MatchData | null {
+  const fixtures = peekFpl(`fixtures/?event=${event}`);
+  const live = peekFpl(`event/${event}/live/`);
+  const basics = peekFplBasics();
+  return fixtures && live && basics ? matchFrom(player, event, fixtures, live, basics) : null;
+}
+
+function matchFrom(player: PlayerMatchTarget, event: number, fixtures: any, live: any, basics: FplBasics): MatchData {
   const mine = (Array.isArray(fixtures) ? fixtures : []).filter(
     (f: Fixture) => f.team_h === player.teamId || f.team_a === player.teamId,
   );
@@ -132,7 +145,17 @@ export function PlayerMatchSheet({
     };
   }, [player, event, attempt]);
 
-  const shown = data && data.key === key ? data : null;
+  const shown = (data && data.key === key ? data : null) ?? (player ? peekMatch(player, event) : null);
+  // Opens once the match is in (or couldn't be read), never filling in on
+  // screen; if FPL is slow it opens anyway after a moment.
+  const [waitedFor, setWaitedFor] = useState("");
+  const hasMatch = !!shown;
+  useEffect(() => {
+    if (!key || hasMatch) return;
+    const timer = setTimeout(() => setWaitedFor(key), 2500);
+    return () => clearTimeout(timer);
+  }, [key, hasMatch]);
+  const open = !!player && (hasMatch || failed || waitedFor === key);
   const anyLive = !!shown?.fixtures.some(isLive);
   // While one of his matches is live, load again every 30 seconds.
   useEffect(() => {
@@ -145,7 +168,7 @@ export function PlayerMatchSheet({
   const load = () => setAttempt((n) => n + 1);
 
   const close = () => onClose();
-  const swipe = useSwipeToClose(close, !!player);
+  const swipe = useSwipeToClose(close, open);
 
   // FPL's own figure, as the official app shows it: provisional bonus is
   // listed below but only counts once FPL confirms it.
@@ -153,7 +176,7 @@ export function PlayerMatchSheet({
   const multiplier = player?.multiplier ?? 1;
 
   return (
-    <Modal visible={!!player} transparent animationType="slide" statusBarTranslucent onRequestClose={close}>
+    <Modal visible={open} transparent animationType="slide" statusBarTranslucent onRequestClose={close}>
       <View style={{ flex: 1, justifyContent: "flex-end" }}>
         <Pressable
           accessibilityRole="button"

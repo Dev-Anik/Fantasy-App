@@ -9,18 +9,23 @@ import {
 } from "react-native";
 import type { ScrollViewInstance } from "react-native";
 import { Image } from "expo-image";
-import type { PlayerFixture, Row } from "./fpl";
+import type { Row } from "./fpl";
 import { teamAvatar } from "./Pitch";
 import { AppSymbol } from "./AppSymbol";
 import { availability } from "./availability";
 import { PlayerProfile } from "./PlayerProfile";
-import { THEME } from "./theme";
+import { THEME, fdrColor } from "./theme";
 import { useSwipeToClose } from "./useSwipeToClose";
+import { FRESH, fplJson, peekFpl } from "./fplCache";
 import type { FplElement, GameweekRow, PastSeason } from "./PlayerProfile";
 
 const MUTED = THEME.muted;
 // Captain gold, as on the pitch armband.
 const GOLD = "#f2c14e";
+// Points gold, as on the pitch cards.
+const POINTS_GOLD = "#ffd400";
+// FPL's rating for fixtures that only carry the easy/average/hard band.
+const FDR_OF = { easy: 2, average: 3, hard: 4 } as const;
 
 // Section titles: quiet spaced capitals, as across the app.
 export const SECTION_TITLE = {
@@ -45,16 +50,14 @@ function price(value: number) {
   return `£${(value / 10).toFixed(1)}m`;
 }
 
-// Solid difficulty colours: green easy, ash grey average, red hard. `ink`
-// is the main text on that colour and `muted` the gameweek label.
-function fixtureCardStyle(difficulty: PlayerFixture["difficulty"]) {
-  if (difficulty === "easy") {
-    return { bg: "#14b866", border: "#1fd479", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.78)" };
-  }
-  if (difficulty === "hard") {
-    return { bg: "#d92b4f", border: "#ef4766", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.78)" };
-  }
-  return { bg: "#3a4258", border: "#4b5470", ink: "#ffffff", muted: "rgba(255, 255, 255, 0.72)" };
+// How long a tapped player's sheet waits for his record before opening anyway.
+const SLOW_RECORD_MS = 2500;
+
+function summaryParts(data: any): { history: GameweekRow[]; pastSeasons: PastSeason[] } {
+  return {
+    history: Array.isArray(data?.history) ? data.history : [],
+    pastSeasons: Array.isArray(data?.history_past) ? data.history_past : [],
+  };
 }
 
 export function PlayerDetailsSheet({
@@ -74,7 +77,11 @@ export function PlayerDetailsSheet({
   elementFailed = false,
   onRetryElement,
   teamNames = {},
+  signAction,
 }: {
+  // Opened from the transfer market: one button to sign him (or why he
+  // can't be signed) in place of the squad actions.
+  signAction?: { label: string; blockedReason: string | null; onPress: () => void };
   visible: boolean;
   player: Row | null;
   // FPL's full record for this player (season stats), when loaded.
@@ -103,7 +110,28 @@ export function PlayerDetailsSheet({
     history: GameweekRow[];
     pastSeasons: PastSeason[];
   } | null>(null);
-  const current = visible && !!player?.id && loaded?.id === player.id ? loaded : null;
+  const playerId = player?.id ?? 0;
+  const summaryPath = `element-summary/${playerId}/`;
+  // Already read (the squad's players are read ahead): drawn at once.
+  const ready = playerId ? peekFpl(summaryPath) : undefined;
+  const current =
+    visible && !!playerId
+      ? loaded?.id === playerId
+        ? loaded
+        : ready
+          ? { id: playerId, ...summaryParts(ready) }
+          : null
+      : null;
+  // The sheet opens once the player's record is in, so it never fills in
+  // while on screen; if FPL is slow it opens anyway after a moment.
+  const [waitedFor, setWaitedFor] = useState(0);
+  const hasRecord = !!current;
+  useEffect(() => {
+    if (!visible || !playerId || hasRecord) return;
+    const timer = setTimeout(() => setWaitedFor(playerId), SLOW_RECORD_MS);
+    return () => clearTimeout(timer);
+  }, [visible, playerId, hasRecord]);
+  const open = visible && player !== null && (hasRecord || waitedFor === playerId);
   const history = current?.history ?? null;
   const pastSeasons = current?.pastSeasons ?? null;
   const playerHistory: Record<number, number> = {};
@@ -117,15 +145,10 @@ export function PlayerDetailsSheet({
 
     let isMounted = true;
 
-    fetch(`https://fantasy.premierleague.com/api/element-summary/${id}/`)
-      .then((res) => (res.ok ? res.json() : null))
+    fplJson(`element-summary/${id}/`, FRESH.settled)
       .then((data) => {
         if (!isMounted) return;
-        setLoaded({
-          id,
-          history: Array.isArray(data?.history) ? data.history : [],
-          pastSeasons: Array.isArray(data?.history_past) ? data.history_past : [],
-        });
+        setLoaded({ id, ...summaryParts(data) });
       })
       .catch(() => {
         if (!isMounted) return;
@@ -147,7 +170,7 @@ export function PlayerDetailsSheet({
           : "No change this GW";
 
   useEffect(() => {
-    if (!visible || !player?.fixtures?.length) return;
+    if (!open || !player?.fixtures?.length) return;
 
     const fixtures = player.fixtures;
     const currentIndex = fixtures.findIndex(
@@ -161,18 +184,18 @@ export function PlayerDetailsSheet({
 
     requestAnimationFrame(() => {
       fixturesRef.current?.scrollTo({
-        x: initialIndex * 64,
+        x: initialIndex * 52,
         animated: false,
       });
     });
-  }, [currentGw, player, visible]);
+  }, [currentGw, player, open]);
 
   // Drag the sheet down to close it.
-  const swipe = useSwipeToClose(onClose, visible && player !== null);
+  const swipe = useSwipeToClose(onClose, open);
 
   return (
     <Modal
-      visible={visible && player !== null}
+      visible={open}
       transparent
       animationType="slide"
       statusBarTranslucent
@@ -440,73 +463,78 @@ export function PlayerDetailsSheet({
                   contentContainerStyle={{ gap: 6, paddingRight: 2 }}
                 >
                   {player.fixtures.map((fixture, index) => {
-                    const style = fixtureCardStyle(fixture.difficulty);
-                    const isPastGw = fixture.event < currentGw || fixture.finished;
+                    // Each card in its difficulty colour (FPL's scale, as
+                    // in the planner); points sit gold on a small dark
+                    // tag so they read on any colour, and a match still to
+                    // come shows (H) or (A) instead.
+                    const colour = fdrColor(fixture.fdr ?? FDR_OF[fixture.difficulty]);
+                    const isPastGw = fixture.event < currentGw || !!fixture.finished;
                     const isCurrentGw = fixture.event === currentGw && !fixture.finished;
-
                     const historyPts = playerHistory[fixture.event];
-                    let pointsText = "";
-
-                    if (historyPts !== undefined && historyPts !== null) {
-                      pointsText = historyPts > 0 ? `${historyPts} pts` : "-";
-                    } else if (isCurrentGw) {
-                      if (player.displayPoints !== undefined && player.displayPoints !== null && player.displayPoints > 0) {
-                        pointsText = `${player.displayPoints} pts`;
-                      } else {
-                        pointsText = "-";
-                      }
-                    } else if (isPastGw) {
-                      pointsText = "-";
-                    } else {
-                      pointsText = fixture.venue;
-                    }
+                    const points =
+                      historyPts != null
+                        ? historyPts
+                        : isCurrentGw && player.displayPoints != null && player.displayPoints !== 0
+                          ? player.displayPoints
+                          : null;
+                    const upcoming = !isPastGw && !isCurrentGw;
 
                     return (
                       <View
                         key={`${fixture.event}-${fixture.opponent}-${index}`}
+                        accessible
+                        accessibilityLabel={`Gameweek ${fixture.event}, ${fixture.opponent} ${fixture.venue === "H" ? "home" : "away"}${
+                          upcoming ? "" : points != null ? `, ${points} points` : ", no points"
+                        }`}
                         style={{
-                          width: 58,
+                          width: 46,
                           alignItems: "center",
-                          paddingVertical: 6,
-                          paddingHorizontal: 4,
-                          borderRadius: 10,
-                          backgroundColor: style.bg,
-                          borderWidth: 1,
-                          borderColor: style.border,
-                          // Played gameweeks recede but keep their colour.
-                          opacity: isPastGw ? 0.55 : 1,
+                          paddingVertical: 3,
+                          borderRadius: 8,
+                          backgroundColor: colour.fill,
+                          borderWidth: 1.5,
+                          borderColor: isCurrentGw ? "#ffffff" : colour.fill,
                         }}
                       >
-                        <Text
-                          style={{
-                            color: style.muted,
-                            fontSize: 8,
-                            fontWeight: "800",
-                          }}
-                        >
-                          GW {fixture.event}
+                        <Text style={{ color: colour.ink, opacity: 0.75, fontSize: 7.5, fontWeight: "700", letterSpacing: 0.3 }}>
+                          {`GW${fixture.event}`}
                         </Text>
-                        <Text
-                          numberOfLines={1}
-                          style={{
-                            color: "#ffffff",
-                            fontSize: 11.5,
-                            fontWeight: "900",
-                            marginTop: 3,
-                          }}
-                        >
+                        <Text numberOfLines={1} style={{ color: colour.ink, fontSize: 10.5, fontWeight: "800" }}>
                           {fixture.opponent}
                         </Text>
-                        <Text
-                          style={{
-                            color: style.ink,
-                            fontSize: pointsText === "-" ? 12 : 8.5,
-                            fontWeight: "900",
-                            marginTop: 2,
-                          }}
-                        >
-                          {pointsText}
-                        </Text>
+                        {upcoming ? (
+                          <Text style={{ color: colour.ink, fontSize: 9.5, fontWeight: "800", lineHeight: 19, marginTop: 1 }}>
+                            {`(${fixture.venue})`}
+                          </Text>
+                        ) : (
+                          // A solid dark tag across the card, so the gold
+                          // points stand out on every difficulty colour.
+                          <View
+                            style={{
+                              alignSelf: "stretch",
+                              marginHorizontal: 3,
+                              marginTop: 1,
+                              height: 19,
+                              borderRadius: 5,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              backgroundColor: "#0b1020",
+                            }}
+                          >
+                            <Text
+                              allowFontScaling={false}
+                              style={{
+                                color: points != null ? POINTS_GOLD : "rgba(255, 255, 255, 0.55)",
+                                fontSize: 13,
+                                fontWeight: "900",
+                                fontVariant: ["tabular-nums"],
+                                includeFontPadding: false,
+                              }}
+                            >
+                              {points != null ? points : "–"}
+                            </Text>
+                          </View>
+                        )}
                       </View>
                     );
                   })}
@@ -529,7 +557,45 @@ export function PlayerDetailsSheet({
             </ScrollView>
 
             {/* Action Buttons Row */}
-            {actionsEnabled && (
+            {signAction ? (
+              <View style={{ marginTop: 16 }}>
+                <Pressable
+                  onPress={signAction.onPress}
+                  disabled={!!signAction.blockedReason}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: !!signAction.blockedReason }}
+                  accessibilityLabel={signAction.blockedReason ?? signAction.label}
+                  style={({ pressed }) => ({
+                    height: 46,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                    borderRadius: 23,
+                    backgroundColor: signAction.blockedReason
+                      ? THEME.surface
+                      : pressed
+                        ? THEME.accentLine
+                        : THEME.accent,
+                    borderWidth: 1,
+                    borderColor: signAction.blockedReason ? "rgba(255, 255, 255, 0.14)" : THEME.accent,
+                  })}
+                >
+                  {!signAction.blockedReason && (
+                    <AppSymbol name={{ ios: "plus", android: "add", web: "add" }} color={THEME.onAccent} size={16} />
+                  )}
+                  <Text
+                    style={{
+                      color: signAction.blockedReason ? MUTED : THEME.onAccent,
+                      fontWeight: "700",
+                      fontSize: 14,
+                    }}
+                  >
+                    {signAction.blockedReason ?? signAction.label}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : actionsEnabled && (
               <View style={{ flexDirection: "row", gap: 8, marginTop: 16 }}>
                 {isTransferMode ? (
                   <>

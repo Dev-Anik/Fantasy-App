@@ -129,14 +129,24 @@ export type FplCup = {
 };
 
 // The manager's FPL Cup: their matches so far, and how qualifying went.
+// The last answer per team, so the Leagues page draws its cup card at once
+// (it is read ahead, once Home is up).
+const lastCup = new Map<number, FplCup>();
+
+export function peekFplCup(entry: number): FplCup | null {
+  return lastCup.get(entry) ?? null;
+}
+
 export async function loadFplCup(entry: number): Promise<FplCup> {
   const data = await getJson(`entry/${entry}/`, await cupToken());
   const cup = data?.leagues?.cup ?? {};
   const status = cup.status ?? {};
-  return {
+  const result: FplCup = {
     matches: Array.isArray(cup.matches) ? cup.matches : [],
     qualificationEvent: status.qualification_event ?? null,
     qualificationState: status.qualification_state ?? null,
     qualificationRank: status.qualification_rank ?? null,
   };
+  lastCup.set(entry, result);
+  return result;
 }

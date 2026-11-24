@@ -6,7 +6,8 @@ import { ActivityIndicator, AppState, Pressable, ScrollView, Text, View } from "
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "./AppSymbol";
 import { FOOTER_HEIGHT, ScreenBackground, THEME } from "./theme";
-import { loadFplBasics } from "./fplPublic";
+import { loadFplBasics, peekFplBasics } from "./fplPublic";
+import { FRESH, fplJson, peekFpl } from "./fplCache";
 import type { FplBasics } from "./fplPublic";
 import { matchBonus } from "./live";
 
@@ -188,6 +189,13 @@ export function MatchDetails({ fixture, basics, mine }: { fixture: Fixture; basi
   );
 }
 
+const fixturesPath = (event: number) => `fixtures/?event=${event}`;
+
+// What the page needs before it opens: names and the gameweek's matches.
+export function loadMatchCentre(event: number) {
+  return Promise.all([loadFplBasics(), fplJson(fixturesPath(event), FRESH.live)]);
+}
+
 export function MatchCentre({
   startEvent,
   myPlayerIds,
@@ -201,8 +209,12 @@ export function MatchCentre({
 }) {
   const insets = useSafeAreaInsets();
   const [event, setEvent] = useState(Math.min(LAST_GAMEWEEK, Math.max(1, startEvent)));
-  const [basics, setBasics] = useState<FplBasics | null>(null);
-  const [fixtures, setFixtures] = useState<{ event: number; list: Fixture[]; updatedAt: number } | null>(null);
+  // Read before the page opens (loadMatchCentre), so it starts complete.
+  const [basics, setBasics] = useState<FplBasics | null>(peekFplBasics);
+  const [fixtures, setFixtures] = useState<{ event: number; list: Fixture[]; updatedAt: number } | null>(() => {
+    const ready = peekFpl(fixturesPath(event));
+    return Array.isArray(ready) ? { event, list: ready, updatedAt: Date.now() } : null;
+  });
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [open, setOpen] = useState<number | null>(null);
@@ -227,9 +239,8 @@ export function MatchCentre({
     const load = () => {
       if (inFlight.current || AppState.currentState !== "active") return;
       inFlight.current = true;
-      fetch(`https://fantasy.premierleague.com/api/fixtures/?event=${event}`, { cache: "no-store" })
-        .then((response) => (response.ok ? response.json() : Promise.reject()))
-        .then((list: Fixture[]) => {
+      fplJson<Fixture[]>(fixturesPath(event), FRESH.live)
+        .then((list) => {
           if (!active) return;
           setFixtures({ event, list: Array.isArray(list) ? list : [], updatedAt: Date.now() });
           setFailed(false);

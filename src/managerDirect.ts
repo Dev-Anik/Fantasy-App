@@ -5,6 +5,7 @@
 // web page route, which also explains private or missing picks.
 import type { LiveFixture, MemberPick, MemberSquad } from "./fpl";
 import { loadFplBasics } from "./fplPublic";
+import { FRESH, fplJsonTimed } from "./fplCache";
 
 const API = "https://fantasy.premierleague.com/api/";
 const TIMEOUT_MS = 12_000;
@@ -33,8 +34,9 @@ type Stats = {
 export async function loadManagerGameweekDirect(entry: number, event: number): Promise<MemberSquad> {
   const [basics, live, fixturesRaw, squad] = await Promise.all([
     loadFplBasics(),
-    getJson(`event/${event}/live/`),
-    getJson(`fixtures/?event=${event}`),
+    // Shared, so a player's match sheet on this page opens at once.
+    fplJsonTimed(`event/${event}/live/`, FRESH.live, TIMEOUT_MS),
+    fplJsonTimed(`fixtures/?event=${event}`, FRESH.live, TIMEOUT_MS),
     getJson(`entry/${entry}/event/${event}/picks/`),
   ]);
   const stats = new Map<number, Stats>(

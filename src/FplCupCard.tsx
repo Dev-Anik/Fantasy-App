@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import type { H2hMatch } from "./fpl";
-import { loadFplCup } from "./leagueDirect";
+import { loadFplCup, peekFplCup } from "./leagueDirect";
 import type { FplCup } from "./leagueDirect";
 import { Divider, LEAGUE_UI as UI } from "./leagueUi";
 
@@ -17,7 +17,11 @@ export function FplCupCard({
   refreshSignal?: number;
   onViewMember: (entry: number, event: number, teamName?: string, managerName?: string) => void;
 }) {
-  const [cup, setCup] = useState<{ entry: number; data: FplCup } | null>(null);
+  // Read ahead once Home is up, so the card starts complete.
+  const [cup, setCup] = useState<{ entry: number; data: FplCup } | null>(() => {
+    const ready = peekFplCup(entry);
+    return ready ? { entry, data: ready } : null;
+  });
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {

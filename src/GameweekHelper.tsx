@@ -11,7 +11,7 @@ import { FOOTER_HEIGHT, ScreenBackground, THEME } from "./theme";
 import { Divider, Group, Heading } from "./leagueUi";
 import { adviseGameweek } from "./gameweekAdvice";
 import type { ChipReading, ChipWindow, Verdict } from "./gameweekAdvice";
-import { loadFplBasics } from "./fplPublic";
+import { loadFplBasics, peekFplBasics } from "./fplPublic";
 
 const INK = THEME.ink;
 const SOFT = THEME.soft;
@@ -85,7 +85,8 @@ export function GameweekHelper({
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const [chipWindows, setChipWindows] = useState<ChipWindow[] | undefined>(undefined);
+  // Read before the page opens (see openWhenReady), so it starts complete.
+  const [chipWindows, setChipWindows] = useState<ChipWindow[] | undefined>(() => peekFplBasics()?.chipWindows);
 
   useEffect(() => {
     let active = true;

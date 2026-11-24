@@ -7,8 +7,8 @@
 // player counts as available.
 import { estimatePoints } from "./gameweekAdvice";
 import type { PlayerFixture, Row } from "./fpl";
+import { FRESH, fplJson } from "./fplCache";
 
-const API = "https://fantasy.premierleague.com/api/";
 const DAY = 86_400_000;
 // The club's xGC is read from the player's own (enough minutes to trust).
 const MIN_MINUTES = 270;
@@ -22,20 +22,11 @@ type MatchRow = {
   expected_goals_conceded?: string;
 };
 
-// Each player's match history, read once per app session.
-const histories = new Map<number, Promise<MatchRow[]>>();
-
+// Each player's match history (shared with the player sheet).
 function loadHistory(id: number): Promise<MatchRow[]> {
-  let pending = histories.get(id);
-  if (!pending) {
-    pending = fetch(`${API}element-summary/${id}/`)
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`FPL ${response.status}`))))
-      .then((data) => (Array.isArray(data?.history) ? data.history : []));
-    // A failure isn't kept: the next try reads again.
-    pending.catch(() => histories.delete(id));
-    histories.set(id, pending);
-  }
-  return pending;
+  return fplJson(`element-summary/${id}/`, FRESH.settled).then((data) =>
+    Array.isArray(data?.history) ? data.history : [],
+  );
 }
 
 export type RebuildPlayer = { id: number; type: number; teamId: number };

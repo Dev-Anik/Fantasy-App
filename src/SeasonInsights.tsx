@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "./AppSymbol";
 import { PlayerArt } from "./Pitch";
 import { ScreenBackground, THEME } from "./theme";
-import { analyseSeason, loadSeason } from "./insights";
+import { loadSeasonInsights, peekSeasonInsights } from "./insights";
 import type {
   Action,
   Finding,
@@ -823,16 +823,17 @@ export function SeasonInsights({
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const [data, setData] = useState<Insights | null>(null);
+  // Read before the page opens (see openWhenReady), so it starts complete.
+  const [data, setData] = useState<Insights | null>(() => peekSeasonInsights(entry));
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [tab, setTab] = useState<Tab>("overview");
 
   useEffect(() => {
     let active = true;
-    loadSeason(entry)
-      .then((raw) => {
-        if (active) setData(analyseSeason(raw));
+    loadSeasonInsights(entry)
+      .then((result) => {
+        if (active) setData(result);
       })
       .catch(() => {
         if (active) setError("Couldn't load your season from FPL. Check your connection and try again.");

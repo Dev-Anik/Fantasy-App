@@ -47,9 +47,10 @@ export function cardStatValue(key: CardStatKey, row: Row, event: number | undefi
       return price ? (price / 10).toFixed(1) : null;
     }
     case "change": {
-      if (row.priceChange == null) return null;
+      // Only a price that has moved is worth showing.
+      if (!row.priceChange) return null;
       const amount = (Math.abs(row.priceChange) / 10).toFixed(1);
-      return row.priceChange > 0 ? `+${amount}` : row.priceChange < 0 ? `−${amount}` : "0.0";
+      return row.priceChange > 0 ? `+${amount}` : `−${amount}`;
     }
     case "total":
       return row.totalPoints == null ? null : String(row.totalPoints);
@@ -62,10 +63,13 @@ export function cardStatValue(key: CardStatKey, row: Row, event: number | undefi
   }
 }
 
+const DEFAULT_STATS: Record<CardStatsPage, CardStatKey[]> = { lineup: [], transfers: ["change"] };
+
 export async function loadCardStats(page: CardStatsPage = "lineup"): Promise<CardStatKey[]> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEYS[page]);
-    const parsed = raw ? JSON.parse(raw) : [];
+    // Nothing chosen yet: Transfers starts with the price change shown.
+    const parsed = raw ? JSON.parse(raw) : DEFAULT_STATS[page];
     return Array.isArray(parsed)
       ? parsed.filter((key): key is CardStatKey => KEYS.has(key)).slice(0, MAX_CARD_STATS)
       : [];

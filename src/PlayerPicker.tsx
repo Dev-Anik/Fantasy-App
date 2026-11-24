@@ -1,14 +1,18 @@
 // The transfer market: every player who can fill the chosen spot, laid out
 // like a market table (form, points, price tag), with the deal at the top:
 // who is being sold, what he sells for, and the budget for the new signing.
+// Tapping a player opens his profile, where he can be signed.
 import { useMemo, useState } from "react";
 import { FlatList, Modal, Pressable, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Player } from "./fpl";
+import type { Player, PlayerFixture, Row } from "./fpl";
 import { availability } from "./availability";
 import { PlayerArt } from "./Pitch";
 import { AppSymbol } from "./AppSymbol";
-import { ScreenBackground, THEME } from "./theme";
+import { PlayerDetailsSheet } from "./PlayerDetailsSheet";
+import { FRESH, fplJson } from "./fplCache";
+import type { FplElement } from "./PlayerProfile";
+import { ScreenBackground, THEME, fdrColor } from "./theme";
 
 const ACCENT = THEME.accent;
 const INK = THEME.ink;
@@ -25,6 +29,32 @@ const COL_PRICE = 74;
 type SortMode = "pts" | "form" | "cost-desc" | "cost-asc";
 
 const money = (value: number) => `£${(value / 10).toFixed(1)}m`;
+const FDR_OF = { easy: 2, average: 3, hard: 4 } as const;
+// Upcoming matches shown under each player.
+const NEXT_MATCHES = 3;
+
+// The next few opponents, each coloured by difficulty: a small line under
+// the club.
+function NextMatches({ next }: { next: PlayerFixture[] }) {
+  if (next.length === 0) return null;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 5 }}>
+      {next.map((fixture) => {
+        const colour = fdrColor(fixture.fdr ?? FDR_OF[fixture.difficulty]);
+        return (
+          <View
+            key={`${fixture.event}-${fixture.opponent}`}
+            style={{ paddingHorizontal: 4, height: 17, borderRadius: 5, justifyContent: "center", backgroundColor: colour.fill }}
+          >
+            <Text style={{ color: colour.ink, fontSize: 9.5, fontWeight: "800" }}>
+              {`${fixture.opponent} (${fixture.venue})`}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
 
 // A section of the segmented sort control.
 function SortTab({
@@ -90,6 +120,13 @@ export function PlayerPicker({
   sellPrice,
   onPick,
   onClose,
+  fixturesByTeam = {},
+  nextEvent,
+  elements = {},
+  elementFailed = false,
+  onRetryElement,
+  teamNames = {},
+  currentGw,
 }: {
   visible: boolean;
   title: string;
@@ -105,9 +142,22 @@ export function PlayerPicker({
   sellPrice?: number;
   onPick: (p: Player) => void;
   onClose: () => void;
+  fixturesByTeam?: Record<number, PlayerFixture[]>;
+  // The first gameweek still to be played (the next few from it are shown).
+  nextEvent: number;
+  // For the profile opened from the list.
+  elements?: Record<number, FplElement>;
+  elementFailed?: boolean;
+  onRetryElement?: () => void;
+  teamNames?: Record<number, string>;
+  currentGw: number;
 }) {
   const insets = useSafeAreaInsets();
   const [q, setQ] = useState("");
+  // The player whose profile is open.
+  const [viewing, setViewing] = useState<Player | null>(null);
+  const nextMatches = (teamId: number) =>
+    (fixturesByTeam[teamId] ?? []).filter((f) => f.event >= nextEvent && !f.finished).slice(0, NEXT_MATCHES);
   const [sort, setSort] = useState<SortMode>("pts");
   const [affordableOnly, setAffordableOnly] = useState(false);
 
@@ -135,12 +185,49 @@ export function PlayerPicker({
   // Start each visit with a clean search; the sort and filter are kept.
   const close = () => {
     setQ("");
+    setViewing(null);
     onClose();
   };
   const pick = (player: Player) => {
     setQ("");
+    setViewing(null);
     onPick(player);
   };
+  // The open profile, in the sheet's terms.
+  const viewingRow: Row | null = viewing
+    ? {
+        id: viewing.id,
+        pos: 0,
+        name: viewing.name,
+        team: viewing.team,
+        teamId: viewing.teamId,
+        type: viewing.type,
+        cap: false,
+        vice: false,
+        sell: viewing.cost,
+        buy: viewing.cost,
+        price: viewing.cost,
+        form: viewing.form,
+        ownership: viewing.ownership,
+        priceChange: viewing.priceChange,
+        status: viewing.status,
+        chance: viewing.chance,
+        news: viewing.news,
+        fixtures: fixturesByTeam[viewing.teamId] ?? [],
+        totalPoints: viewing.pts,
+        ppg: viewing.ppg,
+      }
+    : null;
+  // Why the open player can't be signed, if he can't.
+  const viewingBlock = !viewing
+    ? null
+    : squadIds.includes(viewing.id)
+      ? "Already in your squad"
+      : fullClubs.includes(viewing.teamId)
+        ? "3 from this club already"
+        : viewing.cost > maxCost
+          ? `${money(viewing.cost - maxCost)} over budget`
+          : null;
 
   const priceSorted = sort === "cost-desc" || sort === "cost-asc";
 
@@ -367,10 +454,14 @@ export function PlayerPicker({
 
             return (
               <Pressable
-                onPress={() => pick(item)}
-                disabled={inSquad}
+                // Start reading his record as the finger lands, so the
+                // profile opens sooner.
+                onPressIn={() => {
+                  fplJson(`element-summary/${item.id}/`, FRESH.settled).catch(() => {});
+                }}
+                onPress={() => setViewing(item)}
                 accessibilityRole="button"
-                accessibilityState={{ disabled: inSquad }}
+                accessibilityHint="Opens his profile"
                 accessibilityLabel={`${item.name}, ${item.team}, ${POS[item.type]}, ${money(item.cost)}, ${item.pts} points, form ${item.form}, owned by ${item.ownership} percent${
                   flag ? `, ${flag.label}` : ""
                 }${
@@ -443,6 +534,7 @@ export function PlayerPicker({
                       {note.text}
                     </Text>
                   )}
+                  <NextMatches next={nextMatches(item.teamId)} />
                 </View>
 
                 <Text
@@ -508,6 +600,34 @@ export function PlayerPicker({
           }}
         />
       </View>
+      {/* His profile, over the market (inside this Modal, so it shows on top). */}
+      <PlayerDetailsSheet
+        visible={!!viewingRow}
+        player={viewingRow}
+        currentGw={currentGw}
+        bottomInset={insets.bottom}
+        isTransferMode
+        isReplaced={false}
+        actionsEnabled
+        onClose={() => setViewing(null)}
+        onSetRole={() => {}}
+        onTransfer={() => {}}
+        onUndoTransfer={() => {}}
+        onStartSubstitution={() => {}}
+        element={viewing ? (elements[viewing.id] ?? null) : null}
+        elementFailed={elementFailed}
+        onRetryElement={onRetryElement}
+        teamNames={teamNames}
+        signAction={
+          viewing
+            ? {
+                label: `Sign for ${money(viewing.cost)}`,
+                blockedReason: viewingBlock,
+                onPress: () => pick(viewing),
+              }
+            : undefined
+        }
+      />
     </Modal>
   );
 }

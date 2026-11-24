@@ -4,7 +4,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
 import type { GestureResponderEvent } from "react-native";
-import type { SymbolViewProps } from "expo-symbols";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "./AppSymbol";
 import { THEME, fdrColor } from "./theme";
@@ -22,25 +21,7 @@ const CLOSE_VELOCITY = 0.6;
 
 const GOLD = "#f2c14e";
 const BLUE = "#5b8cff";
-const PURPLE = "#b48cff";
-// Icon colours only (values keep gold, blue and sky for points, ownership
-// and defence).
-const CYAN = "#3ccfe0";
-const ORANGE = "#ff9f43";
 const SKY = "#7fd1ff";
-
-// Each fact's icon, in a tinted tile like the More page's: a different
-// colour for every card, so each is easy to find again.
-const FACT_ICONS: Record<string, { name: SymbolViewProps["name"]; tint: string }> = {
-  top: { name: { ios: "sparkles", android: "auto_awesome", web: "auto_awesome" }, tint: GOLD },
-  cleansheets: { name: { ios: "lock.shield.fill", android: "verified_user", web: "verified_user" }, tint: SKY },
-  fixtures: { name: { ios: "calendar", android: "calendar_month", web: "calendar_month" }, tint: PURPLE },
-  differentials: { name: { ios: "diamond.fill", android: "diamond", web: "diamond" }, tint: CYAN },
-  transfers: { name: { ios: "arrow.left.arrow.right", android: "swap_horiz", web: "swap_horiz" }, tint: THEME.accent },
-  captain: { name: { ios: "star.fill", android: "star", web: "star" }, tint: ORANGE },
-  hardest: { name: { ios: "exclamationmark.triangle.fill", android: "warning", web: "warning" }, tint: THEME.bad },
-  missing: { name: { ios: "person.2.fill", android: "groups", web: "groups" }, tint: BLUE },
-};
 
 // The value on the right, as a pill coloured by what it is: points gold,
 // ownership blue, defence sky, a rise green, a fall red, a difficulty in
@@ -108,25 +89,9 @@ function ClubTag({ club }: { club: string }) {
 }
 
 function FactCard({ fact }: { fact: Fact }) {
-  const icon = FACT_ICONS[fact.key];
   return (
     <View style={{ backgroundColor: THEME.surface, borderRadius: 12, paddingVertical: 9, marginBottom: 8 }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, marginBottom: 2 }}>
-        {!!icon && (
-          <View
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: 7,
-              marginRight: 9,
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: `${icon.tint}26`,
-            }}
-          >
-            <AppSymbol name={icon.name} color={icon.tint} size={13} />
-          </View>
-        )}
         <View style={{ flex: 1 }}>
           <Text accessibilityRole="header" style={{ color: THEME.ink, fontSize: 12.5, fontWeight: "700" }}>
             {fact.title}

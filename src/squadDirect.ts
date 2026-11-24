@@ -11,6 +11,7 @@
 // The result has exactly the shape of the web page script's message, so the
 // app handles both the same way. It must stay in step with buildFetchJs.
 import type { Squad } from "./fpl";
+import { FRESH, fplJsonTimed } from "./fplCache";
 
 const API = "https://fantasy.premierleague.com/api/";
 // Kept short enough that, if this route hangs, the fallback still has time.
@@ -54,7 +55,8 @@ export async function loadSquadDirect(token: string): Promise<DirectSquadResult>
     if (!entry) return { ok: false, reason: "no entry" };
 
     const [bs, d, fixtures, entryData] = await Promise.all([
-      getJson("bootstrap-static/", token),
+      // Public, so shared with the app's other readers of this large file.
+      fplJsonTimed("bootstrap-static/", FRESH.bootstrap, TIMEOUT_MS),
       getJson(`my-team/${entry}/`, token),
       getJson("fixtures/", token),
       getJson(`entry/${entry}/`, token),

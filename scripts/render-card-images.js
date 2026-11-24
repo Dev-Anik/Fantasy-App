@@ -50,8 +50,12 @@ const jobs = [
   ["pitch-bottom.svg", [1200, 370]],
 ];
 
+// Optional: only the files whose path starts with this, e.g.
+//   node scripts/render-card-images.js card-shield/
+const only = process.argv[2];
+
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "profpl-render-"));
-for (const [svg, [width, height]] of jobs) {
+for (const [svg, [width, height]] of jobs.filter(([file]) => !only || file.split(path.sep).join("/").startsWith(only))) {
   const source = path.join(images, svg);
   const output = source.replace(/\.svg$/, ".png");
   const page = path.join(work, "page.html");

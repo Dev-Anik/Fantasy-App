@@ -243,6 +243,8 @@ type PitchMetrics = {
 const AvatarSettledContext = createContext<() => void>(() => {});
 // If an image never reports, show the squad anyway after this long.
 const REVEAL_TIMEOUT_MS = 1200;
+// The longest the players wait for their names to be measured.
+const NAMES_WAIT_MS = 500;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -488,6 +490,10 @@ function NameMeasurer({ names, onWidest }: { names: string[]; onWidest: (width: 
   );
 }
 
+// The widest name of each squad already measured, so a squad seen before
+// draws its names at their final size on the first frame.
+const widestByNames = new Map<string, number>();
+
 // The last measured size of each kind of pitch (Lineup, Transfers, points
 // page), so a pitch seen before draws at its final size on the first frame
 // instead of a guessed one.
@@ -545,7 +551,7 @@ function PlayerAvatar({
     flag?: ReactNode;
     // Home: up to two extra figures the user chose (form, price...), shown
     // in the top corners under the position and the club.
-    stats?: { key: string; label: string; value: string }[];
+    stats?: { key: string; label: string; value: string; color?: string; right?: boolean }[];
     // Shown in the card's footer: the next opponent and difficulty bars.
     footer?: ReactNode;
   };
@@ -769,7 +775,14 @@ function PlayerAvatar({
             {/* Home: the user's chosen figures, in the top corners beside the
                 head (1 under the position, 2 under the club): the number,
                 with a tiny label under it. */}
-            {(card.stats ?? []).slice(0, 2).map((stat, index) => (
+            {(card.stats ?? []).slice(0, 2).map((stat, index) => {
+              // Which corner: the second figure, or one marked for the right
+              // (the price change, kept clear of the C/V armband on the left).
+              const right = stat.right ?? index === 1;
+              // The price change stands out: full strength, small (clear of the face),
+              // on a dark tag.
+              const focus = stat.key === "change";
+              return (
               <View
                 key={stat.key}
                 pointerEvents="none"
@@ -777,24 +790,32 @@ function PlayerAvatar({
                   position: "absolute",
                   // Just under the position (left) or the club (right), which
                   // share a size and top edge.
-                  top: clubTop + clubLine + 3 + (index === 1 ? clubDrop : 0),
-                  opacity: SECONDARY_OPACITY,
-                  ...(index === 0 ? { left: Math.round(width * 0.08) } : { right: Math.round(width * 0.08) }),
-                  alignItems: index === 0 ? "flex-start" : "flex-end",
+                  top: clubTop + clubLine + 3 + (right ? clubDrop : 0),
+                  opacity: focus ? 1 : SECONDARY_OPACITY,
+                  ...(right ? { right: Math.round(width * 0.08) } : { left: Math.round(width * 0.08) }),
+                  alignItems: right ? "flex-end" : "flex-start",
                   zIndex: 2,
                 }}
               >
                 <Text
                   allowFontScaling={false}
                   style={{
-                    color: epic?.ink ?? "#ffffff",
-                    fontSize: Math.max(8, Math.round(width * 0.13 * 2) / 2),
-                    lineHeight: Math.max(9, Math.round(width * 0.15)),
+                    color: stat.color ?? epic?.ink ?? "#ffffff",
+                    fontSize: Math.max(focus ? 7 : 8, Math.round(width * (focus ? 0.11 : 0.13) * 2) / 2),
+                    lineHeight: Math.max(9, Math.round(width * (focus ? 0.14 : 0.15))),
                     fontWeight: "900",
                     includeFontPadding: false,
                     textShadowColor: "rgba(0, 0, 0, 0.75)",
                     textShadowOffset: { width: 0, height: 1 },
                     textShadowRadius: 3,
+                    ...(focus
+                      ? {
+                          paddingHorizontal: 2,
+                          borderRadius: 4,
+                          overflow: "hidden" as const,
+                          backgroundColor: "rgba(4, 8, 16, 0.72)",
+                        }
+                      : null),
                   }}
                 >
                   {stat.value}
@@ -817,7 +838,8 @@ function PlayerAvatar({
                   </Text>
                 )}
               </View>
-            ))}
+              );
+            })}
             {/* Name plate: a solid strip, so the name reads over any kit. */}
             <View
               style={{
@@ -949,6 +971,45 @@ function PlayerAvatar({
 }
 
 // Injury, suspension or doubt for the next gameweek.
+// The mark at the start of an availability flag: a "no entry" sign (a ring
+// with a slash) for a ban, that is suspended or unavailable; a plus for
+// injured; an exclamation mark for doubtful. Made of shapes, 8 square.
+function FlagMark({ kind, color }: { kind: "ban" | "injured" | "doubtful"; color: string }) {
+  const size = 8;
+  const stroke = 2;
+  if (kind === "ban") {
+    return (
+      <View
+        style={{
+          width: size + 1,
+          height: size + 1,
+          borderRadius: (size + 1) / 2,
+          borderWidth: 1.5,
+          borderColor: color,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <View style={{ width: size + 1, height: 1.5, backgroundColor: color, transform: [{ rotate: "-45deg" }] }} />
+      </View>
+    );
+  }
+  if (kind === "injured") {
+    return (
+      <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+        <View style={{ position: "absolute", width: size, height: stroke, borderRadius: 1, backgroundColor: color }} />
+        <View style={{ position: "absolute", width: stroke, height: size, borderRadius: 1, backgroundColor: color }} />
+      </View>
+    );
+  }
+  return (
+    <View style={{ width: stroke, height: size, alignItems: "center", justifyContent: "space-between" }}>
+      <View style={{ width: stroke, height: 5, borderRadius: 1, backgroundColor: color }} />
+      <View style={{ width: stroke, height: stroke, borderRadius: 1, backgroundColor: color }} />
+    </View>
+  );
+}
+
 function AvailabilityFlag({ flag }: { flag: Availability }) {
   return (
     <View
@@ -958,9 +1019,9 @@ function AvailabilityFlag({ flag }: { flag: Availability }) {
         flexDirection: "row",
         alignItems: "center",
         height: 15,
-        paddingLeft: 2,
+        paddingLeft: 4,
         paddingRight: 4,
-        gap: 1.5,
+        gap: 2.5,
         borderRadius: 8,
         backgroundColor: flag.color,
         borderWidth: 1,
@@ -972,22 +1033,22 @@ function AvailabilityFlag({ flag }: { flag: Availability }) {
         elevation: 3,
       }}
     >
-      <AppSymbol
-        name={
-          flag.level === "out"
-            ? { ios: "cross.circle.fill", android: "medical_services", web: "medical_services" }
-            : { ios: "exclamationmark.circle.fill", android: "error", web: "error" }
-        }
+      {/* Drawn, not an icon font: centred by the layout on every phone. */}
+      <FlagMark
+        kind={flag.level !== "out" ? "doubtful" : flag.short === "INJ" ? "injured" : "ban"}
         color={flag.ink}
-        size={10}
       />
       <Text
         allowFontScaling={false}
         style={{
           color: flag.ink,
           fontSize: 8,
+          lineHeight: 10,
           fontWeight: "900",
           includeFontPadding: false,
+          // Capitals sit low in the font's box (no tails below); lifted to
+          // line up with the mark beside them.
+          transform: [{ translateY: -0.6 }],
         }}
       >
         {flag.short}
@@ -1326,6 +1387,80 @@ function RailButton({
     >
       {children}
     </Pressable>
+  );
+}
+
+// The captain's or vice-captain's mark: a round badge with the C or V
+// drawn from shapes, not set as text. Text sits wherever each phone's font
+// puts it inside its box, which left the letter off centre on some phones;
+// shapes are placed by the layout alone, so the mark is exactly centred on
+// every phone. Gold for the captain, silver for the vice.
+function ArmbandBadge({ captain, size }: { captain: boolean; size: number }) {
+  const ink = "#1a1305";
+  // The letter's height and stroke, in step with the badge.
+  const glyph = Math.round(size * 0.5);
+  const stroke = Math.max(2, Math.round(size * 0.13 * 2) / 2);
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: captain ? "#f2c14e" : "#e5e7ee",
+        borderWidth: 1.5,
+        borderColor: "#0b1020",
+        shadowColor: captain ? "#f2c14e" : "#000",
+        shadowOpacity: captain ? 0.6 : 0.4,
+        shadowRadius: captain ? 6 : 3,
+        shadowOffset: { width: 0, height: 1 },
+        elevation: 6,
+      }}
+    >
+      {captain ? (
+        // C: a ring open on the right.
+        <View
+          style={{
+            width: glyph,
+            height: glyph,
+            borderRadius: glyph / 2,
+            borderWidth: stroke,
+            borderColor: ink,
+            borderRightColor: "transparent",
+          }}
+        />
+      ) : (
+        <VMark size={glyph} stroke={stroke} color={ink} />
+      )}
+    </View>
+  );
+}
+
+// V: two strokes leaning in to meet at the foot, inside a square of `size`.
+function VMark({ size, stroke, color }: { size: number; stroke: number; color: string }) {
+  const lean = 20; // degrees from upright
+  const length = size / Math.cos((lean * Math.PI) / 180);
+  // Each stroke's middle, either side of the centre line.
+  const offset = (size / 2) * Math.tan((lean * Math.PI) / 180);
+  const bar = (side: -1 | 1) => (
+    <View
+      key={side}
+      style={{
+        position: "absolute",
+        width: stroke,
+        height: length,
+        borderRadius: stroke / 2,
+        left: size / 2 + side * offset - stroke / 2,
+        top: (size - length) / 2,
+        backgroundColor: color,
+        transform: [{ rotate: `${side * lean}deg` }],
+      }}
+    />
+  );
+  // Lowered a touch: its weight is at the top, so it looked high.
+  return (
+    <View style={{ width: size, height: size, transform: [{ translateY: size * 0.12 }] }}>{[bar(-1), bar(1)]}</View>
   );
 }
 
@@ -1724,8 +1859,9 @@ function CapsuleInfo({
                         : tone.ink,
                   fontSize:
                     inCard && pointsChip
-                      ? // Points page: large, most of the band's height.
-                        Math.round(pointsBandRoom(inCardHeight ?? 0) * 0.82)
+                      ? // Points page: clear, but close to the name's size above it
+                        // (most of the band's height looked far bigger).
+                        Math.round(pointsBandRoom(inCardHeight ?? 0) * 0.74)
                       : emphasis && !inCard
                       ? infoFont + 1.5
                       : inCard
@@ -1860,8 +1996,7 @@ function PlayerCard({
   const infoFont = Math.max(8.5, Math.round(9.5 * scale * 2) / 2);
   // Captain / vice-captain armband: a short band, sized with the card.
   const armCard = shieldSize(pitchMetrics, compact, isBenched);
-  const armband = Math.round(clamp(armCard.width * 0.26, 18, 25));
-  const armbandHeight = Math.round(armband * 0.78);
+  const armband = Math.round(clamp(armCard.width * 0.24, 17, 23));
   // Shield cards: the footer's own height, so what is printed in it is sized
   // to fit inside the card on every screen.
   const footerHeight = shieldSize(pitchMetrics, compact, isBenched).footer;
@@ -1873,7 +2008,17 @@ function PlayerCard({
       : statKeys.flatMap((key) => {
           const value = cardStatValue(key, r, selectedGw);
           const option = CARD_STAT_OPTIONS.find((o) => o.key === key);
-          return value == null || !option ? [] : [{ key, label: option.short, value }];
+          if (value == null || !option) return [];
+          // A price rise in green, anything else in white.
+          const color = key === "change" ? ((r.priceChange ?? 0) > 0 ? "#00e676" : "#ffffff") : undefined;
+          return [{ key, label: option.short, value, color }];
+        })
+        // The price change always sits in the left-hand corner (the C/V
+        // armband is lower down, clear of it); any other figure then takes
+        // the right.
+        .map((stat, _index, all) => {
+          if (!all.some((s) => s.key === "change")) return stat;
+          return { ...stat, right: stat.key !== "change" };
         });
 
   return (
@@ -2012,36 +2157,13 @@ function PlayerCard({
                   accessible={false}
                   style={{
                     position: "absolute",
-                    top: Math.round(armCard.face * 0.53 - armbandHeight / 2),
-                    // The box is now exactly the card, so measure from its edge.
+                    top: Math.round(armCard.face * 0.6 - armband / 2),
+                    // The box is exactly the card, so measure from its edge.
                     left: Math.round(armCard.width * 0.17 - armband / 2),
-                    width: armband,
-                    height: armbandHeight,
-                    borderRadius: 6,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: r.cap ? "#f2c14e" : "#e5e7ee",
-                    borderWidth: 2,
-                    borderColor: "#0b1020",
                     zIndex: 12,
-                    shadowColor: r.cap ? "#f2c14e" : "#000",
-                    shadowOpacity: r.cap ? 0.6 : 0.4,
-                    shadowRadius: r.cap ? 6 : 3,
-                    shadowOffset: { width: 0, height: 1 },
-                    elevation: 6,
                   }}
                 >
-                  <Text
-                    allowFontScaling={false}
-                    style={{
-                      color: "#1a1305",
-                      fontSize: Math.round(armbandHeight * 0.66),
-                      fontWeight: "900",
-                      includeFontPadding: false,
-                    }}
-                  >
-                    {r.cap ? "C" : "V"}
-                  </Text>
+                  <ArmbandBadge captain={r.cap} size={armband} />
                 </View>
               )}
             </View>
@@ -2393,9 +2515,23 @@ export function Pitch({
   const revealed = useRef(false);
   const settledCount = useRef(0);
   const expectedCount = useRef(picks.length);
+  // The squad's names, measured for their size (NameMeasurer): the players
+  // wait for this too, so names never change size once shown.
+  const namesKey = picks.map((p) => p.name).join("|");
+  const [widestName, setWidestName] = useState<{ key: string; width: number } | null>(null);
+  const widest =
+    widestName?.key === namesKey ? widestName.width : (widestByNames.get(namesKey) ?? null);
+  const namesKnown = widest != null || !picks.some((p) => p.name);
+  // Never held back for long by the names alone.
+  const [namesWaited, setNamesWaited] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setNamesWaited(true), NAMES_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, []);
   const measured =
     measuredWidth != null &&
-    pitchHeight != null;
+    pitchHeight != null &&
+    (namesKnown || namesWaited);
   const measuredRef = useRef(measured);
   // Kept in step after each render (effects run in order, before the one
   // below that reveals the squad once measured).
@@ -2456,10 +2592,6 @@ export function Pitch({
     if (measured && waitingForSize.current) showSquad();
   }, [measured, showSquad]);
 
-  // The squad's names, measured for their size (NameMeasurer).
-  const namesKey = picks.map((p) => p.name).join("|");
-  const [widestName, setWidestName] = useState<{ key: string; width: number } | null>(null);
-
   const starters = picks.filter((p) => p.pos <= 11);
   const bench = picks.filter((p) => p.pos > 11).sort((a, b) => a.pos - b.pos);
   const lines = [1, 2, 3, 4].map((type) => starters.filter((p) => p.type === type));
@@ -2484,7 +2616,7 @@ export function Pitch({
           picks,
           metrics,
           isCompactAvatar,
-          widestName?.key === namesKey ? widestName.width : null,
+          widest,
         )}
       >
       <CardStatsContext.Provider value={cardStats}>
@@ -2623,11 +2755,12 @@ export function Pitch({
         <NameMeasurer
           key={namesKey}
           names={picks.map((p) => p.name)}
-          onWidest={(width) =>
+          onWidest={(width) => {
+            widestByNames.set(namesKey, width);
             setWidestName((current) =>
               current?.key === namesKey && current.width === width ? current : { key: namesKey, width },
-            )
-          }
+            );
+          }}
         />
       </Pressable>
       </BenchBoostContext.Provider>

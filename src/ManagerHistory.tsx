@@ -206,6 +206,10 @@ export function ManagerHistory({
     badgeSize && statsSize && columnHeight != null
       ? { width: Math.max(badgeSize.width, statsSize.width), height: columnHeight }
       : null;
+  // The two cards stay invisible until they have measured each other, so
+  // they appear at their shared size instead of resizing on screen.
+  const cardsSized =
+    !!badgeSize && (!selectedGwData || !!statsSize) && (!statusShown || statusHeight > 0);
   const picks: Row[] =
     live?.picks.map((pick) => {
       // Bench players show their own points; only counted ones are multiplied.
@@ -494,7 +498,7 @@ export function ManagerHistory({
                     const height = Math.ceil(event.nativeEvent.layout.height);
                     setColumnDrawn((current) => (current === height ? current : height));
                   }}
-                  style={{ position: "absolute", top: 8, right: 8, zIndex: 10 }}
+                  style={{ position: "absolute", top: 8, right: 8, zIndex: 10, opacity: cardsSized ? 1 : 0 }}
                 >
                   {/* Measured, so the average/highest card can match its size. */}
                   <View
@@ -542,7 +546,15 @@ export function ManagerHistory({
                 </View>
                 <View
                   pointerEvents="box-none"
-                  style={{ position: "absolute", top: 8, left: 8, zIndex: 10, alignItems: "flex-start", gap: 6 }}
+                  style={{
+                    position: "absolute",
+                    top: 8,
+                    left: 8,
+                    zIndex: 10,
+                    alignItems: "flex-start",
+                    gap: 6,
+                    opacity: cardsSized ? 1 : 0,
+                  }}
                 >
                   {selectedGwData && (
                     <GameweekStats
@@ -608,6 +620,11 @@ export function ManagerHistory({
           gameweekName={selectedGwData?.name ?? `Gameweek ${shownEvent}`}
           chip={currentData.chip}
           points={totalPts}
+          manager={{
+            teamName: title,
+            managerName,
+            overallRank: currentData.history.overallRank ?? null,
+          }}
           onDone={() => setSnapshotOpen(false)}
         />
       )}

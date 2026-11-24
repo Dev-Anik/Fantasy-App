@@ -167,6 +167,15 @@ const cell = (width: number, align: "center" | "right" = "right", strong = false
   ...(strong ? TABLE.total : TABLE.figure),
 });
 
+// The gameweek a classic league's Live tab follows, or null when it has none
+// (a head-to-head league, no gameweek in play, or one before the league began).
+export function leagueLiveEvent(league: FplLeague, gameweeks: Gameweek[]): number | null {
+  const latest = gameweeks[gameweeks.length - 1];
+  return league.kind !== "h2h" && latest && !latest.finished && (league.start_event ?? 1) <= latest.id
+    ? latest.id
+    : null;
+}
+
 export function LeagueDetails({
   league,
   standings,
@@ -193,9 +202,7 @@ export function LeagueDetails({
   const latestGameweek = gameweeks[gameweeks.length - 1]?.id ?? 1;
   // A classic league with a gameweek in play (that counts for this league)
   // gets a live table, shown first.
-  const latest = gameweeks[gameweeks.length - 1];
-  const liveEvent =
-    !isH2h && latest && !latest.finished && (league.start_event ?? 1) <= latest.id ? latest.id : null;
+  const liveEvent = leagueLiveEvent(league, gameweeks);
   const [tab, setTab] = useState<Tab>(liveEvent ? "live" : "standings");
   // Classic leagues: Live while a gameweek is in play, the standings, and the
   // league's cup if it has one.

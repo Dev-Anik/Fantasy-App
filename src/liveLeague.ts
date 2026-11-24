@@ -86,7 +86,42 @@ export type LiveLeague = { event: number; entries: LiveEntry[]; updatedAt: numbe
 
 // The live table for these league rows (plus the signed-in manager, so the
 // comparison works even when they're on another page).
-export async function loadLiveLeague(
+// The last live table per league page, and the one being worked out: the
+// league page reads it before opening (so it opens complete), and the table
+// then starts from it instead of working it out again.
+const liveTables = new Map<string, LiveLeague>();
+const liveTablesPending = new Map<string, Promise<LiveLeague>>();
+
+export function liveLeagueKey(rows: LeagueStanding[], event: number, extraEntry?: number) {
+  return `${event}:${extraEntry ?? ""}:${rows.map((row) => row.entry).join(",")}`;
+}
+
+export function peekLiveLeague(key: string): LiveLeague | null {
+  return liveTables.get(key) ?? null;
+}
+
+export function loadLiveLeague(
+  rows: LeagueStanding[],
+  event: number,
+  extra?: { entry: number; teamName: string; managerName: string },
+): Promise<LiveLeague> {
+  const key = liveLeagueKey(rows, event, extra?.entry);
+  let pending = liveTablesPending.get(key);
+  if (!pending) {
+    pending = workOutLiveLeague(rows, event, extra).then((table) => {
+      liveTables.set(key, table);
+      return table;
+    });
+    const clear = () => {
+      if (liveTablesPending.get(key) === pending) liveTablesPending.delete(key);
+    };
+    pending.then(clear, clear);
+    liveTablesPending.set(key, pending);
+  }
+  return pending;
+}
+
+async function workOutLiveLeague(
   rows: LeagueStanding[],
   event: number,
   extra?: { entry: number; teamName: string; managerName: string },

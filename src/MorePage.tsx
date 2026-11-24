@@ -5,7 +5,6 @@ import * as Device from "expo-device";
 import * as Clipboard from "expo-clipboard";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { SymbolViewProps } from "expo-symbols";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { AppSymbol } from "./AppSymbol";
 import type { NotificationSettings, PermissionState } from "./notifications";
@@ -116,44 +115,19 @@ function Group({ children }: { children: ReactNode }) {
   return <View style={{ backgroundColor: SURFACE, borderRadius: 12, overflow: "hidden" }}>{children}</View>;
 }
 
-// Inset rows with an icon tile further, so the line starts under the text.
 function Divider({ inset = 16 }: { inset?: number }) {
   return <View style={{ height: 1, marginLeft: inset, backgroundColor: LINE }} />;
 }
-const ICON_INSET = 16 + 34 + 12;
-
-// A coloured icon tile at the start of a row: marks the app's features
-// (Insights) apart from settings, and gives the eye something to find.
-type ItemIcon = { name: SymbolViewProps["name"]; tint: string };
-
-function IconTile({ icon }: { icon: ItemIcon }) {
-  return (
-    <View
-      style={{
-        width: 34,
-        height: 34,
-        borderRadius: 9,
-        marginRight: 12,
-        alignItems: "center",
-        justifyContent: "center",
-        // The tint at low strength behind the icon in full colour.
-        backgroundColor: `${icon.tint}26`,
-      }}
-    >
-      <AppSymbol name={icon.name} color={icon.tint} size={18} />
-    </View>
-  );
-}
-
-// One line of a list: an optional icon, a title, an optional line under it,
-// and something on the right (a chevron, a switch or a value).
+// One line of a list: a title, an optional line under it, and something on
+// the right (a chevron, a switch or a value). `strong` marks the app's
+// features (Insights) apart from settings.
 function Item({
   title,
   detail,
   right,
   onPress,
   color = INK,
-  icon,
+  strong = false,
   accessibilityLabel,
 }: {
   title: string;
@@ -161,14 +135,13 @@ function Item({
   right?: ReactNode;
   onPress?: () => void;
   color?: string;
-  icon?: ItemIcon;
+  strong?: boolean;
   accessibilityLabel?: string;
 }) {
   const body = (
     <>
-      {!!icon && <IconTile icon={icon} />}
       <View style={{ flex: 1, paddingRight: 12 }}>
-        <Text style={{ color, fontSize: 15, fontWeight: icon ? "600" : "500" }}>{title}</Text>
+        <Text style={{ color, fontSize: 15, fontWeight: strong ? "600" : "500" }}>{title}</Text>
         {!!detail && <Text style={{ color: MUTED, fontSize: 12, marginTop: 2, lineHeight: 16 }}>{detail}</Text>}
       </View>
       {right}
@@ -349,6 +322,7 @@ export function MorePage({
   onToggleNotification,
   onOpenSettings,
   onOpenSeason,
+  onOpenCareer,
   onOpenPlanner,
   onOpenMatches,
   onOpenHelper,
@@ -365,6 +339,7 @@ export function MorePage({
   onToggleNotification: (key: keyof NotificationSettings) => void;
   onOpenSettings: () => void;
   onOpenSeason: () => void;
+  onOpenCareer: () => void;
   onOpenPlanner: () => void;
   onOpenMatches: () => void;
   onOpenHelper: () => void;
@@ -426,31 +401,39 @@ export function MorePage({
       <Group>
         <Item
           title="Chips & captain"
-          icon={{ name: { ios: "sparkles", android: "auto_awesome", web: "auto_awesome" }, tint: "#f2c14e" }}
+          strong
           detail="Captain options and chip readings for this gameweek"
           right={<Chevron />}
           onPress={onOpenHelper}
         />
-        <Divider inset={ICON_INSET} />
+        <Divider />
         <Item
           title="Matches"
-          icon={{ name: { ios: "soccerball", android: "sports_soccer", web: "sports_soccer" }, tint: THEME.accent }}
+          strong
           detail="Live scores, results and kick-off times"
           right={<Chevron />}
           onPress={onOpenMatches}
         />
-        <Divider inset={ICON_INSET} />
+        <Divider />
         <Item
           title="My season"
-          icon={{ name: { ios: "chart.bar.fill", android: "bar_chart", web: "bar_chart" }, tint: "#5b8cff" }}
+          strong
           detail="Rank, squad review, decisions and history"
           right={<Chevron />}
           onPress={onOpenSeason}
         />
-        <Divider inset={ICON_INSET} />
+        <Divider />
+        <Item
+          title="My career"
+          strong
+          detail="Every FPL season you've played: points, ranks and best finishes"
+          right={<Chevron />}
+          onPress={onOpenCareer}
+        />
+        <Divider />
         <Item
           title="Fixture planner"
-          icon={{ name: { ios: "calendar", android: "calendar_month", web: "calendar_month" }, tint: "#b48cff" }}
+          strong
           detail="Every club's upcoming fixtures and difficulty"
           right={<Chevron />}
           onPress={onOpenPlanner}

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import Reanimated, { FadeOut } from "react-native-reanimated";
 import {
   ActivityIndicator,
   Animated,
@@ -55,12 +56,16 @@ import {
 import { computeLive } from "../live";
 import { LeagueHub } from "../LeagueHub";
 import { ManagerHistory } from "../ManagerHistory";
-import { loadEntryName, loadOverallRanks } from "../fplPublic";
+import { loadEntryName, loadFplBasics, loadOverallRanks } from "../fplPublic";
+import { FRESH, fplJson, within } from "../fplCache";
+import { loadSeasonInsights } from "../insights";
+import { CareerPage } from "../CareerPage";
+import { loadCareerShared } from "../career";
 import type { RankPoint } from "../fplPublic";
 import { MorePage } from "../MorePage";
 import { PrivacyPolicy, TermsAndConditions } from "../LegalPage";
-import { FixturePlanner } from "../FixturePlanner";
-import { MatchCentre } from "../MatchCentre";
+import { FUTURE_FIXTURES, FixturePlanner } from "../FixturePlanner";
+import { MatchCentre, loadMatchCentre } from "../MatchCentre";
 import { GameweekHelper } from "../GameweekHelper";
 import { CardInfoSheet } from "../CardInfoSheet";
 import { SaveProgress } from "../SaveProgress";
@@ -74,7 +79,7 @@ import { isTemporary, MESSAGES, userMessage } from "../errors";
 import { EmailSignIn } from "../EmailSignIn";
 import { SilentSignIn } from "../SilentSignIn";
 import { loadManagerGameweekDirect } from "../managerDirect";
-import { runLeagueActionDirect } from "../leagueDirect";
+import { loadFplCup, runLeagueActionDirect } from "../leagueDirect";
 import type { DirectLeagueAction } from "../leagueDirect";
 import { clubsPlaying, setSquadPlaying } from "../squadPlaying";
 import { loadRememberedLogin, pauseAutoSignIn } from "../rememberedLogin";
@@ -85,6 +90,9 @@ import { ScoutPanel } from "../ScoutPanel";
 import { estimatePoints, teamXgcFromElements, withCleanSheetData } from "../gameweekAdvice";
 import { saveEstimateSnapshot } from "../estimateSnapshots";
 import { PlayerPicker } from "../PlayerPicker";
+import { SuggestionsButton, TransferSuggestions } from "../TransferSuggestions";
+import { adviseTransfers } from "../transferAdvice";
+import type { TransferSuggestion } from "../transferAdvice";
 import { SeasonInsights } from "../SeasonInsights";
 import {
   checkSquadNews,
@@ -122,6 +130,10 @@ const LEAGUE_REFRESH_MS = 60_000;
 const AVAILABILITY_REFRESH_MS = 5 * 60_000;
 // How often live points are re-read while a gameweek is in play.
 const LIVE_REFRESH_MS = 60_000;
+// The longest the loading screen waits for Home's data before showing it.
+const HOME_WAIT_MS = 6000;
+// The longest a page waits for its data before opening anyway.
+const OPEN_WAIT_MS = 20_000;
 const STORAGE_LOGGED_IN = "profpl_is_logged_in";
 // Set once the app has asked for notification permission, so it asks only once.
 const STORAGE_NOTIF_PROMPTED = "profpl_notifications_prompted";
@@ -364,13 +376,17 @@ export default function Index() {
   // movement beside the rank on the home screen. Read again when the rank
   // changes (a new gameweek, or FPL updating the live rank).
   const [rankHistory, setRankHistory] = useState<{ entry: number; points: RankPoint[] } | null>(null);
+  // The team whose rank history has been asked for and answered (or not).
+  const [rankChecked, setRankChecked] = useState<number | null>(null);
   const rankEntry = squad?.entry;
   const rankNow = squad?.overallRank;
   useEffect(() => {
     if (!rankEntry) return;
     let active = true;
     loadOverallRanks(rankEntry).then((points) => {
-      if (active && points.length) setRankHistory({ entry: rankEntry, points });
+      if (!active) return;
+      if (points.length) setRankHistory({ entry: rankEntry, points });
+      setRankChecked(rankEntry);
     });
     return () => {
       active = false;
@@ -380,9 +396,14 @@ export default function Index() {
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   // Transfers keeps its own choice (none by default: position and club only).
   const [transferCardStats, setTransferCardStats] = useState<CardStatKey[]>([]);
+  const [cardStatsLoaded, setCardStatsLoaded] = useState(false);
   useEffect(() => {
-    loadCardStats("lineup").then(setCardStats);
-    loadCardStats("transfers").then(setTransferCardStats);
+    Promise.all([
+      loadCardStats("lineup").then(setCardStats),
+      loadCardStats("transfers").then(setTransferCardStats),
+    ])
+      .catch(() => {})
+      .finally(() => setCardStatsLoaded(true));
   }, []);
   // The choice for the page on screen.
   const cardStatsPage = mode === "transfers" ? "transfers" : "lineup";
@@ -452,6 +473,8 @@ export default function Index() {
 
   // "My season" page, opened from More.
   const [showSeason, setShowSeason] = useState(false);
+  // My career (every season played), opened from More.
+  const [showCareer, setShowCareer] = useState(false);
   // The privacy policy, readable signed in or not.
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -468,6 +491,27 @@ export default function Index() {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => onBack.current());
     return () => subscription.remove();
   }, []);
+
+  // Pages that read FPL (My season, the planner, Chips & captain, Matches)
+  // open once their data is in, so they never fill in on screen. Meanwhile
+  // the current screen stays, with a small loading card if it takes a
+  // moment; tapping it cancels. A failed read still opens the page, which
+  // then says what went wrong.
+  const [opening, setOpening] = useState<string | null>(null);
+  const openingSeq = useRef(0);
+  const openWhenReady = (label: string, load: () => Promise<unknown>, open: () => void) => {
+    const id = ++openingSeq.current;
+    setOpening(label);
+    within(load(), OPEN_WAIT_MS).then(() => {
+      if (openingSeq.current !== id) return;
+      setOpening(null);
+      open();
+    });
+  };
+  const cancelOpening = () => {
+    openingSeq.current += 1;
+    setOpening(null);
+  };
   // The signed-in manager's live numbers for the gameweek in play.
   const [ownLive, setOwnLive] = useState<{
     entry: number;
@@ -533,9 +577,8 @@ export default function Index() {
       reading = true;
       lastRead = Date.now();
       try {
-        const res = await fetch("https://fantasy.premierleague.com/api/bootstrap-static/");
-        if (!res.ok) throw new Error(`FPL returned ${res.status}`);
-        const json = await res.json();
+        // Shared with the other readers of this large file (fplCache.ts).
+        const json = await fplJson("bootstrap-static/", force ? 0 : FRESH.bootstrap);
         if (json?.events) setFplEvents(json.events);
         if (Array.isArray(json?.elements)) {
           const next: Record<number, { status: string; chance: number | null; news: string }> = {};
@@ -985,6 +1028,7 @@ export default function Index() {
             clearAccountViewsRef.current();
             setStage("welcome");
             setShowSeason(false);
+            setShowCareer(false);
             setActiveBottomTab("lineup");
             setMode("lineup");
           },
@@ -1062,6 +1106,7 @@ export default function Index() {
     gameweekCache.current.clear();
     setShowLeagues(false);
     setShowPlanner(false);
+    setShowCareer(false);
     setShowHelper(false);
     setShowMatches(false);
     setError("");
@@ -2267,6 +2312,37 @@ export default function Index() {
   const extra =freeLeft == null ? 0 : Math.max(pending.length - freeLeft, 0);
   const hit = extra * (squad?.hitCost ?? 4);
 
+  // Suggested transfers for the squad as it stands on the page (see
+  // transferAdvice.ts): worked out from data already on the phone.
+  // Only on the Transfers page: it weighs every player in the game, so it
+  // isn't redone on Home for nothing.
+  const transferAdvice = useMemo(() => {
+    if (mode !== "transfers" || !squad || Object.keys(elements).length === 0) return null;
+    const pool = squad.pool.map((pl) => (playerStatus[pl.id] ? { ...pl, ...playerStatus[pl.id] } : pl));
+    const latest = tdraft.map((row) => (playerStatus[row.id] ? { ...row, ...playerStatus[row.id] } : row));
+    return adviseTransfers({
+      squad: latest,
+      pool,
+      bank: bankAfter,
+      fixturesByTeam: squad.fixturesByTeam ?? {},
+      records: elements,
+      teamXgc,
+      fromEvent: squad.gw,
+      freeTransfers: squad.freeTransfers,
+      pendingCount: pending.length,
+      hitCost: squad.hitCost ?? 4,
+      unlimited: pendingChip === "wildcard" || pendingChip === "freehit",
+    });
+  }, [mode, squad, elements, playerStatus, tdraft, bankAfter, teamXgc, pending.length, pendingChip]);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const makeSuggestedTransfer = (suggestion: TransferSuggestion) => {
+    setPending((prev) => [
+      ...prev.filter((x) => x.pos !== suggestion.out.pos),
+      { pos: suggestion.out.pos, inn: suggestion.inn },
+    ]);
+    setSelectedPos(null);
+  };
+
   // Budget and club-limit info for the spot being replaced
   const pickInfo = useMemo(() => {
     if (!squad || pickPos === null) return null;
@@ -2539,6 +2615,10 @@ export default function Index() {
   // lets Android handle it (leaving the app from the Lineup tab).
   useEffect(() => {
     onBack.current = () => {
+      if (opening) {
+        cancelOpening();
+        return true;
+      }
       if (showTerms) {
         setShowTerms(false);
         return true;
@@ -2549,6 +2629,10 @@ export default function Index() {
       }
       if (showSeason) {
         setShowSeason(false);
+        return true;
+      }
+      if (showCareer) {
+        setShowCareer(false);
         return true;
       }
       if (showPlanner) {
@@ -2616,6 +2700,52 @@ export default function Index() {
   const activeMemberReady =
     !!activeMember && (memberSquad?.entry === activeMember.entry || !managerLoading);
 
+  // Home first appears complete: the loading screen stays over it until
+  // FPL's player data (estimates, news), the rank history, the chosen card
+  // lines and, during a gameweek, the live score are in, so nothing fills
+  // in or shifts once it's on screen. Home is drawn underneath meanwhile,
+  // so its pitch is measured and its kits decoded by then. If something is
+  // slow, Home shows anyway after HOME_WAIT_MS.
+  const [homeShown, setHomeShown] = useState(false);
+  const homeDataIn =
+    !!squad &&
+    cardStatsLoaded &&
+    (Object.keys(elements).length > 0 || elementsFailed) &&
+    rankChecked === squad.entry &&
+    // Home only reads its live score while it is the page in view; opened
+    // straight onto a team page (a live alert tapped) it never would.
+    (!liveGwId || viewingEntry !== null || (ownLive?.entry === squad.entry && ownLive.event === liveGwId));
+  if (stage === "squad" && homeDataIn && !homeShown) setHomeShown(true);
+  const holdingHome = stage === "squad" && !homeShown;
+  useEffect(() => {
+    if (!holdingHome) return;
+    const timer = setTimeout(() => setHomeShown(true), HOME_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [holdingHome]);
+
+  // Once Home is up, read ahead what the other pages need (quietly, a few
+  // at a time), so opening them is instant: the squad's player records, the
+  // fixture list, the chip windows and the cup. (Not the season review: it is
+  // dozens of large files, read only when My season is opened.)
+  const prefetchedFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!homeShown || !squad || prefetchedFor.current === squad.entry) return;
+    const entry = squad.entry;
+    const ids = squad.picks.map((pick) => pick.id);
+    const timer = setTimeout(async () => {
+      prefetchedFor.current = entry;
+      await Promise.allSettled([loadFplBasics(), fplJson(FUTURE_FIXTURES, FRESH.settled)]);
+      for (let i = 0; i < ids.length; i += 4) {
+        await Promise.allSettled(
+          ids.slice(i, i + 4).map((id) => fplJson(`element-summary/${id}/`, FRESH.settled)),
+        );
+      }
+      loadFplCup(entry).catch(() => {});
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [homeShown, squad]);
+
+
   // The home pitch always shows the team for the upcoming gameweek.
   const currentSelectedGw = squad?.gw ?? 1;
 
@@ -2623,14 +2753,31 @@ export default function Index() {
     <View style={{ flex: 1, backgroundColor: THEME.bg }}>
       <StatusBar barStyle="light-content" />
 
-      {stage === "checking" && (
-        <View
-          style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
+      {(stage === "checking" || holdingHome) && (
+        // Fades away once Home is ready underneath.
+        <Reanimated.View
+          exiting={holdingHome ? FadeOut.duration(220) : undefined}
+          style={
+            holdingHome
+              ? {
+                  position: "absolute",
+                  top: 0,
+                  right: 0,
+                  bottom: 0,
+                  left: 0,
+                  zIndex: 100,
+                  elevation: 100,
+                  backgroundColor: THEME.bg,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }
+              : { flex: 1, alignItems: "center", justifyContent: "center" }
+          }
         >
           <Wordmark size={32} />
           <ActivityIndicator color={GREEN} style={{ marginTop: 24 }} />
           <Text style={{ color: THEME.muted, fontSize: 12.5, marginTop: 12 }}>Loading your team…</Text>
-        </View>
+        </Reanimated.View>
       )}
 
       {stage === "welcome" && (
@@ -3168,10 +3315,23 @@ export default function Index() {
                 notifPermission={notifPermission}
                 onToggleNotification={toggleNotification}
                 onOpenSettings={() => Linking.openSettings()}
-                onOpenSeason={() => setShowSeason(true)}
-                onOpenPlanner={() => setShowPlanner(true)}
-                onOpenHelper={() => setShowHelper(true)}
-                onOpenMatches={() => setShowMatches(true)}
+                onOpenSeason={() =>
+                  openWhenReady("Loading your season…", () => loadSeasonInsights(squad.entry), () => setShowSeason(true))
+                }
+                onOpenCareer={() =>
+                  openWhenReady("Loading your career…", () => loadCareerShared(squad.entry), () => setShowCareer(true))
+                }
+                onOpenPlanner={() =>
+                  openWhenReady("Loading fixtures…", () => fplJson(FUTURE_FIXTURES, FRESH.settled), () => setShowPlanner(true))
+                }
+                onOpenHelper={() => openWhenReady("Loading…", loadFplBasics, () => setShowHelper(true))}
+                onOpenMatches={() =>
+                  openWhenReady(
+                    "Loading matches…",
+                    () => loadMatchCentre(squad.gameweeks.find((gw) => gw.isCurrent)?.id ?? squad.gw),
+                    () => setShowMatches(true),
+                  )
+                }
                 onOpenPrivacy={() => setShowPrivacy(true)}
                 onOpenTerms={() => setShowTerms(true)}
                 onLogout={handleLogout}
@@ -3301,6 +3461,21 @@ export default function Index() {
                         >
                           <CameraIcon color={THEME.ink} size={18} />
                         </Pressable>
+                        {/* Top right, left of card info (Transfers only):
+                            suggested transfers. */}
+                        {mode === "transfers" && transferAdvice && !locked && (
+                          <View style={{ position: "absolute", top: 8, right: 54, zIndex: 10 }}>
+                            <SuggestionsButton
+                              count={transferAdvice.suggestions.length}
+                              onPress={() => {
+                                setSelectedPos(null);
+                                setPlayerSheetOpen(false);
+                                setShowChipMenu(false);
+                                setSuggestionsOpen(true);
+                              }}
+                            />
+                          </View>
+                        )}
                         {/* Top right, left of card info (Home only): the
                             Insights panel, which slides in from the right.
                             Up here it stays clear of every player card. */}
@@ -3628,8 +3803,26 @@ export default function Index() {
             sellPrice={pickSlot?.sell}
             onPick={pickPlayer}
             onClose={() => setPickPos(null)}
+            fixturesByTeam={squad.fixturesByTeam ?? {}}
+            nextEvent={squad.gw}
+            currentGw={squad.currentGw}
+            elements={elements}
+            elementFailed={elementsFailed}
+            onRetryElement={() => readFplData.current(true)}
+            teamNames={teamNames}
           />
         </View>
+      )}
+
+      {stage === "squad" && squad && transferAdvice && (
+        <TransferSuggestions
+          advice={transferAdvice}
+          event={squad.gw}
+          hitCost={squad.hitCost ?? 4}
+          open={suggestionsOpen && mode === "transfers"}
+          onClose={() => setSuggestionsOpen(false)}
+          onMake={makeSuggestedTransfer}
+        />
       )}
 
       {stage === "squad" && squad && (
@@ -3689,6 +3882,7 @@ export default function Index() {
                 onPress={() => {
                   setActiveMember(null);
                   setShowSeason(false);
+                  setShowCareer(false);
                   setShowPlanner(false);
                   setShowHelper(false);
                   setShowMatches(false);
@@ -3710,6 +3904,7 @@ export default function Index() {
                 onPress={() => {
                   setActiveMember(null);
                   setShowSeason(false);
+                  setShowCareer(false);
                   setShowPlanner(false);
                   setShowHelper(false);
                   setShowMatches(false);
@@ -3731,6 +3926,7 @@ export default function Index() {
                 onPress={() => {
                   setActiveMember(null);
                   setShowSeason(false);
+                  setShowCareer(false);
                   setShowPlanner(false);
                   setShowHelper(false);
                   setShowMatches(false);
@@ -3752,6 +3948,7 @@ export default function Index() {
                 onPress={() => {
                   setActiveMember(null);
                   setShowSeason(false);
+                  setShowCareer(false);
                   setShowPlanner(false);
                   setShowHelper(false);
                   setShowMatches(false);
@@ -3771,6 +3968,10 @@ export default function Index() {
         <LoadingVeil label="Loading team…" zIndex={15} accent={GREEN} onCancel={() => setActiveMember(null)} />
       )}
 
+      {stage === "squad" && opening && (
+        <LoadingVeil label={opening} zIndex={17} accent={GREEN} onCancel={cancelOpening} />
+      )}
+
       <AnimatedScreen visible={stage === "squad" && !!squad && showSeason} zIndex={16}>
         {stage === "squad" && squad && showSeason && (
           <SeasonInsights
@@ -3778,6 +3979,16 @@ export default function Index() {
             teamName={squad.teamName || "Your team"}
             live={{ squadValue: squadValueNow, bank: squad.bank }}
             onBack={() => setShowSeason(false)}
+          />
+        )}
+      </AnimatedScreen>
+
+      <AnimatedScreen visible={stage === "squad" && !!squad && showCareer} zIndex={16}>
+        {stage === "squad" && squad && showCareer && (
+          <CareerPage
+            entry={squad.entry}
+            teamName={squad.teamName || "Your team"}
+            onBack={() => setShowCareer(false)}
           />
         )}
       </AnimatedScreen>

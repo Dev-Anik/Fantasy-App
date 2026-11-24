@@ -37,9 +37,21 @@ export const CHIP_NAMES: Record<string, string> = {
 };
 
 const money = (tenths: number) => `£${(tenths / 10).toFixed(1)}m`;
+const formatNumber = (value: number) => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 // A small figure under the logo: "BANK £1.5m".
-function Tag({ label, value, accent = false }: { label?: string; value: string; accent?: boolean }) {
+function Tag({
+  label,
+  value,
+  accent = false,
+  valueColor,
+}: {
+  label?: string;
+  value: string;
+  accent?: boolean;
+  // The figure's own colour (points are gold, as on the cards).
+  valueColor?: string;
+}) {
   return (
     <View
       style={{
@@ -47,7 +59,7 @@ function Tag({ label, value, accent = false }: { label?: string; value: string; 
         alignItems: "center",
         gap: 6,
         height: 26,
-        paddingHorizontal: 11,
+        paddingHorizontal: 10,
         borderRadius: 13,
         backgroundColor: accent ? THEME.accentSoft : "rgba(11, 16, 32, 0.78)",
         borderWidth: 1,
@@ -56,13 +68,13 @@ function Tag({ label, value, accent = false }: { label?: string; value: string; 
     >
       {accent && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: THEME.accent }} />}
       {!!label && (
-        <Text style={{ color: THEME.muted, fontSize: 10, fontWeight: "600", letterSpacing: 1.2 }}>{label}</Text>
+        <Text style={{ color: THEME.muted, fontSize: 10.5, fontWeight: "700", letterSpacing: 1.2 }}>{label}</Text>
       )}
       <Text
         style={{
-          color: accent ? THEME.accent : THEME.ink,
+          color: valueColor ?? (accent ? THEME.accent : THEME.ink),
           fontSize: 12.5,
-          fontWeight: "700",
+          fontWeight: "800",
           fontVariant: ["tabular-nums"],
         }}
       >
@@ -81,6 +93,7 @@ export function SquadSnapshot({
   bank,
   freeTransfers,
   points,
+  manager,
   onDone,
 }: {
   picks: Row[];
@@ -96,6 +109,8 @@ export function SquadSnapshot({
   // unlimited, with a Wildcard or Free Hit). Left out elsewhere.
   freeTransfers?: number | null;
   points?: number | null;
+  // Points page: whose team it is, and its overall rank after the gameweek.
+  manager?: { teamName: string; managerName: string; overallRank: number | null };
   onDone: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -205,7 +220,7 @@ export function SquadSnapshot({
           <Wordmark size={21} weight="900" />
           <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 5 }}>
             <Tag value={gameweekName} />
-            {points != null && <Tag label="PTS" value={String(points)} />}
+            {points != null && <Tag label="PTS" value={String(points)} valueColor="#ffd400" />}
             {bank != null && <Tag label="BANK" value={money(bank)} />}
             {freeTransfers !== undefined && (
               <Tag label="FT" value={freeTransfers === null ? "Unlimited" : `${freeTransfers} left`} />
@@ -213,6 +228,33 @@ export function SquadSnapshot({
             {!!chip && <Tag accent value={CHIP_NAMES[chip] ?? chip} />}
           </View>
         </View>
+        {/* Whose team: the team, the manager and the overall rank. */}
+        {!!manager && (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 10,
+              paddingHorizontal: 14,
+              paddingTop: 2,
+              paddingBottom: 4,
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text numberOfLines={1} style={{ color: THEME.ink, fontSize: 15, fontWeight: "800" }}>
+                {manager.teamName}
+              </Text>
+              {!!manager.managerName && (
+                <Text numberOfLines={1} style={{ color: THEME.soft, fontSize: 11.5, marginTop: 1 }}>
+                  {manager.managerName}
+                </Text>
+              )}
+            </View>
+            {manager.overallRank != null && manager.overallRank > 0 && (
+              <Tag label="OVERALL RANK" value={formatNumber(manager.overallRank)} />
+            )}
+          </View>
+        )}
         <View pointerEvents="none" style={{ flex: 1, paddingBottom: 4 }}>
           <Pitch
             picks={picks}

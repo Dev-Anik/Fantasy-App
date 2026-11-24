@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Pressable, Text, View } from "react-native";
 import type { LeagueStanding } from "./fpl";
-import { loadLiveLeague } from "./liveLeague";
+import { liveLeagueKey, loadLiveLeague, peekLiveLeague } from "./liveLeague";
 import type { LiveLeague } from "./liveLeague";
 import { Divider, Group, Heading, MINE_BAND, MovementBadge, TABLE, LEAGUE_UI as UI } from "./leagueUi";
 
 const REFRESH_MS = 60_000;
+// A table worked out this recently isn't worked out again on opening.
+const FRESH_MS = 20_000;
 const formatNumber = (value: number) => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 const timeOf = (ms: number) => {
   const date = new Date(ms);
@@ -32,11 +34,14 @@ export function LiveLeagueTable({
   // Bumped when the user pulls to refresh: reload at once.
   refreshSignal?: number;
 }) {
-  const [live, setLive] = useState<LiveLeague | null>(null);
+  // Worked out before the league page opened (LeagueHub), so it starts complete.
+  const [live, setLive] = useState<LiveLeague | null>(() => peekLiveLeague(liveLeagueKey(rows, event, userEntryId)));
   const [error, setError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const inFlight = useRef(false);
   const rowsKey = rows.map((row) => row.entry).join(",");
+  // The pull-to-refresh count when the table was drawn: a pull reloads.
+  const drawnSignal = useRef(refreshSignal);
 
   useEffect(() => {
     let active = true;
@@ -62,7 +67,11 @@ export function LiveLeagueTable({
           if (active) setRefreshing(false);
         });
     };
-    refresh();
+    // Just worked out (the page read it before opening): no need again yet.
+    const ready = peekLiveLeague(liveLeagueKey(rows, event, userEntryId));
+    const fresh = !!ready && Date.now() - ready.updatedAt < FRESH_MS && refreshSignal === drawnSignal.current;
+    if (!fresh) refresh();
+    drawnSignal.current = refreshSignal;
     const timer = setInterval(refresh, REFRESH_MS);
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") refresh();

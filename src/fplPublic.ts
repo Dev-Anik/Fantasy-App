@@ -1,6 +1,8 @@
 // FPL's public player and club list (bootstrap-static), read once per app
 // session and shared by the screens that need names: the live league table
-// and the match centre. It is a large file, so it is never fetched twice.
+// and the match centre. It is a large file, so it is never fetched twice
+// (the download itself is shared with the rest of the app: fplCache.ts).
+import { FRESH, fplJson } from "./fplCache";
 
 const API = "https://fantasy.premierleague.com/api/";
 
@@ -16,14 +18,16 @@ export type FplBasics = {
 };
 
 let basics: Promise<FplBasics> | null = null;
+let basicsValue: FplBasics | null = null;
+
+// The names, once they have arrived (for drawing a page at once).
+export function peekFplBasics(): FplBasics | null {
+  return basicsValue;
+}
 
 export function loadFplBasics(): Promise<FplBasics> {
   if (!basics) {
-    basics = fetch(API + "bootstrap-static/")
-      .then((response) => {
-        if (!response.ok) throw new Error(`FPL returned ${response.status}`);
-        return response.json();
-      })
+    basics = fplJson("bootstrap-static/", FRESH.settled)
       .then((data) => {
         const teams = new Map<number, TeamInfo>(
           (data.teams ?? []).map((team: { id: number; short_name: string; name: string }) => [
@@ -52,7 +56,8 @@ export function loadFplBasics(): Promise<FplBasics> {
             start: chip.start_event,
             stop: chip.stop_event,
           }));
-        return { players, teams, chipWindows };
+        basicsValue = { players, teams, chipWindows };
+        return basicsValue;
       });
     // A failed read is not remembered: the next screen tries again.
     basics.catch(() => {
@@ -66,8 +71,7 @@ export function loadFplBasics(): Promise<FplBasics> {
 // Resolves to an empty list if FPL can't be reached.
 export type RankPoint = { event: number; rank: number };
 export function loadOverallRanks(entry: number): Promise<RankPoint[]> {
-  return fetch(`${API}entry/${entry}/history/`)
-    .then((response) => (response.ok ? response.json() : null))
+  return fplJson(`entry/${entry}/history/`, FRESH.bootstrap)
     .then((data) =>
       Array.isArray(data?.current)
         ? data.current

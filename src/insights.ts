@@ -2,8 +2,7 @@
 // strengths and weak spots, and what to do next. Reads FPL's public endpoints
 // directly (no sign-in needed) and turns them into figures, a squad review
 // and plain-language advice.
-
-const API = "https://fantasy.premierleague.com/api/";
+import { FRESH, fplJson } from "./fplCache";
 
 export type GameweekSummary = {
   event: number;
@@ -206,10 +205,10 @@ export type RawSeason = {
 
 // --- Loading -----------------------------------------------------------------
 
-async function getJson(path: string) {
-  const response = await fetch(API + path);
-  if (!response.ok) throw new Error(`FPL returned ${response.status} for ${path}`);
-  return response.json();
+// Through the app's shared cache: a gameweek that is over never changes, so
+// opening the page again only reads what's new.
+function getJson(path: string, settled = false) {
+  return fplJson(path, settled ? FRESH.settled : FRESH.bootstrap);
 }
 
 // Runs tasks a few at a time, so a long season doesn't flood FPL.
@@ -227,13 +226,16 @@ export async function loadSeason(entry: number): Promise<RawSeason> {
     getJson(`entry/${entry}/transfers/`),
     getJson("bootstrap-static/"),
     // Upcoming fixtures are a nice-to-have: the rest works without them.
-    getJson("fixtures/?future=1").catch(() => []),
+    getJson("fixtures/?future=1", true).catch(() => []),
   ]);
   const played: number[] = (history.current ?? []).map((row: HistoryRow) => row.event);
-  const weekList = await inBatches(played, 4, async (event) => {
+  const finished = new Set<number>(
+    (bootstrap.events ?? []).filter((e: { finished?: boolean }) => e.finished).map((e: { id: number }) => e.id),
+  );
+  const weekList = await inBatches(played, 6, async (event) => {
     const [picks, live] = await Promise.all([
-      getJson(`entry/${entry}/event/${event}/picks/`),
-      getJson(`event/${event}/live/`),
+      getJson(`entry/${entry}/event/${event}/picks/`, finished.has(event)),
+      getJson(`event/${event}/live/`, finished.has(event)),
     ]);
     const points: Record<number, number> = {};
     (live.elements ?? []).forEach((element: { id: number; stats: { total_points: number } }) => {
@@ -265,6 +267,33 @@ export async function loadSeason(entry: number): Promise<RawSeason> {
     chipRules: bootstrap.chips ?? [],
     fixtures: Array.isArray(fixtures) ? fixtures : [],
   };
+}
+
+// The season read and worked out, shared by the page and the read made
+// ahead of it (so the page opens complete); the last result per team stays
+// for drawing the page at once.
+const seasonPending = new Map<number, Promise<SeasonInsights>>();
+const seasonDone = new Map<number, SeasonInsights>();
+
+export function loadSeasonInsights(entry: number): Promise<SeasonInsights> {
+  let pending = seasonPending.get(entry);
+  if (!pending) {
+    pending = loadSeason(entry).then((raw) => {
+      const result = analyseSeason(raw);
+      seasonDone.set(entry, result);
+      return result;
+    });
+    const clear = () => {
+      if (seasonPending.get(entry) === pending) seasonPending.delete(entry);
+    };
+    pending.then(clear, clear);
+    seasonPending.set(entry, pending);
+  }
+  return pending;
+}
+
+export function peekSeasonInsights(entry: number): SeasonInsights | null {
+  return seasonDone.get(entry) ?? null;
 }
 
 // --- Analysis ------------------------------------------------------------------

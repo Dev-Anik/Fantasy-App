@@ -2,6 +2,7 @@
 // FPL's difficulty rating (1 easiest to 5 hardest), sorted by how kind the run
 // is. The tool for planning transfers a few weeks ahead.
 import { useEffect, useMemo, useState } from "react";
+import { FRESH, fplJson, peekFpl } from "./fplCache";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "./AppSymbol";
@@ -14,6 +15,8 @@ const INK = THEME.ink;
 const SOFT = THEME.soft;
 const MUTED = THEME.muted;
 const LAST_GAMEWEEK = 38;
+// Every fixture still to be played (shared with the read made ahead of the page).
+export const FUTURE_FIXTURES = "fixtures/?future=1";
 
 // FPL's own difficulty colours (shared with the Insights panel).
 const FDR = FDR_COLORS;
@@ -71,7 +74,11 @@ export function FixturePlanner({
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const [fixtures, setFixtures] = useState<Fixture[] | null>(null);
+  // Read before the page opens (see openWhenReady), so it starts complete.
+  const [fixtures, setFixtures] = useState<Fixture[] | null>(() => {
+    const ready = peekFpl(FUTURE_FIXTURES);
+    return Array.isArray(ready) ? ready : null;
+  });
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [span, setSpan] = useState<(typeof SPANS)[number]>(5);
@@ -80,8 +87,7 @@ export function FixturePlanner({
 
   useEffect(() => {
     let active = true;
-    fetch("https://fantasy.premierleague.com/api/fixtures/?future=1")
-      .then((response) => (response.ok ? response.json() : Promise.reject()))
+    fplJson(FUTURE_FIXTURES, FRESH.settled)
       .then((data) => {
         if (active) setFixtures(Array.isArray(data) ? data : []);
       })
