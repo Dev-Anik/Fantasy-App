@@ -19,6 +19,7 @@ import type {
   GameweekSummary,
   SeasonInsights as Insights,
   SquadPlayer,
+  TransferMove,
   UpcomingFixture,
 } from "./insights";
 
@@ -34,11 +35,12 @@ const WARN = "#f2c14e";
 const CHART_HEIGHT = 110;
 const POSITIONS = ["", "GKP", "DEF", "MID", "FWD"];
 
-type Tab = "overview" | "squad" | "decisions" | "history";
+type Tab = "overview" | "squad" | "decisions" | "transfers" | "history";
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "squad", label: "Squad" },
   { id: "decisions", label: "Decisions" },
+  { id: "transfers", label: "Transfers" },
   { id: "history", label: "History" },
 ];
 
@@ -182,6 +184,99 @@ function Row({
         </View>
         {!!sub && <Text style={{ color: MUTED, fontSize: 12.5, marginTop: 2, lineHeight: 17 }}>{sub}</Text>}
       </View>
+    </>
+  );
+}
+
+// Transfers tab: every transfer of the season, by gameweek, newest first.
+function TransferLine({ move, first }: { move: TransferMove; first: boolean }) {
+  const gain = move.gain3;
+  return (
+    <>
+      {!first && <Divider />}
+      <View
+        accessible
+        accessibilityLabel={`${move.outName} out, ${move.inName} in${gain != null ? `, ${signed(gain)} over ${move.weeks} weeks` : ""}`}
+        style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10 }}
+      >
+        <View style={{ flex: 1, gap: 3 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Text style={{ color: GOOD, fontSize: 11, fontWeight: "800", width: 12 }}>▲</Text>
+            <Text numberOfLines={1} style={{ flexShrink: 1, color: INK, fontSize: 13.5, fontWeight: "700" }}>
+              {move.inName}
+            </Text>
+            <Text style={{ color: MUTED, fontSize: 11 }}>
+              {[move.inTeam, move.inCost != null ? money(move.inCost) : ""].filter(Boolean).join(" · ")}
+            </Text>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Text style={{ color: BAD, fontSize: 11, fontWeight: "800", width: 12 }}>▼</Text>
+            <Text numberOfLines={1} style={{ flexShrink: 1, color: SOFT, fontSize: 13, fontWeight: "500" }}>
+              {move.outName}
+            </Text>
+            <Text style={{ color: MUTED, fontSize: 11 }}>
+              {[move.outTeam, move.outCost != null ? money(move.outCost) : ""].filter(Boolean).join(" · ")}
+            </Text>
+          </View>
+        </View>
+        <View style={{ alignItems: "flex-end", minWidth: 48 }}>
+          <Text
+            style={{
+              color: gain == null ? MUTED : gain > 0 ? GOOD : gain < 0 ? BAD : INK,
+              fontSize: 15,
+              fontWeight: "800",
+              fontVariant: ["tabular-nums"],
+            }}
+          >
+            {gain == null ? "—" : signed(gain)}
+          </Text>
+          <Text style={{ color: MUTED, fontSize: 9.5, marginTop: 1 }}>
+            {gain == null ? "one week" : `${move.weeks} GW${move.weeks === 1 ? "" : "s"}`}
+          </Text>
+        </View>
+      </View>
+    </>
+  );
+}
+
+function Transfers({ data }: { data: Insights }) {
+  const net = data.transferGain3 - data.hitsTotal;
+  if (data.transferLog.length === 0) {
+    return <Text style={{ color: MUTED, fontSize: 13, textAlign: "center", marginTop: 30 }}>No transfers made this season yet.</Text>;
+  }
+  return (
+    <>
+      <Stats
+        items={[
+          { label: "Transfers", value: String(data.transfersTotal), note: `${data.hitsTotal} pts in hits` },
+          { label: "Net gain", value: signed(net), color: net > 0 ? GOOD : net < 0 ? BAD : INK, note: "after hits" },
+        ]}
+      />
+      <Text style={{ color: MUTED, fontSize: 11.5, lineHeight: 16, marginTop: 10 }}>
+        {"The figure on the right compares the player in with the player out over the transfer's gameweek and the two after."}
+      </Text>
+      {data.transferLog.map((week) => (
+        <View key={week.event}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 20, marginBottom: 8 }}>
+            <Text accessibilityRole="header" style={{ color: THEME.accent, fontSize: 11.5, letterSpacing: 2 }}>
+              {`GAMEWEEK ${week.event}`}
+            </Text>
+            {!!week.chip && (
+              <Text style={{ color: WARN, fontSize: 10.5, fontWeight: "700", letterSpacing: 0.6 }}>
+                {chipName(week.chip).toUpperCase()}
+              </Text>
+            )}
+            {week.hitCost > 0 && (
+              <Text style={{ color: BAD, fontSize: 10.5, fontWeight: "700" }}>{`−${week.hitCost} HIT`}</Text>
+            )}
+          </View>
+          <Panel>
+            {week.moves.map((move, index) => (
+              <TransferLine key={`${move.inName}-${move.outName}-${index}`} move={move} first={index === 0} />
+            ))}
+          </Panel>
+        </View>
+      ))}
     </>
   );
 }
@@ -873,9 +968,13 @@ export function SeasonInsights({
         <Text style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>{teamName}</Text>
 
         {ready && (
-          <View
+          // Five tabs: the row scrolls sideways on narrow phones.
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
             accessibilityRole="tablist"
-            style={{ flexDirection: "row", marginTop: 16, borderBottomWidth: 1, borderBottomColor: LINE }}
+            style={{ flexGrow: 0, marginTop: 16, borderBottomWidth: 1, borderBottomColor: LINE }}
+            contentContainerStyle={{ paddingRight: 8 }}
           >
             {TABS.map((item) => {
               const active = item.id === tab;
@@ -885,7 +984,7 @@ export function SeasonInsights({
                   onPress={() => setTab(item.id)}
                   accessibilityRole="tab"
                   accessibilityState={{ selected: active }}
-                  style={{ marginRight: 22, paddingBottom: 10 }}
+                  style={{ marginRight: 20, paddingBottom: 10 }}
                 >
                   <Text style={{ color: active ? INK : MUTED, fontSize: 14, fontWeight: active ? "700" : "500" }}>
                     {item.label}
@@ -895,7 +994,8 @@ export function SeasonInsights({
                       position: "absolute",
                       left: 0,
                       right: 0,
-                      bottom: -1,
+                      // Inside the scrolling row, so on its bottom edge (not below it).
+                      bottom: 0,
                       height: 2,
                       backgroundColor: active ? THEME.accent : "transparent",
                     }}
@@ -903,7 +1003,7 @@ export function SeasonInsights({
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
         )}
       </View>
 
@@ -944,6 +1044,7 @@ export function SeasonInsights({
           {tab === "overview" && <Overview data={data} />}
           {tab === "squad" && <Squad data={data} />}
           {tab === "decisions" && <Decisions data={data} live={live} />}
+          {tab === "transfers" && <Transfers data={data} />}
           {tab === "history" && <History data={data} />}
         </ScrollView>
       )}

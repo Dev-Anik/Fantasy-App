@@ -1,12 +1,8 @@
-// Live mini-league: every manager on a league page scored live, with the same
-// engine as the points page (auto-subs, armband; confirmed bonus only), and
-// re-ranked. Reads FPL's public data directly, like My season.
-//
-// Totals: FPL's league tables update late during a gameweek, so the live
-// total comes from each manager's own record instead: the season total
-// before this gameweek (with any hit already taken off) plus the live score.
+// Live head-to-head scores: managers scored live with the same engine as the
+// points page (auto-subs, armband; confirmed bonus only), from FPL's public
+// data, for head-to-head matches during a gameweek.
 import { computeLive } from "./live";
-import type { LiveFixture, LeagueStanding, MemberPick } from "./fpl";
+import type { LiveFixture, MemberPick } from "./fpl";
 import { loadFplBasics } from "./fplPublic";
 
 const API = "https://fantasy.premierleague.com/api/";
@@ -82,88 +78,6 @@ export type LiveEntry = {
   counted: LivePlayer[];
 };
 
-export type LiveLeague = { event: number; entries: LiveEntry[]; updatedAt: number };
-
-// The live table for these league rows (plus the signed-in manager, so the
-// comparison works even when they're on another page).
-// The last live table per league page, and the one being worked out: the
-// league page reads it before opening (so it opens complete), and the table
-// then starts from it instead of working it out again.
-const liveTables = new Map<string, LiveLeague>();
-const liveTablesPending = new Map<string, Promise<LiveLeague>>();
-
-export function liveLeagueKey(rows: LeagueStanding[], event: number, extraEntry?: number) {
-  return `${event}:${extraEntry ?? ""}:${rows.map((row) => row.entry).join(",")}`;
-}
-
-export function peekLiveLeague(key: string): LiveLeague | null {
-  return liveTables.get(key) ?? null;
-}
-
-export function loadLiveLeague(
-  rows: LeagueStanding[],
-  event: number,
-  extra?: { entry: number; teamName: string; managerName: string },
-): Promise<LiveLeague> {
-  const key = liveLeagueKey(rows, event, extra?.entry);
-  let pending = liveTablesPending.get(key);
-  if (!pending) {
-    pending = workOutLiveLeague(rows, event, extra).then((table) => {
-      liveTables.set(key, table);
-      return table;
-    });
-    const clear = () => {
-      if (liveTablesPending.get(key) === pending) liveTablesPending.delete(key);
-    };
-    pending.then(clear, clear);
-    liveTablesPending.set(key, pending);
-  }
-  return pending;
-}
-
-async function workOutLiveLeague(
-  rows: LeagueStanding[],
-  event: number,
-  extra?: { entry: number; teamName: string; managerName: string },
-): Promise<LiveLeague> {
-  const people = rows.map((row) => ({
-    entry: row.entry,
-    teamName: row.entry_name || row.player_name,
-    managerName: row.player_name,
-    officialRank: row.rank,
-    lastRank: row.last_rank ?? 0,
-  }));
-  if (extra && !people.some((person) => person.entry === extra.entry)) {
-    people.push({ ...extra, officialRank: 0, lastRank: 0 });
-  }
-
-  const { info, stats, fixtures } = await loadEventData(event);
-
-  const scored = await inBatches(people, 6, async (person) => {
-    const score = await scoreEntry(person.entry, event, info, stats, fixtures);
-    return score ? ({ ...person, liveRank: 0, ...score } satisfies LiveEntry) : null;
-  });
-
-  const entries = scored.filter((entry): entry is LiveEntry => entry !== null);
-  // Live ranks among the league's teams (the extra manager, if not in these
-  // rows, isn't ranked).
-  const ranked = entries
-    .filter((entry) => entry.officialRank > 0)
-    .sort((a, b) => b.liveTotal - a.liveTotal || a.officialRank - b.officialRank);
-  // Teams level on live points share a rank (1, 2, 2, 4) and keep FPL's
-  // order between them. (FPL's own tie-breaks only apply once it updates its
-  // table; the official Standings show those.)
-  ranked.forEach((entry, index) => {
-    const previous = ranked[index - 1];
-    entry.liveRank = previous && previous.liveTotal === entry.liveTotal ? previous.liveRank : index + 1;
-  });
-  // A page further down the table starts at its first official rank.
-  const offset = rows.length ? Math.max(0, Math.min(...rows.map((row) => row.rank)) - 1) : 0;
-  ranked.forEach((entry) => {
-    entry.liveRank += offset;
-  });
-  return { event, entries, updatedAt: Date.now() };
-}
 
 // Live head-to-head scores: each team's gameweek points so far with any
 // transfer hit taken off, as FPL counts a head-to-head match. FPL's own match
@@ -273,26 +187,3 @@ async function scoreEntry(
   };
 }
 
-// What separates two teams this gameweek: for each player, how many more
-// times he counts for one side than the other (owned by only one of them,
-// or captained by only one), with the live points that difference is worth.
-export function differentials(mine: LiveEntry, theirs: LiveEntry) {
-  const points = (player: LivePlayer) => player.points * player.multiplier;
-  const myMultiplier = new Map(mine.counted.map((player) => [player.id, player.multiplier]));
-  const theirMultiplier = new Map(theirs.counted.map((player) => [player.id, player.multiplier]));
-  // `multiplier` here is the difference: 1 for a player only one side has
-  // (2 if captained), 1 for the extra armband on a player both have.
-  const edge = (side: LivePlayer[], other: Map<number, number>) =>
-    side
-      .map((player) => ({ ...player, multiplier: player.multiplier - (other.get(player.id) ?? 0) }))
-      .filter((player) => player.multiplier > 0)
-      .sort((a, b) => points(b) - points(a));
-  return {
-    onlyThem: edge(theirs.counted, myMultiplier),
-    onlyMe: edge(mine.counted, theirMultiplier),
-    points,
-    // Both own him, so only the armband differs.
-    armbandOnly: (player: LivePlayer, side: "them" | "me") =>
-      (side === "them" ? myMultiplier : theirMultiplier).has(player.id),
-  };
-}

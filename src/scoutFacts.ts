@@ -116,6 +116,10 @@ export function buildFacts({
     cleanSheets: el.clean_sheets,
     starts: el.starts,
     teamXgc: teamXgc.get(el.team) ?? null,
+    price: el.now_cost,
+    seasonMinutes: el.minutes,
+    xg90: el.expected_goals_per_90 ?? null,
+    xa90: el.expected_assists_per_90 ?? null,
   });
 
   const estimates = new Map<number, number>();
@@ -323,5 +327,11 @@ export function buildFacts({
     });
   }
 
-  return facts;
+  // Differentials sit right after the top estimates: the two lists a
+  // manager weighs together.
+  const order = (key: string) => (key === "top" ? 0 : key === "differentials" ? 1 : 2);
+  return facts
+    .map((fact, index) => ({ fact, index }))
+    .sort((a, b) => order(a.fact.key) - order(b.fact.key) || a.index - b.index)
+    .map(({ fact }) => fact);
 }

@@ -39,6 +39,28 @@ export type TransferVerdict = TransferSummary & {
   weeks: number;
 };
 
+// One transfer in the full log (My season, Transfers tab).
+export type TransferMove = {
+  inName: string;
+  inTeam: string;
+  inCost: number | null;
+  outName: string;
+  outTeam: string;
+  outCost: number | null;
+  // In minus out over the move's week and the two after it (null on a Free
+  // Hit, whose squad lasts one week).
+  gain3: number | null;
+  weeks: number;
+};
+
+// A gameweek's transfers, with the hit taken and the chip played.
+export type TransferWeek = {
+  event: number;
+  chip: string | null;
+  hitCost: number;
+  moves: TransferMove[];
+};
+
 export type Finding = { title: string; detail: string };
 
 // A fixture ahead, from the player's point of view.
@@ -93,6 +115,8 @@ export type CaptainMiss = {
 
 export type SeasonInsights = {
   gameweeks: GameweekSummary[];
+  // Every transfer of the season, newest gameweek first.
+  transferLog: TransferWeek[];
   totalPoints: number;
   overallRank: number | null;
   bestGw: GameweekSummary | null;
@@ -171,7 +195,13 @@ type RawElement = {
 
 export type RawSeason = {
   history: { current: HistoryRow[]; chips: { name: string; event: number }[] };
-  transfers: { element_in: number; element_out: number; event: number }[];
+  transfers: {
+    element_in: number;
+    element_out: number;
+    event: number;
+    element_in_cost?: number;
+    element_out_cost?: number;
+  }[];
   // Per gameweek: the picks as FPL settled them, and every player's points.
   weeks: Record<
     number,
@@ -390,6 +420,46 @@ export function analyseSeason(raw: RawSeason): SeasonInsights {
         weeks,
       };
     });
+  // The full log: every transfer (chip weeks too), by gameweek.
+  const teamOf = new Map(raw.elements.map((el) => [el.id, raw.teams[el.team] ?? ""]));
+  const hitByEvent = new Map(raw.history.current.map((row) => [row.event, row.event_transfers_cost ?? 0]));
+  const logByEvent = new Map<number, TransferMove[]>();
+  raw.transfers.forEach((transfer) => {
+    const chip = chipByEvent.get(transfer.event) ?? null;
+    let gain3: number | null = null;
+    let weeks = 0;
+    if (chip !== "freehit") {
+      gain3 = 0;
+      for (let event = transfer.event; event < transfer.event + 3; event += 1) {
+        const week = raw.weeks[event];
+        if (!week) continue;
+        weeks += 1;
+        gain3 += (week.points[transfer.element_in] ?? 0) - (week.points[transfer.element_out] ?? 0);
+      }
+      if (weeks === 0) gain3 = null;
+    }
+    const moves = logByEvent.get(transfer.event) ?? [];
+    moves.push({
+      inName: raw.names[transfer.element_in] ?? "?",
+      inTeam: teamOf.get(transfer.element_in) ?? "",
+      inCost: transfer.element_in_cost ?? null,
+      outName: raw.names[transfer.element_out] ?? "?",
+      outTeam: teamOf.get(transfer.element_out) ?? "",
+      outCost: transfer.element_out_cost ?? null,
+      gain3,
+      weeks,
+    });
+    logByEvent.set(transfer.event, moves);
+  });
+  const transferLog: TransferWeek[] = [...logByEvent.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([event, moves]) => ({
+      event,
+      chip: chipByEvent.get(event) ?? null,
+      hitCost: hitByEvent.get(event) ?? 0,
+      moves,
+    }));
+
   const transfers: TransferSummary[] = verdicts.map(({ event, inName, outName, gain }) => ({
     event,
     inName,
@@ -405,6 +475,7 @@ export function analyseSeason(raw: RawSeason): SeasonInsights {
 
   const result: SeasonInsights = {
     gameweeks,
+    transferLog,
     totalPoints: sum(gameweeks.map((gw) => gw.points - gw.hitCost)),
     overallRank: last?.overallRank ?? null,
     bestGw: byPoints[0] ?? null,

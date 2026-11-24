@@ -45,6 +45,11 @@ export type Row = {
   cleanSheets?: number;
   starts?: number;
   teamXgc?: number | null;
+  // For the player's level (see playerLevel): minutes played this season,
+  // and expected goals and assists per 90. Added the same way.
+  seasonMinutes?: number;
+  xg90?: number | null;
+  xa90?: number | null;
 };
 
 export type PlayerFixture = {

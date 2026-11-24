@@ -14,6 +14,8 @@ import type { PlayerMatchTarget } from "./PlayerMatchSheet";
 import { PITCH_PANEL, ScreenBackground, THEME } from "./theme";
 import { loadEstimateSnapshot } from "./estimateSnapshots";
 import { rebuildEstimates } from "./estimateRebuild";
+import { follow, unfollow, useFollowing } from "./following";
+import { FollowButton } from "./FollowingPage";
 
 type Props = {
   title: string;
@@ -150,6 +152,9 @@ export function ManagerHistory({
   const selectedGwData = gameweeks.find((gw) => gw.id === shownEvent);
   const isLive = Boolean(selectedGwData?.isCurrent && !selectedGwData.finished);
   const isOwnTeam = ownEntry != null && ownEntry === entry;
+  // Another manager's team can be followed (see the Following page).
+  const following = useFollowing();
+  const isFollowed = following.some((team) => team.entry === entry);
   const estimateKey = `${entry}:${shownEvent}`;
   // The estimates saved before the deadline; for a gameweek without them
   // (played before saving began, or the app wasn't opened in time), rebuilt
@@ -392,6 +397,16 @@ export function ManagerHistory({
               </Text>
             )}
           </View>
+          {!isOwnTeam && ownEntry != null && (
+            <View style={{ marginLeft: 10 }}>
+              <FollowButton
+                followed={isFollowed}
+                onPress={() =>
+                  isFollowed ? unfollow(entry) : follow({ entry, teamName: title, managerName })
+                }
+              />
+            </View>
+          )}
           {/* The chip played this gameweek: here in the header, clear of the
               players on the pitch. */}
           {!!currentData?.chip && (

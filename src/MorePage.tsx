@@ -323,6 +323,7 @@ export function MorePage({
   onOpenSettings,
   onOpenSeason,
   onOpenCareer,
+  onOpenFollowing,
   onOpenPlanner,
   onOpenMatches,
   onOpenHelper,
@@ -340,6 +341,7 @@ export function MorePage({
   onOpenSettings: () => void;
   onOpenSeason: () => void;
   onOpenCareer: () => void;
+  onOpenFollowing: () => void;
   onOpenPlanner: () => void;
   onOpenMatches: () => void;
   onOpenHelper: () => void;
@@ -429,6 +431,14 @@ export function MorePage({
           detail="Every FPL season you've played: points, ranks and best finishes"
           right={<Chevron />}
           onPress={onOpenCareer}
+        />
+        <Divider />
+        <Item
+          title="Following"
+          strong
+          detail="Managers you follow and their latest scores"
+          right={<Chevron />}
+          onPress={onOpenFollowing}
         />
         <Divider />
         <Item

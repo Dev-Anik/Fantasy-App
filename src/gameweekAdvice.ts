@@ -93,8 +93,48 @@ export function teamXgcFromElements(
   return new Map([...keepers].map(([team, keeper]) => [team, keeper.xgc]));
 }
 
-// Estimated points for the gameweek: the average of recent form and the
-// season's points per match, for each match (difficulty 1 counts 120%, 5 counts
+// Points for a goal by position (FPL: keepers and defenders 6, midfielders
+// 5, forwards 4); an assist is 3 for everyone.
+const GOAL_POINTS: Record<number, number> = { 1: 6, 2: 6, 3: 5, 4: 4 };
+// Starts at which this season's numbers count as much as the long-run
+// expectation (the price): fewer starts lean on the price.
+const SEASON_WEIGHT_AT = 6;
+
+// A player's real level, in points per match. Form (the last 30 days)
+// swings with a few matches: a proven player in a dip will score again, and
+// a cheap one on a hot run usually cools. So the level rests on firmer
+// ground, and form only nudges it:
+//   - the season's points per match, steadied by what his chances created
+//     (expected goals and assists per 90, for midfielders and forwards with
+//     450+ minutes): goals that should have come but haven't still count
+//     for something, and lucky ones count for less;
+//   - his price, FPL's own long-run rating of him (a £15m forward is
+//     expected to score about 7 a match, a £5m one under 3), which carries
+//     most of the weight early in the season or for players with few starts.
+// Form then moves it by a fifth of the gap.
+// Without FPL's player data (price, starts), the plain average of form and
+// points per match is used, as before.
+export function playerLevel(row: Row) {
+  const form = parseFloat(row.form ?? "") || 0;
+  const ppg = row.ppg != null && Number.isFinite(row.ppg) ? row.ppg : null;
+  const price = (row.price ?? row.buy ?? 0) / 10;
+  if (ppg == null) return form;
+  if (row.starts == null || price <= 0) return (form + ppg) / 2;
+
+  const priceLevel = 0.5 + 0.45 * price;
+  const attacker = row.type === 3 || row.type === 4;
+  const underlying =
+    attacker && (row.seasonMinutes ?? 0) >= 450 && row.xg90 != null && row.xa90 != null
+      ? 2 + row.xg90 * (GOAL_POINTS[row.type] ?? 4) + row.xa90 * 3 + 0.5
+      : null;
+  const season = underlying != null ? 0.6 * ppg + 0.4 * underlying : ppg;
+  const seasonWeight = row.starts / (row.starts + SEASON_WEIGHT_AT);
+  const settled = seasonWeight * season + (1 - seasonWeight) * priceLevel;
+  return settled + 0.2 * (form - settled);
+}
+
+// Estimated points for the gameweek: the player's level (playerLevel), for
+// each match (difficulty 1 counts 120%, 5 counts
 // 80%; home 105%, away 95%). Doubtful players are scaled by their chance of
 // playing; no match or ruled out is 0.
 //
@@ -107,8 +147,7 @@ export function teamXgcFromElements(
 function expectedPoints(row: Row, event: number) {
   const fixtures = fixturesIn(row, event);
   if (!fixtures.length || ruledOut(row)) return 0;
-  const form = parseFloat(row.form ?? "") || 0;
-  const base = row.ppg != null && Number.isFinite(row.ppg) ? (form + row.ppg) / 2 : form;
+  const base = playerLevel(row);
   const fixtureScale = (f: PlayerFixture) => (1.3 - 0.1 * (f.fdr ?? 3)) * (f.venue === "H" ? 1.05 : 0.95);
   const chance = row.status === "d" ? (row.chance ?? 50) / 100 : 1;
 
@@ -133,12 +172,34 @@ function expectedPoints(row: Row, event: number) {
 // squad row, from FPL's player records and each club's xGC.
 export function withCleanSheetData(
   row: Row,
-  players: Record<number, { clean_sheets: number; starts: number } | undefined>,
+  players: Record<
+    number,
+    | {
+        clean_sheets: number;
+        starts: number;
+        minutes?: number;
+        expected_goals_per_90?: number | string | null;
+        expected_assists_per_90?: number | string | null;
+      }
+    | undefined
+  >,
   teamXgc: Map<number, number>,
 ): Row {
   const player = players[row.id];
   if (!player) return row;
-  return { ...row, cleanSheets: player.clean_sheets, starts: player.starts, teamXgc: teamXgc.get(row.teamId) ?? null };
+  const per90 = (value: number | string | null | undefined) => {
+    const number = Number(value);
+    return value != null && value !== "" && Number.isFinite(number) ? number : null;
+  };
+  return {
+    ...row,
+    cleanSheets: player.clean_sheets,
+    starts: player.starts,
+    teamXgc: teamXgc.get(row.teamId) ?? null,
+    seasonMinutes: player.minutes,
+    xg90: per90(player.expected_goals_per_90),
+    xa90: per90(player.expected_assists_per_90),
+  };
 }
 
 // The same estimate, for the player cards on the home pitch.

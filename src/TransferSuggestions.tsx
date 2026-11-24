@@ -230,10 +230,10 @@ export function TransferSuggestions({
                   suggestion={suggestion}
                   event={event}
                   hitCost={hitCost}
-                  onMake={() => {
-                    close();
-                    onMake(suggestion);
-                  }}
+                  // The sheet stays open: the list is worked out again for
+                  // the new squad, so the next best swap takes this one's
+                  // place (and the sheet closes once none is left).
+                  onMake={() => onMake(suggestion)}
                 />
               ))
             ) : (

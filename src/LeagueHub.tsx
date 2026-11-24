@@ -13,9 +13,7 @@ import type {
 } from "./fpl";
 import { AppSymbol } from "./AppSymbol";
 import { LeagueCard } from "./LeagueCard";
-import { LeagueDetails, LeagueDetailsHeader, leagueLiveEvent } from "./LeagueDetails";
-import { liveLeagueKey, loadLiveLeague, peekLiveLeague } from "./liveLeague";
-import { within } from "./fplCache";
+import { LeagueDetails, LeagueDetailsHeader } from "./LeagueDetails";
 import { FadeIn } from "./FadeIn";
 import { FplCupCard } from "./FplCupCard";
 import { THEME } from "./theme";
@@ -26,9 +24,6 @@ const LEAGUE_SECTIONS: { category: LeagueCategory; title: string; hint: string }
   { category: "h2h", title: "Head-to-Head", hint: "A match against another manager each gameweek" },
   { category: "general", title: "General", hint: "Overall, country, club and gameweek leagues" },
 ];
-
-// The longest a league waits for its live table before opening anyway.
-const LIVE_WAIT_MS = 15_000;
 
 type Props = {
   leagues: FplLeague[];
@@ -222,40 +217,8 @@ export function LeagueHub({
   const scrollViewRef = useRef<ScrollViewInstance>(null);
   // A league opens once its table has arrived (or the request has failed);
   // until then the list stays put and the tapped row shows a spinner.
-  // While a gameweek is in play a classic league opens on its Live tab, so
-  // it also waits for the live table (worked out here, then reused by it).
-  const liveEvent = selectedLeague ? leagueLiveEvent(selectedLeague, gameweeks) : null;
-  // The standings shown may still be the last league's for a moment.
-  const ownStandings = !!selectedLeague && standings?.league?.id === selectedLeague.id;
-  const liveRows = ownStandings ? (standings?.standings?.results ?? []) : [];
-  const liveKey =
-    showLeagueDetails && liveEvent && liveRows.length > 0 ? liveLeagueKey(liveRows, liveEvent, userEntryId) : null;
-  const [liveDone, setLiveDone] = useState<string | null>(null);
-  useEffect(() => {
-    if (!liveKey || !liveEvent) return;
-    let active = true;
-    const ownRow = liveRows.find((row) => row.entry === userEntryId) ?? userStanding;
-    within(
-      loadLiveLeague(
-        liveRows,
-        liveEvent,
-        userEntryId
-          ? { entry: userEntryId, teamName: ownRow?.entry_name || "Your team", managerName: ownRow?.player_name || "" }
-          : undefined,
-      ),
-      LIVE_WAIT_MS,
-    ).then(() => {
-      if (active) setLiveDone(liveKey);
-    });
-    return () => {
-      active = false;
-    };
-    // `liveKey` stands for the rows, the gameweek and the user.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveKey]);
-  const liveReady = !liveKey || liveDone === liveKey || !!peekLiveLeague(liveKey);
   const leagueKey = selectedLeague ? `${selectedLeague.kind}-${selectedLeague.id}` : "";
-  const firstReady = !!error || ((!!standings || !loading) && liveReady);
+  const firstReady = !!error || !!standings || !loading;
   // Once open, a league stays open while it loads another page.
   const [openFor, setOpenFor] = useState("");
   if (showLeagueDetails && !!selectedLeague && firstReady && openFor !== leagueKey) setOpenFor(leagueKey);

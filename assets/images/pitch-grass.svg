@@ -11,11 +11,12 @@
       <stop offset="100%" stop-color="#0a3313" />
     </linearGradient>
 
-    <!-- Center highlight radial gradient for 3D lighting -->
-    <radialGradient id="centerGlow" cx="50%" cy="45%" r="60%">
-      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.12" />
+    <!-- Center highlight radial gradient for 3D lighting: kept faint and wide,
+         so it lifts the middle without drawing a dark oval round the edges. -->
+    <radialGradient id="centerGlow" cx="50%" cy="45%" r="75%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.06" />
       <stop offset="60%" stop-color="#ffffff" stop-opacity="0.0" />
-      <stop offset="100%" stop-color="#000000" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.08" />
     </radialGradient>
 
     <!-- Goal net pattern for 3D goal mesh -->

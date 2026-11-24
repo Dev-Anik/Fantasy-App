@@ -45,7 +45,14 @@ export type TransferAdvice = {
   roll: boolean;
 };
 
-type Records = Record<number, { clean_sheets: number; starts: number; minutes: number } | undefined>;
+type PlayerRecord = {
+  clean_sheets: number;
+  starts: number;
+  minutes: number;
+  expected_goals_per_90?: number | string | null;
+  expected_assists_per_90?: number | string | null;
+};
+type Records = Record<number, PlayerRecord | undefined>;
 
 // The next HORIZON gameweeks' fixtures, from `fromEvent`.
 export function nextFixtures(fixtures: PlayerFixture[] | undefined, fromEvent: number) {

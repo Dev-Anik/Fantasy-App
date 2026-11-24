@@ -61,6 +61,8 @@ import { FRESH, fplJson, within } from "../fplCache";
 import { loadSeasonInsights } from "../insights";
 import { CareerPage } from "../CareerPage";
 import { loadCareerShared } from "../career";
+import { FollowingPage } from "../FollowingPage";
+import { loadFollowing, loadFollowingSummaries } from "../following";
 import type { RankPoint } from "../fplPublic";
 import { MorePage } from "../MorePage";
 import { PrivacyPolicy, TermsAndConditions } from "../LegalPage";
@@ -401,6 +403,8 @@ export default function Index() {
     Promise.all([
       loadCardStats("lineup").then(setCardStats),
       loadCardStats("transfers").then(setTransferCardStats),
+      // The follow buttons on team pages read this.
+      loadFollowing(),
     ])
       .catch(() => {})
       .finally(() => setCardStatsLoaded(true));
@@ -475,6 +479,8 @@ export default function Index() {
   const [showSeason, setShowSeason] = useState(false);
   // My career (every season played), opened from More.
   const [showCareer, setShowCareer] = useState(false);
+  // Following (managers the user follows), opened from More.
+  const [showFollowing, setShowFollowing] = useState(false);
   // The privacy policy, readable signed in or not.
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -1029,6 +1035,7 @@ export default function Index() {
             setStage("welcome");
             setShowSeason(false);
             setShowCareer(false);
+            setShowFollowing(false);
             setActiveBottomTab("lineup");
             setMode("lineup");
           },
@@ -1107,6 +1114,7 @@ export default function Index() {
     setShowLeagues(false);
     setShowPlanner(false);
     setShowCareer(false);
+    setShowFollowing(false);
     setShowHelper(false);
     setShowMatches(false);
     setError("");
@@ -2335,6 +2343,10 @@ export default function Index() {
     });
   }, [mode, squad, elements, playerStatus, tdraft, bankAfter, teamXgc, pending.length, pendingChip]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  // Suggestions are worked out again after every transfer (at most three at
+  // a time); with none left worth making, they and their button go.
+  const suggestionCount = transferAdvice?.suggestions.length ?? 0;
+  if (suggestionsOpen && mode === "transfers" && transferAdvice && suggestionCount === 0) setSuggestionsOpen(false);
   const makeSuggestedTransfer = (suggestion: TransferSuggestion) => {
     setPending((prev) => [
       ...prev.filter((x) => x.pos !== suggestion.out.pos),
@@ -2635,6 +2647,10 @@ export default function Index() {
         setShowCareer(false);
         return true;
       }
+      if (showFollowing && !activeMember) {
+        setShowFollowing(false);
+        return true;
+      }
       if (showPlanner) {
         setShowPlanner(false);
         return true;
@@ -2707,6 +2723,9 @@ export default function Index() {
   // so its pitch is measured and its kits decoded by then. If something is
   // slow, Home shows anyway after HOME_WAIT_MS.
   const [homeShown, setHomeShown] = useState(false);
+  // Signed out (back to the start or sign-in screen): the next team to sign
+  // in waits behind the loading screen again, like the first.
+  if (homeShown && (stage === "welcome" || stage === "login")) setHomeShown(false);
   const homeDataIn =
     !!squad &&
     cardStatsLoaded &&
@@ -3321,6 +3340,9 @@ export default function Index() {
                 onOpenCareer={() =>
                   openWhenReady("Loading your career…", () => loadCareerShared(squad.entry), () => setShowCareer(true))
                 }
+                onOpenFollowing={() =>
+                  openWhenReady("Loading…", loadFollowingSummaries, () => setShowFollowing(true))
+                }
                 onOpenPlanner={() =>
                   openWhenReady("Loading fixtures…", () => fplJson(FUTURE_FIXTURES, FRESH.settled), () => setShowPlanner(true))
                 }
@@ -3463,10 +3485,10 @@ export default function Index() {
                         </Pressable>
                         {/* Top right, left of card info (Transfers only):
                             suggested transfers. */}
-                        {mode === "transfers" && transferAdvice && !locked && (
+                        {mode === "transfers" && suggestionCount > 0 && !locked && (
                           <View style={{ position: "absolute", top: 8, right: 54, zIndex: 10 }}>
                             <SuggestionsButton
-                              count={transferAdvice.suggestions.length}
+                              count={suggestionCount}
                               onPress={() => {
                                 setSelectedPos(null);
                                 setPlayerSheetOpen(false);
@@ -3883,6 +3905,7 @@ export default function Index() {
                   setActiveMember(null);
                   setShowSeason(false);
                   setShowCareer(false);
+                  setShowFollowing(false);
                   setShowPlanner(false);
                   setShowHelper(false);
                   setShowMatches(false);
@@ -3905,6 +3928,7 @@ export default function Index() {
                   setActiveMember(null);
                   setShowSeason(false);
                   setShowCareer(false);
+                  setShowFollowing(false);
                   setShowPlanner(false);
                   setShowHelper(false);
                   setShowMatches(false);
@@ -3927,6 +3951,7 @@ export default function Index() {
                   setActiveMember(null);
                   setShowSeason(false);
                   setShowCareer(false);
+                  setShowFollowing(false);
                   setShowPlanner(false);
                   setShowHelper(false);
                   setShowMatches(false);
@@ -3949,6 +3974,7 @@ export default function Index() {
                   setActiveMember(null);
                   setShowSeason(false);
                   setShowCareer(false);
+                  setShowFollowing(false);
                   setShowPlanner(false);
                   setShowHelper(false);
                   setShowMatches(false);
@@ -3979,6 +4005,20 @@ export default function Index() {
             teamName={squad.teamName || "Your team"}
             live={{ squadValue: squadValueNow, bank: squad.bank }}
             onBack={() => setShowSeason(false)}
+          />
+        )}
+      </AnimatedScreen>
+
+      {/* Under the team page (15), so a team opened from here comes up on
+          top and Back returns to the list. */}
+      <AnimatedScreen visible={stage === "squad" && !!squad && showFollowing} zIndex={14}>
+        {stage === "squad" && squad && showFollowing && (
+          <FollowingPage
+            ownEntry={squad.entry}
+            onOpenTeam={(entry, teamName, managerName) =>
+              viewMemberSquad(entry, squad.gameweeks.find((gw) => gw.isCurrent)?.id ?? squad.currentGw, teamName, managerName)
+            }
+            onBack={() => setShowFollowing(false)}
           />
         )}
       </AnimatedScreen>

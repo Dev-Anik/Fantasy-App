@@ -3,7 +3,6 @@ import { ActivityIndicator, AppState, Pressable, Text, View } from "react-native
 import type { FplLeague, Gameweek, H2hMatch, LeagueStanding, LeagueStandings } from "./fpl";
 import { AppSymbol } from "./AppSymbol";
 import { Divider, Group, Heading, MINE_BAND, MovementBadge, Segmented, Stats, TABLE, TextButton, LEAGUE_UI as UI } from "./leagueUi";
-import { LiveLeagueTable } from "./LiveLeagueTable";
 import { loadLiveScores } from "./liveLeague";
 import { loadCupLeague, loadCupMatches } from "./leagueDirect";
 import type { LiveScore } from "./liveLeague";
@@ -46,8 +45,8 @@ function useLiveH2hScores(matches: H2hMatch[], event: number, live: boolean, ref
   return live && scores?.key === key ? scores.byEntry : null;
 }
 
-type Tab = "live" | "standings" | "matches" | "cup";
-const TAB_LABEL: Record<Tab, string> = { live: "Live", standings: "Standings", matches: "Matches", cup: "Cup" };
+type Tab = "standings" | "matches" | "cup";
+const TAB_LABEL: Record<Tab, string> = { standings: "Standings", matches: "Matches", cup: "Cup" };
 
 const LAST_GAMEWEEK = 38;
 // Position column: the rank and its movement badge.
@@ -145,7 +144,7 @@ export function LeagueDetailsHeader({ name, onBack }: { name: string; onBack: ()
 function Tabs({ tabs, tab, onChange }: { tabs: Tab[]; tab: Tab; onChange: (tab: Tab) => void }) {
   return (
     <Segmented
-      options={tabs.map((id) => ({ id, label: TAB_LABEL[id], live: id === "live" }))}
+      options={tabs.map((id) => ({ id, label: TAB_LABEL[id] }))}
       value={tab}
       onChange={onChange}
     />
@@ -166,15 +165,6 @@ const cell = (width: number, align: "center" | "right" = "right", strong = false
   textAlign: align,
   ...(strong ? TABLE.total : TABLE.figure),
 });
-
-// The gameweek a classic league's Live tab follows, or null when it has none
-// (a head-to-head league, no gameweek in play, or one before the league began).
-export function leagueLiveEvent(league: FplLeague, gameweeks: Gameweek[]): number | null {
-  const latest = gameweeks[gameweeks.length - 1];
-  return league.kind !== "h2h" && latest && !latest.finished && (league.start_event ?? 1) <= latest.id
-    ? latest.id
-    : null;
-}
 
 export function LeagueDetails({
   league,
@@ -200,13 +190,9 @@ export function LeagueDetails({
 }: Props) {
   const isH2h = league.kind === "h2h";
   const latestGameweek = gameweeks[gameweeks.length - 1]?.id ?? 1;
-  // A classic league with a gameweek in play (that counts for this league)
-  // gets a live table, shown first.
-  const liveEvent = leagueLiveEvent(league, gameweeks);
-  const [tab, setTab] = useState<Tab>(liveEvent ? "live" : "standings");
-  // Classic leagues: Live while a gameweek is in play, the standings, and the
-  // league's cup if it has one.
-  const classicTabs: Tab[] = [...(liveEvent ? (["live"] as Tab[]) : []), "standings", ...(league.has_cup ? (["cup"] as Tab[]) : [])];
+  const [tab, setTab] = useState<Tab>("standings");
+  // Classic leagues: the standings, and the league's cup if it has one.
+  const classicTabs: Tab[] = ["standings", ...(league.has_cup ? (["cup"] as Tab[]) : [])];
   const tabs: Tab[] | null = isH2h ? ["standings", "matches"] : classicTabs.length > 1 ? classicTabs : null;
   const rows = standings?.standings?.results ?? [];
   const live = (row: LeagueStanding) => withLivePoints(row, league, liveEventId, liveEventPoints, latestGameweek);
@@ -281,28 +267,6 @@ export function LeagueDetails({
 
       {!!error && <Text style={{ color: UI.bad, marginTop: 12, fontSize: 12, lineHeight: 18 }}>{error}</Text>}
 
-      {liveEvent && tab === "live" && (
-        rows.length > 0 ? (
-          <>
-            <LiveLeagueTable
-              rows={rows}
-              event={liveEvent}
-              userEntryId={userEntryId}
-              userTeamName={ownRow?.entry_name || "Your team"}
-              userManagerName={ownRow?.player_name || ""}
-              onViewMember={onViewMember}
-              refreshSignal={refreshSignal}
-            />
-            {standings && (standings.standings.page > 1 || standings.standings.has_next) && (
-              <Text style={{ color: UI.muted, fontSize: 11, marginTop: 6, marginLeft: 2 }}>
-                {`The live table covers the teams on page ${standings.standings.page} of the standings.`}
-              </Text>
-            )}
-          </>
-        ) : loading ? (
-          <ActivityIndicator color={UI.soft} style={{ marginTop: 20 }} />
-        ) : null
-      )}
 
       {tab === "standings" && (
         <View>
